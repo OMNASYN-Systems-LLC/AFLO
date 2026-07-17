@@ -2,15 +2,15 @@ import Link from "next/link";
 import { EngagementBadge } from "@/components/badges";
 import { StageDistribution } from "@/components/stage";
 import { EmptyState, SectionCard, StatTile } from "@/components/ui";
-import { DEMO_ORG_ID, DEMO_STAFF_NAME, dashboardRepository, demoNow } from "@/lib/data";
-import { fmtDateTime, fmtPct, PIPELINE_LABELS } from "@/lib/format";
+import { DEMO_ORG_ID, DEMO_STAFF, dashboardRepository, demoNow } from "@/lib/data";
+import { fmtDateTime, fmtMonth, fmtPct, PIPELINE_LABELS } from "@/lib/format";
 
 export const metadata = { title: "Dashboard" };
 
 export default async function DashboardPage() {
   const snapshot = await dashboardRepository.getSnapshot(DEMO_ORG_ID, demoNow);
   const { kpis } = snapshot;
-  const firstName = DEMO_STAFF_NAME.split(" ")[0];
+  const firstName = DEMO_STAFF.name.split(" ")[0];
 
   return (
     <div className="space-y-8">
@@ -40,9 +40,9 @@ export default async function DashboardPage() {
           hint="next 7 days"
         />
         <StatTile
-          label="July actions done"
+          label={`${fmtMonth(snapshot.actionPlanMonth)} actions`}
           value={fmtPct(kpis.monthlyActionCompletionPct)}
-          hint="across action plans"
+          hint="done, active clients"
         />
       </div>
 

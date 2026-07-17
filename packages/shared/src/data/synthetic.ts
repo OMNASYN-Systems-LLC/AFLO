@@ -1,4 +1,5 @@
 import type { AgentEnvelope } from "../domain/agent";
+import { MS_PER_DAY } from "../domain/time";
 import type {
   AdminNote,
   Appointment,
@@ -24,7 +25,8 @@ import type {
 
 export const SYNTHETIC_NOW = new Date("2026-07-17T15:00:00Z");
 
-const MS_PER_DAY = 86_400_000;
+/** Action-plan month derived from the anchor so the dataset never drifts from the demo clock. */
+const CURRENT_MONTH = SYNTHETIC_NOW.toISOString().slice(0, 7);
 
 /** ISO datetime `days` before (positive) or after (negative) SYNTHETIC_NOW. */
 function daysAgo(days: number): string {
@@ -206,7 +208,7 @@ function a(
   status: MonthlyAction["status"],
   dueInDays: number,
 ): MonthlyAction {
-  return { id, clientId, month: "2026-07", title, category, status, dueDate: inDays(dueInDays) };
+  return { id, clientId, month: CURRENT_MONTH, title, category, status, dueDate: inDays(dueInDays) };
 }
 
 const monthlyActions: MonthlyAction[] = [
@@ -351,6 +353,7 @@ const notes: AdminNote[] = [
  */
 const aiSuggestions: SyntheticAgentSuggestion[] = [
   {
+    id: "ai-solomon-1",
     clientId: "c-solomon",
     agent: "readiness-agent",
     status: "ok",
@@ -372,6 +375,7 @@ const aiSuggestions: SyntheticAgentSuggestion[] = [
     createdAt: daysAgo(5),
   },
   {
+    id: "ai-whitaker-1",
     clientId: "c-whitaker",
     agent: "roadmap-agent",
     status: "ok",
@@ -393,6 +397,7 @@ const aiSuggestions: SyntheticAgentSuggestion[] = [
     createdAt: daysAgo(1),
   },
   {
+    id: "ai-ngo-1",
     clientId: "c-ngo",
     agent: "engagement-agent",
     status: "ok",

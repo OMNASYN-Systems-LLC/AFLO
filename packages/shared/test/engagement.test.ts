@@ -29,4 +29,9 @@ describe("assessEngagement thresholds", () => {
     expect(result.daysSinceLastActivity).toBe(0);
     expect(result.status).toBe("active");
   });
+
+  it("rejects unparseable timestamps instead of guessing a status", () => {
+    expect(() => assessEngagement("", NOW)).toThrow(TypeError);
+    expect(() => assessEngagement("not-a-date", NOW)).toThrow(/invalid lastActivityAt/);
+  });
 });

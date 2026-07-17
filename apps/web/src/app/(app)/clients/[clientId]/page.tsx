@@ -1,4 +1,4 @@
-import { LIFECYCLE_STAGES } from "@aflo/shared";
+import { fullName, LIFECYCLE_STAGES } from "@aflo/shared";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { AgentSuggestionCard } from "@/components/agent-card";
@@ -36,7 +36,7 @@ export default async function ClientDetailPage({
   if (!detail) notFound();
 
   const { record, assessment, engagement } = detail;
-  const name = `${record.firstName} ${record.lastName}`;
+  const name = fullName(record);
   const primaryGoal = detail.goals.find((g) => g.isPrimary) ?? null;
   const otherGoals = detail.goals.filter((g) => !g.isPrimary);
   const milestonesDone = detail.milestones.filter((m) => m.status === "completed").length;
@@ -136,7 +136,7 @@ export default async function ClientDetailPage({
                         title={code}
                         className="rounded bg-sand px-2 py-1 text-xs text-ink-soft"
                       >
-                        {REASON_CODE_LABELS[code] ?? code}
+                        {REASON_CODE_LABELS[code]}
                       </li>
                     ))}
                   </ul>
@@ -144,9 +144,12 @@ export default async function ClientDetailPage({
               </div>
             ) : (
               <EmptyState
-                message={`Assessment pending — ${
-                  detail.financialProfile ? "credit profile" : "financial and credit profiles"
-                } not yet captured during intake.`}
+                message={`Assessment pending — ${[
+                  !detail.financialProfile && "financial profile",
+                  !detail.creditProfile && "credit profile",
+                ]
+                  .filter(Boolean)
+                  .join(" and ")} not yet captured during intake.`}
               />
             )}
           </SectionCard>
@@ -181,7 +184,7 @@ export default async function ClientDetailPage({
             )}
           </SectionCard>
 
-          <SectionCard title="Monthly action plan" subtitle="July 2026">
+          <SectionCard title="Monthly action plan" subtitle={fmtMonth(detail.actionPlanMonth)}>
             {detail.monthlyActions.length === 0 ? (
               <EmptyState message="No actions assigned this month." />
             ) : (
@@ -218,7 +221,7 @@ export default async function ClientDetailPage({
             ) : (
               <div className="space-y-4">
                 {detail.aiSuggestions.map((s) => (
-                  <AgentSuggestionCard key={`${s.agent}-${s.createdAt}`} envelope={s} />
+                  <AgentSuggestionCard key={s.id} envelope={s} />
                 ))}
               </div>
             )}
@@ -316,7 +319,7 @@ export default async function ClientDetailPage({
             <dl className="space-y-2.5 text-sm">
               <ProfileRow label="Email" value={record.email} />
               <ProfileRow label="Phone" value={record.phone} />
-              <ProfileRow label="Advisor" value={detail.assignedStaff.name} />
+              <ProfileRow label="Advisor" value={detail.assignedStaff?.name ?? "Unassigned"} />
               <ProfileRow label="Joined" value={fmtDate(record.joinedAt)} />
               {detail.financialProfile ? (
                 <ProfileRow

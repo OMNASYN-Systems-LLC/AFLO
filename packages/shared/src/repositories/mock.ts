@@ -1,12 +1,7 @@
 import { syntheticDatabase, type SyntheticDatabase } from "../data/synthetic";
-import { assessEngagement } from "../rules/engagement";
-import {
-  assessReadiness,
-  dtiPct,
-  reserveMonths,
-  toReadinessFacts,
-  utilizationPct,
-} from "../rules/readiness";
+import { MS_PER_DAY } from "../domain/time";
+import { assessEngagement, ENGAGEMENT_STATUS_LABELS } from "../rules/engagement";
+import { assessReadiness, toReadinessFacts } from "../rules/readiness";
 import type {
   AttentionItem,
   ClientDetail,
@@ -18,27 +13,107 @@ import type {
   StageCount,
   UpcomingAppointment,
 } from "./interfaces";
-import { LIFECYCLE_STAGES, type ClientRecord, type PipelineStatus } from "../domain/types";
+import {
+  fullName,
+  LIFECYCLE_STAGES,
+  type Appointment,
+  type ClientRecord,
+  type CreditProfile,
+  type FinancialProfile,
+  type Goal,
+  type PipelineStatus,
+  type StaffMember,
+} from "../domain/types";
 
 /**
  * In-memory implementations over the synthetic dataset. Organization scoping
- * is enforced here exactly as a Neon-backed implementation would enforce it,
- * so swapping the data source never loosens isolation (Architecture Rule 8).
+ * is enforced record-by-record — every tenant-owned row is reached through
+ * its owning, org-checked client — exactly as a Neon-backed implementation
+ * would enforce it (Architecture Rule 8), so swapping the data source never
+ * loosens isolation.
  */
 
-const MS_PER_DAY = 86_400_000;
+/** Per-request index over the dataset, org-scoped once and reused. */
+class OrgScope {
+  readonly clients: ClientRecord[];
+  readonly clientById: Map<string, ClientRecord>;
+  readonly staffById: Map<string, StaffMember>;
+  readonly financialByClient: Map<string, FinancialProfile>;
+  readonly creditByClient: Map<string, CreditProfile>;
+  readonly primaryGoalByClient: Map<string, Goal>;
+  readonly nextAppointmentByClient: Map<string, Appointment>;
 
-function fullName(c: ClientRecord): string {
-  return `${c.firstName} ${c.lastName}`;
+  constructor(
+    readonly db: SyntheticDatabase,
+    readonly organizationId: string,
+    readonly now: Date,
+  ) {
+    this.clients = db.clients.filter((c) => c.organizationId === organizationId);
+    this.clientById = new Map(this.clients.map((c) => [c.id, c]));
+    this.staffById = new Map(
+      db.staff.filter((s) => s.organizationId === organizationId).map((s) => [s.id, s]),
+    );
+    this.financialByClient = new Map(
+      db.financialProfiles.filter((p) => this.clientById.has(p.clientId)).map((p) => [p.clientId, p]),
+    );
+    this.creditByClient = new Map(
+      db.creditProfiles.filter((p) => this.clientById.has(p.clientId)).map((p) => [p.clientId, p]),
+    );
+    this.primaryGoalByClient = new Map(
+      db.goals
+        .filter((g) => g.isPrimary && this.clientById.has(g.clientId))
+        .map((g) => [g.clientId, g]),
+    );
+    this.nextAppointmentByClient = new Map();
+    for (const ap of [...this.appointments()].sort((x, y) =>
+      x.scheduledAt.localeCompare(y.scheduledAt),
+    )) {
+      if (new Date(ap.scheduledAt) > now && !this.nextAppointmentByClient.has(ap.clientId)) {
+        this.nextAppointmentByClient.set(ap.clientId, ap);
+      }
+    }
+  }
+
+  /** Tenant-owned rows are only visible through their org-checked client. */
+  appointments(): Appointment[] {
+    return this.db.appointments.filter((ap) => this.clientById.has(ap.clientId));
+  }
+
+  documents() {
+    return this.db.documents.filter((d) => this.clientById.has(d.clientId));
+  }
+
+  reports() {
+    return this.db.reports.filter((r) => this.clientById.has(r.clientId));
+  }
+
+  monthlyActions() {
+    return this.db.monthlyActions.filter((a) => this.clientById.has(a.clientId));
+  }
+
+  toUpcoming(appointment: Appointment): UpcomingAppointment | null {
+    const client = this.clientById.get(appointment.clientId);
+    if (!client) return null;
+    return {
+      appointment,
+      clientId: client.id,
+      clientName: fullName(client),
+      staffName: this.staffById.get(appointment.staffId)?.name ?? "Unassigned",
+    };
+  }
+}
+
+function currentMonthOf(now: Date): string {
+  return now.toISOString().slice(0, 7);
 }
 
 export class MockClientRepository implements ClientRepository {
   constructor(private readonly db: SyntheticDatabase = syntheticDatabase) {}
 
   async list(organizationId: string, now: Date): Promise<ClientSummary[]> {
-    return this.db.clients
-      .filter((c) => c.organizationId === organizationId)
-      .map((c) => this.toSummary(c, now))
+    const scope = new OrgScope(this.db, organizationId, now);
+    return scope.clients
+      .map((c) => toSummary(scope, c, now))
       .sort((x, y) => {
         if (x.kind !== y.kind) return x.kind === "client" ? -1 : 1;
         return x.name.localeCompare(y.name);
@@ -46,51 +121,46 @@ export class MockClientRepository implements ClientRepository {
   }
 
   async getDetail(organizationId: string, clientId: string, now: Date): Promise<ClientDetail | null> {
-    const record = this.db.clients.find(
-      (c) => c.id === clientId && c.organizationId === organizationId,
-    );
+    const scope = new OrgScope(this.db, organizationId, now);
+    const record = scope.clientById.get(clientId);
     if (!record) return null;
 
-    const financialProfile = this.db.financialProfiles.find((p) => p.clientId === clientId) ?? null;
-    const creditProfile = this.db.creditProfiles.find((p) => p.clientId === clientId) ?? null;
+    const financialProfile = scope.financialByClient.get(clientId) ?? null;
+    const creditProfile = scope.creditByClient.get(clientId) ?? null;
 
-    const derived =
-      financialProfile && creditProfile
-        ? {
-            utilizationPct: utilizationPct(creditProfile.revolvingBalanceCents, creditProfile.revolvingLimitCents),
-            dtiPct: dtiPct(financialProfile.monthlyDebtPaymentsCents, financialProfile.monthlyIncomeCents),
-            reserveMonths: reserveMonths(financialProfile.liquidSavingsCents, financialProfile.monthlyEssentialExpensesCents),
-          }
-        : null;
-
-    const assessment =
-      financialProfile && creditProfile
-        ? assessReadiness(toReadinessFacts(financialProfile, creditProfile))
-        : null;
-
-    const assignedStaff =
-      this.db.staff.find((s) => s.id === record.assignedStaffId) ?? this.db.staff[0];
-    if (!assignedStaff) throw new Error("synthetic dataset has no staff");
-
-    const nextAppointment = nextAppointmentFor(this.db, clientId, now);
+    // Facts are derived once; the displayed metrics and the assessment can
+    // never disagree because they come from the same object.
+    const facts =
+      financialProfile && creditProfile ? toReadinessFacts(financialProfile, creditProfile) : null;
+    const actionPlanMonth = currentMonthOf(now);
+    const next = scope.nextAppointmentByClient.get(clientId);
 
     return {
       record,
-      assignedStaff,
+      assignedStaff: scope.staffById.get(record.assignedStaffId) ?? null,
       financialProfile,
       creditProfile,
-      derived,
-      assessment,
+      derived: facts
+        ? {
+            utilizationPct: facts.utilizationPct,
+            dtiPct: facts.dtiPct,
+            reserveMonths: facts.reserveMonths,
+          }
+        : null,
+      assessment: facts ? assessReadiness(facts) : null,
       engagement: assessEngagement(record.lastActivityAt, now),
       goals: this.db.goals.filter((g) => g.clientId === clientId),
       milestones: this.db.milestones
         .filter((ms) => ms.clientId === clientId)
         .sort((x, y) => x.order - y.order),
-      monthlyActions: this.db.monthlyActions.filter((a) => a.clientId === clientId),
+      actionPlanMonth,
+      monthlyActions: this.db.monthlyActions.filter(
+        (a) => a.clientId === clientId && a.month === actionPlanMonth,
+      ),
       documents: this.db.documents
         .filter((d) => d.clientId === clientId)
         .sort((x, y) => y.updatedAt.localeCompare(x.updatedAt)),
-      nextAppointment,
+      nextAppointment: next ? scope.toUpcoming(next) : null,
       latestReport:
         this.db.reports
           .filter((r) => r.clientId === clientId)
@@ -101,29 +171,25 @@ export class MockClientRepository implements ClientRepository {
       aiSuggestions: this.db.aiSuggestions.filter((s) => s.clientId === clientId),
     };
   }
+}
 
-  private toSummary(c: ClientRecord, now: Date): ClientSummary {
-    const financial = this.db.financialProfiles.find((p) => p.clientId === c.id);
-    const credit = this.db.creditProfiles.find((p) => p.clientId === c.id);
-    const engagement = assessEngagement(c.lastActivityAt, now);
-    const staff = this.db.staff.find((s) => s.id === c.assignedStaffId);
-    const next = nextAppointmentFor(this.db, c.id, now);
+function toSummary(scope: OrgScope, c: ClientRecord, now: Date): ClientSummary {
+  const financial = scope.financialByClient.get(c.id);
+  const credit = scope.creditByClient.get(c.id);
+  const engagement = assessEngagement(c.lastActivityAt, now);
 
-    return {
-      id: c.id,
-      name: fullName(c),
-      kind: c.kind,
-      pipelineStatus: c.pipelineStatus,
-      stage:
-        financial && credit ? assessReadiness(toReadinessFacts(financial, credit)).stage : null,
-      primaryGoal:
-        this.db.goals.find((g) => g.clientId === c.id && g.isPrimary)?.title ?? null,
-      engagement: engagement.status,
-      daysSinceLastActivity: engagement.daysSinceLastActivity,
-      nextAppointmentAt: next?.appointment.scheduledAt ?? null,
-      assignedStaffName: staff?.name ?? "Unassigned",
-    };
-  }
+  return {
+    id: c.id,
+    name: fullName(c),
+    kind: c.kind,
+    pipelineStatus: c.pipelineStatus,
+    stage: financial && credit ? assessReadiness(toReadinessFacts(financial, credit)).stage : null,
+    primaryGoal: scope.primaryGoalByClient.get(c.id)?.title ?? null,
+    engagement: engagement.status,
+    daysSinceLastActivity: engagement.daysSinceLastActivity,
+    nextAppointmentAt: scope.nextAppointmentByClient.get(c.id)?.scheduledAt ?? null,
+    assignedStaffName: scope.staffById.get(c.assignedStaffId)?.name ?? "Unassigned",
+  };
 }
 
 export class MockDashboardRepository implements DashboardRepository {
@@ -137,8 +203,9 @@ export class MockDashboardRepository implements DashboardRepository {
       throw new Error(`unknown organization: ${organizationId}`);
     }
 
+    const scope = new OrgScope(this.db, organizationId, now);
     const summaries = await this.clients.list(organizationId, now);
-    const currentMonth = now.toISOString().slice(0, 7);
+    const actionPlanMonth = currentMonthOf(now);
 
     const stageCounts = new Map<string, number>();
     for (const s of summaries) {
@@ -158,14 +225,21 @@ export class MockDashboardRepository implements DashboardRepository {
       count,
     }));
 
-    const monthActions = this.db.monthlyActions.filter((a) => a.month === currentMonth);
+    // KPI contract: completion across ACTIVE clients' plans for this month.
+    const activeClientIds = new Set(
+      scope.clients.filter((c) => c.kind === "client" && c.pipelineStatus === "active").map((c) => c.id),
+    );
+    const monthActions = scope
+      .monthlyActions()
+      .filter((a) => a.month === actionPlanMonth && activeClientIds.has(a.clientId));
     const doneActions = monthActions.filter((a) => a.status === "done").length;
 
-    const upcoming = this.db.appointments
+    const upcoming = scope
+      .appointments()
       .filter((ap) => new Date(ap.scheduledAt) > now)
       .sort((x, y) => x.scheduledAt.localeCompare(y.scheduledAt))
       .slice(0, 5)
-      .map((ap) => toUpcoming(this.db, ap.id))
+      .map((ap) => scope.toUpcoming(ap))
       .filter((u): u is UpcomingAppointment => u !== null);
 
     const needsAttention: AttentionItem[] = [];
@@ -175,13 +249,13 @@ export class MockDashboardRepository implements DashboardRepository {
           clientId: s.id,
           clientName: s.name,
           kind: "engagement",
-          detail: `${s.engagement === "dormant" ? "Dormant" : "At risk"} — ${s.daysSinceLastActivity} days since last activity`,
+          detail: `${ENGAGEMENT_STATUS_LABELS[s.engagement]} — ${s.daysSinceLastActivity} days since last activity`,
         });
       }
     }
-    for (const d of this.db.documents) {
+    for (const d of scope.documents()) {
       if (d.reviewStatus === "needs_attention") {
-        const c = this.db.clients.find((x) => x.id === d.clientId);
+        const c = scope.clientById.get(d.clientId);
         if (c) {
           needsAttention.push({
             clientId: c.id,
@@ -192,9 +266,9 @@ export class MockDashboardRepository implements DashboardRepository {
         }
       }
     }
-    for (const r of this.db.reports) {
+    for (const r of scope.reports()) {
       if (r.status === "ready_for_review") {
-        const c = this.db.clients.find((x) => x.id === r.clientId);
+        const c = scope.clientById.get(r.clientId);
         if (c) {
           needsAttention.push({
             clientId: c.id,
@@ -210,14 +284,15 @@ export class MockDashboardRepository implements DashboardRepository {
 
     return {
       organization: this.db.organization,
+      actionPlanMonth,
       kpis: {
-        activeClients: summaries.filter((s) => s.kind === "client" && s.pipelineStatus === "active").length,
+        activeClients: activeClientIds.size,
         openLeads: summaries.filter((s) => s.kind === "lead").length,
         atRiskOrDormant: summaries.filter((s) => s.engagement === "at_risk" || s.engagement === "dormant").length,
-        documentsAwaitingReview: this.db.documents.filter(
-          (d) => d.reviewStatus === "uploaded" || d.reviewStatus === "in_review",
-        ).length,
-        appointmentsNext7Days: this.db.appointments.filter((ap) => {
+        documentsAwaitingReview: scope
+          .documents()
+          .filter((d) => d.reviewStatus === "uploaded" || d.reviewStatus === "in_review").length,
+        appointmentsNext7Days: scope.appointments().filter((ap) => {
           const t = new Date(ap.scheduledAt);
           return t > now && t <= in7Days;
         }).length,
@@ -230,29 +305,4 @@ export class MockDashboardRepository implements DashboardRepository {
       needsAttention,
     };
   }
-}
-
-function nextAppointmentFor(
-  db: SyntheticDatabase,
-  clientId: string,
-  now: Date,
-): UpcomingAppointment | null {
-  const next = db.appointments
-    .filter((ap) => ap.clientId === clientId && new Date(ap.scheduledAt) > now)
-    .sort((x, y) => x.scheduledAt.localeCompare(y.scheduledAt))[0];
-  return next ? toUpcoming(db, next.id) : null;
-}
-
-function toUpcoming(db: SyntheticDatabase, appointmentId: string): UpcomingAppointment | null {
-  const appointment = db.appointments.find((ap) => ap.id === appointmentId);
-  if (!appointment) return null;
-  const c = db.clients.find((x) => x.id === appointment.clientId);
-  const s = db.staff.find((x) => x.id === appointment.staffId);
-  if (!c) return null;
-  return {
-    appointment,
-    clientId: c.id,
-    clientName: fullName(c),
-    staffName: s?.name ?? "Unassigned",
-  };
 }

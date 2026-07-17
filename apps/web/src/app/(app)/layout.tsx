@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { NavLink } from "@/components/nav-link";
-import { DEMO_STAFF_NAME, demoNow } from "@/lib/data";
-import { fmtDate } from "@/lib/format";
+import { DEMO_STAFF, demoNow } from "@/lib/data";
+import { fmtDate, initials, STAFF_ROLE_LABELS } from "@/lib/format";
 
 const COMING_SOON = ["Documents", "Reports", "Partners", "Settings"];
 
@@ -44,11 +44,13 @@ export default function AppShellLayout({ children }: { children: React.ReactNode
         <div className="mt-auto border-t border-charcoal-soft pt-4">
           <div className="flex items-center gap-3 px-2">
             <span className="flex h-8 w-8 items-center justify-center rounded-full bg-charcoal-soft text-xs font-medium text-ivory-ink">
-              DM
+              {initials(DEMO_STAFF.name)}
             </span>
             <span className="min-w-0">
-              <span className="block truncate text-sm text-ivory-ink">{DEMO_STAFF_NAME}</span>
-              <span className="block text-[11px] text-ivory-ink-soft">Organization Owner</span>
+              <span className="block truncate text-sm text-ivory-ink">{DEMO_STAFF.name}</span>
+              <span className="block text-[11px] text-ivory-ink-soft">
+                {STAFF_ROLE_LABELS[DEMO_STAFF.role]}
+              </span>
             </span>
           </div>
           <Link

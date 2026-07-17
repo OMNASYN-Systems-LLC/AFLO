@@ -74,7 +74,7 @@ One Railway service running the background worker: outbox polling, scheduled rem
 | Source | GitHub repo, branch `main` (production) |
 | Root directory | `/` (workspace root, so pnpm can resolve workspace deps) |
 | Build command | `pnpm install --frozen-lockfile && pnpm --filter @aflo/worker build` |
-| Start command | `pnpm --filter @aflo/worker start` |
+| Start command | `pnpm --filter @aflo/worker start` (requires `WORKER_HEARTBEAT=1` while the stub is the deployed artifact — see §6; without it the process exits cleanly and never restarts) |
 | Restart policy | On failure, capped retries (e.g. max 10) — the worker should also exit non-zero on unrecoverable errors so Railway restarts it |
 | Health | Worker logs a heartbeat; alerting via Sentry, not Railway health checks, in V1 |
 
@@ -116,6 +116,7 @@ All values below are **placeholders**. Real values live only in the Vercel and R
 
 | Name | Service | Required when | Description | Example placeholder |
 |---|---|---|---|---|
+| `WORKER_HEARTBEAT` | worker | The worker stub is deployed to Railway at all | Set to `1` so the stub stays alive between heartbeats; unset, it enumerates its job registry and exits 0 (Railway's on-failure restart policy will **not** restart a clean exit) | `1` |
 | `DATABASE_URL` | both | First Neon-backed repository ships | Pooled Neon connection string for runtime queries | `postgresql://app_user:<password>@ep-example-123-pooler.us-east-2.aws.neon.tech/aflo?sslmode=require` |
 | `DIRECT_DATABASE_URL` | both (CI + worker) | Migrations run against Neon | Direct (non-pooled) Neon connection string for migrations and session-level features | `postgresql://app_owner:<password>@ep-example-123.us-east-2.aws.neon.tech/aflo?sslmode=require` |
 | `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` | web | Clerk chosen and auth slice ships | Clerk publishable key (client-safe) | `pk_test_xxxxxxxxxxxx` |

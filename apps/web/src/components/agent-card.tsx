@@ -46,7 +46,8 @@ export function AgentSuggestionCard({ envelope }: { envelope: AgentEnvelope }) {
               title={code}
               className="rounded bg-sand px-1.5 py-0.5 font-mono text-[11px] text-ink-soft"
             >
-              {REASON_CODE_LABELS[code] ?? code}
+              {/* Envelope reason codes are free strings from the model run; fall back to the raw token. */}
+              {(REASON_CODE_LABELS as Record<string, string | undefined>)[code] ?? code}
             </li>
           ))}
         </ul>

@@ -61,6 +61,11 @@ export interface StaffMember {
   title: string;
 }
 
+/** Canonical display name — every surface renders people through this. */
+export function fullName(person: { firstName: string; lastName: string }): string {
+  return `${person.firstName} ${person.lastName}`;
+}
+
 export interface ClientRecord {
   id: string;
   organizationId: string;

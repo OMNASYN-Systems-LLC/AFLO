@@ -40,6 +40,8 @@ export interface AgentRecommendation {
 }
 
 export interface AgentEnvelope {
+  /** Stable identifier for the run that produced this envelope (ai_runs.id). */
+  id: string;
   agent: AgentName;
   status: AgentStatus;
   /** Model self-estimate in [0,1]; deterministic facts are never "confident" — they are facts. */

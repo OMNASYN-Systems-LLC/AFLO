@@ -65,6 +65,8 @@ export interface AttentionItem {
 
 export interface DashboardSnapshot {
   organization: Organization;
+  /** Month ("YYYY-MM", derived from `now`) the action-plan KPI covers. */
+  actionPlanMonth: string;
   kpis: DashboardKpis;
   stageDistribution: StageCount[];
   pipeline: PipelineCount[];
@@ -94,7 +96,8 @@ export interface DerivedFinancialMetrics {
 
 export interface ClientDetail {
   record: ClientRecord;
-  assignedStaff: StaffMember;
+  /** Null when the assignment dangles — surfaced as "Unassigned", never fabricated. */
+  assignedStaff: StaffMember | null;
   financialProfile: FinancialProfile | null;
   creditProfile: CreditProfile | null;
   derived: DerivedFinancialMetrics | null;
@@ -103,6 +106,9 @@ export interface ClientDetail {
   engagement: EngagementAssessment;
   goals: Goal[];
   milestones: RoadmapMilestone[];
+  /** Month ("YYYY-MM", derived from `now`) that monthlyActions covers. */
+  actionPlanMonth: string;
+  /** Actions for actionPlanMonth only — history is a later slice. */
   monthlyActions: MonthlyAction[];
   documents: ClientDocument[];
   nextAppointment: UpcomingAppointment | null;

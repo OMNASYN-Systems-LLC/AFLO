@@ -5,6 +5,7 @@ import {
   syntheticDatabase,
   type ClientRepository,
   type DashboardRepository,
+  type StaffMember,
 } from "@aflo/shared";
 
 /**
@@ -16,8 +17,14 @@ import {
  */
 
 export const DEMO_ORG_ID = syntheticDatabase.organization.id;
-export const DEMO_STAFF_NAME = "Danielle Mercer";
 export const demoNow: Date = SYNTHETIC_NOW;
+
+/** The signed-in staff member the shell impersonates until real auth lands. */
+export const DEMO_STAFF: StaffMember = (() => {
+  const owner = syntheticDatabase.staff.find((s) => s.role === "organization_owner");
+  if (!owner) throw new Error("synthetic dataset must include an organization owner");
+  return owner;
+})();
 
 export const clientRepository: ClientRepository = new MockClientRepository();
 export const dashboardRepository: DashboardRepository = new MockDashboardRepository();

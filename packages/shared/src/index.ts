@@ -1,5 +1,6 @@
 export * from "./domain/types";
 export * from "./domain/agent";
+export * from "./domain/time";
 export * from "./rules/readiness";
 export * from "./rules/engagement";
 export * from "./repositories/interfaces";

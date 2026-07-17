@@ -7,18 +7,13 @@ import type {
   ReportStatus,
   ReviewStatus,
 } from "@aflo/shared";
-import {
-  DOC_STATUS_LABELS,
-  ENGAGEMENT_LABELS,
-  PIPELINE_LABELS,
-  REPORT_STATUS_LABELS,
-  REVIEW_STATUS_LABELS,
-  STAGE_LABELS,
-} from "@/lib/format";
+import { ENGAGEMENT_LABELS, PIPELINE_LABELS, STAGE_LABELS } from "@/lib/format";
 
 /**
  * Status is never color alone: every badge carries its text label, and tones
- * come from the validated status palette in globals.css.
+ * come from the validated status palette in globals.css. Badge-only enums
+ * colocate {label, tone} here; shared-domain labels come from @aflo/shared
+ * via lib/format.
  */
 
 type Tone = "good" | "warn" | "risk" | "calm" | "neutral" | "emerald" | "gold";
@@ -73,35 +68,38 @@ export function PipelineBadge({ status }: { status: PipelineStatus }) {
   return <Badge tone="neutral" label={PIPELINE_LABELS[status]} />;
 }
 
-const DOC_TONES: Record<DocumentReviewStatus, Tone> = {
-  requested: "neutral",
-  uploaded: "calm",
-  in_review: "warn",
-  approved: "good",
-  needs_attention: "risk",
+const DOC_STATUS: Record<DocumentReviewStatus, { label: string; tone: Tone }> = {
+  requested: { label: "Requested", tone: "neutral" },
+  uploaded: { label: "Uploaded", tone: "calm" },
+  in_review: { label: "In review", tone: "warn" },
+  approved: { label: "Approved", tone: "good" },
+  needs_attention: { label: "Needs attention", tone: "risk" },
 };
 
 export function DocStatusBadge({ status }: { status: DocumentReviewStatus }) {
-  return <Badge tone={DOC_TONES[status]} label={DOC_STATUS_LABELS[status]} />;
+  const s = DOC_STATUS[status];
+  return <Badge tone={s.tone} label={s.label} />;
 }
 
-const REPORT_TONES: Record<ReportStatus, Tone> = {
-  draft: "neutral",
-  ready_for_review: "warn",
-  published: "good",
+const REPORT_STATUS: Record<ReportStatus, { label: string; tone: Tone }> = {
+  draft: { label: "Draft", tone: "neutral" },
+  ready_for_review: { label: "Ready for review", tone: "warn" },
+  published: { label: "Published", tone: "good" },
 };
 
 export function ReportStatusBadge({ status }: { status: ReportStatus }) {
-  return <Badge tone={REPORT_TONES[status]} label={REPORT_STATUS_LABELS[status]} />;
+  const s = REPORT_STATUS[status];
+  return <Badge tone={s.tone} label={s.label} />;
 }
 
-const REVIEW_TONES: Record<ReviewStatus, Tone> = {
-  pending_review: "warn",
-  approved: "good",
-  rejected: "risk",
-  auto_published: "calm",
+const REVIEW_STATUS: Record<ReviewStatus, { label: string; tone: Tone }> = {
+  pending_review: { label: "Pending review", tone: "warn" },
+  approved: { label: "Approved", tone: "good" },
+  rejected: { label: "Rejected", tone: "risk" },
+  auto_published: { label: "Auto-published", tone: "calm" },
 };
 
 export function ReviewStatusBadge({ status }: { status: ReviewStatus }) {
-  return <Badge tone={REVIEW_TONES[status]} label={REVIEW_STATUS_LABELS[status]} />;
+  const s = REVIEW_STATUS[status];
+  return <Badge tone={s.tone} label={s.label} />;
 }

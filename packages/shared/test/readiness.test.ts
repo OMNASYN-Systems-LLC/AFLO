@@ -28,8 +28,12 @@ describe("deterministic calculators", () => {
     expect(utilizationPct(6100_00, 16000_00)).toBe(38.1);
   });
 
-  it("treats a zero limit as zero utilization", () => {
-    expect(utilizationPct(5000_00, 0)).toBe(0);
+  it("treats a zero limit with no balance as zero utilization", () => {
+    expect(utilizationPct(0, 0)).toBe(0);
+  });
+
+  it("treats a positive balance on a zero limit as fully utilized, never 0%", () => {
+    expect(utilizationPct(5000_00, 0)).toBe(100);
   });
 
   it("computes DTI and pins zero income to 100", () => {
