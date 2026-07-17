@@ -62,7 +62,18 @@ docs/
 
 ## Current Status
 
-Sprint 0: workflow discovery, product architecture, repository scaffolding, and pilot planning.
+First vertical slice implemented: pnpm monorepo scaffold, deterministic readiness/engagement rules with tests, mock repositories over synthetic data, and the staff-facing visual prototype (sign-in shell, dashboard, client list, client detail). Architecture, scope, schema, authorization, agent-boundary, and deployment docs are in `docs/`. No external services are wired yet — the prototype needs no environment variables.
+
+## Getting Started
+
+```bash
+pnpm install
+pnpm dev        # Next.js app at http://localhost:3000
+pnpm typecheck  # tsc across all workspaces
+pnpm test       # vitest (rules engine + repositories)
+pnpm lint       # eslint (web)
+pnpm build      # worker + web production builds
+```
 
 ## V1 Boundaries
 
