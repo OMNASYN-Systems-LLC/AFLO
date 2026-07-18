@@ -63,6 +63,70 @@ export async function addMonthlyActionAction(clientId: string, formData: FormDat
 }
 
 /**
+ * Staff document/appointment/note workflow actions. The store validates
+ * everything (document.v1.0.0, input checks) and audits denials; the UI
+ * only offers rule-legal moves.
+ */
+export async function requestDocumentAction(clientId: string, formData: FormData): Promise<void> {
+  const session = getStaffSession();
+  store.requestDocument({
+    organizationId: session.organizationId,
+    clientId,
+    name: String(formData.get("name") ?? ""),
+    docType: String(formData.get("docType") ?? "") as
+      | "credit_report"
+      | "income_verification"
+      | "bank_statement"
+      | "identification"
+      | "other",
+    actorStaffId: session.staffId,
+  });
+  revalidatePath(`/clients/${clientId}`);
+  revalidatePath("/dashboard");
+}
+
+export async function transitionDocumentAction(
+  clientId: string,
+  documentId: string,
+  toStatus: "requested" | "uploaded" | "in_review" | "approved" | "needs_attention",
+): Promise<void> {
+  const session = getStaffSession();
+  store.transitionDocument({
+    organizationId: session.organizationId,
+    documentId,
+    toStatus,
+    actorStaffId: session.staffId,
+  });
+  revalidatePath(`/clients/${clientId}`);
+  revalidatePath("/dashboard");
+}
+
+export async function scheduleAppointmentAction(clientId: string, formData: FormData): Promise<void> {
+  const session = getStaffSession();
+  store.scheduleAppointment({
+    organizationId: session.organizationId,
+    clientId,
+    purpose: String(formData.get("purpose") ?? ""),
+    scheduledAt: String(formData.get("scheduledAt") ?? ""),
+    channel: String(formData.get("channel") ?? "") as "video" | "phone" | "in_person",
+    actorStaffId: session.staffId,
+  });
+  revalidatePath(`/clients/${clientId}`);
+  revalidatePath("/dashboard");
+}
+
+export async function addNoteAction(clientId: string, formData: FormData): Promise<void> {
+  const session = getStaffSession();
+  store.addNote({
+    organizationId: session.organizationId,
+    clientId,
+    body: String(formData.get("body") ?? ""),
+    actorStaffId: session.staffId,
+  });
+  revalidatePath(`/clients/${clientId}`);
+}
+
+/**
  * Quarterly-report workflow actions (report.v1.0.0). Generation draws only
  * on recorded facts; the store enforces eligibility, one report per
  * quarter, and the review workflow — denials are audited server-side.

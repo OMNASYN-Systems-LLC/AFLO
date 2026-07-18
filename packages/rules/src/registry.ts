@@ -1,4 +1,5 @@
 import { ACTION_RULES_VERSION } from "./action";
+import { DOCUMENT_RULES_VERSION } from "./document";
 import { ENGAGEMENT_RULES_VERSION } from "./engagement";
 import { INTAKE_RULES_VERSION } from "./intake";
 import { PIPELINE_RULES_VERSION } from "./pipeline";
@@ -210,6 +211,29 @@ export const RULE_REGISTRY: readonly RuleDefinition[] = [
     sources: [],
     changeHistory: [
       { version: "roadmap.v1.0.0", date: "2026-07-18", note: "Initial founder-required approval path (founder workstream slice F)." },
+    ],
+  },
+  {
+    id: "document.transition",
+    version: DOCUMENT_RULES_VERSION,
+    effectiveDate: "2026-07-18",
+    description:
+      "Document review-state workflow over an allow-list: requested → uploaded → in_review → approved or needs_attention, with re-entry via re-upload. Approved is terminal — an approved document is a verified fact; replacement means a new request, never a silent downgrade. Metadata workflow only; file contents live behind external signed-URL storage.",
+    inputs: ["fromStatus", "toStatus"],
+    output: "DocumentTransitionResult { allowed, reasonCode }",
+    reasonCodes: [
+      "DOC_UPLOADED",
+      "DOC_REVIEW_STARTED",
+      "DOC_APPROVED",
+      "DOC_FLAGGED",
+      "DOC_RESUBMITTED",
+      "DOC_SAME_STATUS",
+      "DOC_UNKNOWN_STATUS",
+      "DOC_ILLEGAL_TRANSITION",
+    ],
+    sources: [],
+    changeHistory: [
+      { version: "document.v1.0.0", date: "2026-07-18", note: "Initial review-state workflow (founder workstream slice J)." },
     ],
   },
   {

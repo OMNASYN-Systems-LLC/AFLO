@@ -1,5 +1,6 @@
 import {
   ACTION_RULES_VERSION,
+  DOCUMENT_RULES_VERSION,
   INTAKE_RULES_VERSION,
   LIFECYCLE_STAGE_LABELS,
   PIPELINE_BACKBONE,
@@ -9,6 +10,7 @@ import {
   actionTransition,
   assessReadiness,
   assessmentReviewGate,
+  documentTransition,
   intakeCompleteness,
   nextRequiredStage,
   pipelineTransition,
@@ -19,6 +21,8 @@ import {
   sectionCompletion,
   type ActionStatusId,
   type ActionTransitionResult,
+  type DocumentReviewStatusId,
+  type DocumentTransitionResult,
   type IntakeCompletenessResult,
   type PipelineTransitionResult,
   type ReportStatusId,
@@ -32,6 +36,9 @@ import { toOutboxRecord, type OutboxRecord } from "../outbox";
 import { syntheticDatabase, type SyntheticDatabase } from "../data/synthetic";
 import { toReadinessFacts } from "../domain/facts";
 import type {
+  AdminNote,
+  Appointment,
+  ClientDocument,
   ClientRecord,
   IntakeRecord,
   MonthlyAction,
@@ -204,6 +211,68 @@ export interface TransitionReportInput {
   organizationId: string;
   reportId: string;
   toStatus: ReportStatusId;
+  actorStaffId: string;
+}
+
+export type StaffWorkflowDenialCode =
+  | "CLIENT_NOT_FOUND"
+  | "DOCUMENT_NOT_FOUND"
+  | "ACTOR_NOT_IN_ORG"
+  | "INVALID_INPUT";
+
+export interface DocumentActionResult {
+  ok: boolean;
+  denialCode?: StaffWorkflowDenialCode;
+  transition?: DocumentTransitionResult;
+  document?: ClientDocument;
+  inputErrors?: string[];
+  emittedEventIds: string[];
+}
+
+export interface RequestDocumentInput {
+  organizationId: string;
+  clientId: string;
+  name: string;
+  docType: ClientDocument["docType"];
+  actorStaffId: string;
+}
+
+export interface TransitionDocumentInput {
+  organizationId: string;
+  documentId: string;
+  toStatus: DocumentReviewStatusId;
+  actorStaffId: string;
+}
+
+export interface AppointmentActionResult {
+  ok: boolean;
+  denialCode?: StaffWorkflowDenialCode;
+  appointment?: Appointment;
+  inputErrors?: string[];
+  emittedEventIds: string[];
+}
+
+export interface ScheduleAppointmentInput {
+  organizationId: string;
+  clientId: string;
+  purpose: string;
+  /** ISO datetime; must parse and lie in the future of the store clock. */
+  scheduledAt: string;
+  channel: Appointment["channel"];
+  actorStaffId: string;
+}
+
+export interface NoteActionResult {
+  ok: boolean;
+  denialCode?: StaffWorkflowDenialCode;
+  note?: AdminNote;
+  inputErrors?: string[];
+}
+
+export interface AddNoteInput {
+  organizationId: string;
+  clientId: string;
+  body: string;
   actorStaffId: string;
 }
 
@@ -1077,6 +1146,284 @@ export class AfloStore {
     });
 
     return { ok: true, transition, report, emittedEventIds: emitted.map((e) => e.eventId) };
+  }
+
+  /** Request a document from a client. Emits DocumentRequested; audited. */
+  requestDocument(input: RequestDocumentInput): DocumentActionResult {
+    const now = this.clock();
+    const record = this.findRecord(input.organizationId, input.clientId);
+    if (!record) return { ok: false, denialCode: "CLIENT_NOT_FOUND", emittedEventIds: [] };
+    const actor = this.findActor(input.organizationId, input.actorStaffId);
+    if (!actor) return { ok: false, denialCode: "ACTOR_NOT_IN_ORG", emittedEventIds: [] };
+
+    const DOC_TYPES: ClientDocument["docType"][] = [
+      "credit_report",
+      "income_verification",
+      "bank_statement",
+      "identification",
+      "other",
+    ];
+    const name = input.name.trim();
+    const inputErrors: string[] = [];
+    if (name.length === 0) inputErrors.push("document name is required");
+    if (!DOC_TYPES.includes(input.docType)) inputErrors.push(`unknown document type: ${String(input.docType)}`);
+    if (inputErrors.length > 0) {
+      this.audit({
+        organizationId: input.organizationId,
+        actorStaffId: actor.id,
+        action: "doc.request_denied",
+        targetType: "document",
+        targetId: record.id,
+        detail: inputErrors.join("; "),
+        reasonCode: "DOC_INVALID_INPUT",
+        ruleVersion: DOCUMENT_RULES_VERSION,
+        occurredAt: now.toISOString(),
+      });
+      return { ok: false, denialCode: "INVALID_INPUT", inputErrors, emittedEventIds: [] };
+    }
+
+    this.counter += 1;
+    const document: ClientDocument = {
+      id: `d-${record.id}-${this.counter}`,
+      clientId: record.id,
+      name,
+      docType: input.docType,
+      reviewStatus: "requested",
+      updatedAt: now.toISOString(),
+    };
+    this.db.documents.push(document);
+
+    const event = createEvent({
+      eventType: "DocumentRequested",
+      organizationId: input.organizationId,
+      aggregateId: document.id,
+      actorId: actor.id,
+      occurredAt: now.toISOString(),
+      payload: { clientId: record.id, documentId: document.id, docType: input.docType, dueDate: null },
+    });
+    this.outbox.push(toOutboxRecord(event, { now }));
+
+    this.audit({
+      organizationId: input.organizationId,
+      actorStaffId: actor.id,
+      action: "doc.requested",
+      targetType: "document",
+      targetId: document.id,
+      detail: `client ${record.id}: "${name}" (${input.docType})`,
+      reasonCode: "DOC_REQUESTED",
+      ruleVersion: DOCUMENT_RULES_VERSION,
+      occurredAt: now.toISOString(),
+    });
+
+    return { ok: true, document, emittedEventIds: [event.eventId] };
+  }
+
+  /**
+   * Move a document through review (document.v1.0.0). Receipt emits
+   * DocumentUploaded (metadata only — the storage reference is a synthetic
+   * placeholder until real signed-URL storage lands); review decisions emit
+   * DocumentReviewed. Denials are audited and never mutate.
+   */
+  transitionDocument(input: TransitionDocumentInput): DocumentActionResult {
+    const now = this.clock();
+    const document = this.db.documents.find((d) => d.id === input.documentId);
+    const client = document ? this.findRecord(input.organizationId, document.clientId) : undefined;
+    if (!document || !client) return { ok: false, denialCode: "DOCUMENT_NOT_FOUND", emittedEventIds: [] };
+    const actor = this.findActor(input.organizationId, input.actorStaffId);
+    if (!actor) return { ok: false, denialCode: "ACTOR_NOT_IN_ORG", emittedEventIds: [] };
+
+    const transition = documentTransition(document.reviewStatus, input.toStatus);
+    if (!transition.allowed) {
+      this.audit({
+        organizationId: input.organizationId,
+        actorStaffId: actor.id,
+        action: "doc.transition_denied",
+        targetType: "document",
+        targetId: document.id,
+        detail: `client ${client.id}: ${document.reviewStatus} → ${input.toStatus} denied`,
+        reasonCode: transition.reasonCode,
+        ruleVersion: transition.ruleVersion,
+        occurredAt: now.toISOString(),
+      });
+      return { ok: false, transition, emittedEventIds: [] };
+    }
+
+    const fromStatus = document.reviewStatus;
+    document.reviewStatus = input.toStatus;
+    document.updatedAt = now.toISOString();
+    client.lastActivityAt = now.toISOString();
+
+    const emitted: DomainEvent[] = [];
+    if (input.toStatus === "uploaded") {
+      emitted.push(
+        createEvent({
+          eventType: "DocumentUploaded",
+          organizationId: input.organizationId,
+          aggregateId: document.id,
+          actorId: actor.id,
+          occurredAt: now.toISOString(),
+          payload: {
+            clientId: client.id,
+            documentId: document.id,
+            docType: document.docType,
+            storageRef: `synthetic://${document.id}`,
+          },
+        }),
+      );
+    }
+    if (input.toStatus === "approved" || input.toStatus === "needs_attention") {
+      emitted.push(
+        createEvent({
+          eventType: "DocumentReviewed",
+          organizationId: input.organizationId,
+          aggregateId: document.id,
+          actorId: actor.id,
+          occurredAt: now.toISOString(),
+          payload: {
+            clientId: client.id,
+            documentId: document.id,
+            reviewStatus: input.toStatus,
+            reviewedByMemberId: actor.id,
+          },
+        }),
+      );
+    }
+    for (const event of emitted) {
+      this.outbox.push(toOutboxRecord(event, { now }));
+    }
+
+    const ACTION_BY_CODE: Record<string, string> = {
+      DOC_UPLOADED: "doc.uploaded",
+      DOC_REVIEW_STARTED: "doc.review_started",
+      DOC_APPROVED: "doc.approved",
+      DOC_FLAGGED: "doc.flagged",
+      DOC_RESUBMITTED: "doc.resubmitted",
+    };
+    this.audit({
+      organizationId: input.organizationId,
+      actorStaffId: actor.id,
+      action: ACTION_BY_CODE[transition.reasonCode] ?? "doc.transitioned",
+      targetType: "document",
+      targetId: document.id,
+      detail: `client ${client.id}: ${fromStatus} → ${input.toStatus} ("${document.name}")`,
+      reasonCode: transition.reasonCode,
+      ruleVersion: transition.ruleVersion,
+      occurredAt: now.toISOString(),
+    });
+
+    return { ok: true, transition, document, emittedEventIds: emitted.map((e) => e.eventId) };
+  }
+
+  /** Schedule an appointment with the acting staff member. Emits AppointmentScheduled. */
+  scheduleAppointment(input: ScheduleAppointmentInput): AppointmentActionResult {
+    const now = this.clock();
+    const record = this.findRecord(input.organizationId, input.clientId);
+    if (!record) return { ok: false, denialCode: "CLIENT_NOT_FOUND", emittedEventIds: [] };
+    const actor = this.findActor(input.organizationId, input.actorStaffId);
+    if (!actor) return { ok: false, denialCode: "ACTOR_NOT_IN_ORG", emittedEventIds: [] };
+
+    const CHANNELS: Appointment["channel"][] = ["video", "phone", "in_person"];
+    const purpose = input.purpose.trim();
+    const scheduledMs = Date.parse(input.scheduledAt);
+    const inputErrors: string[] = [];
+    if (purpose.length === 0) inputErrors.push("purpose is required");
+    if (!CHANNELS.includes(input.channel)) inputErrors.push(`unknown channel: ${String(input.channel)}`);
+    if (Number.isNaN(scheduledMs)) inputErrors.push(`scheduled time is not a valid datetime: ${input.scheduledAt}`);
+    else if (scheduledMs <= now.getTime()) inputErrors.push("scheduled time must be in the future");
+    if (inputErrors.length > 0) {
+      this.audit({
+        organizationId: input.organizationId,
+        actorStaffId: actor.id,
+        action: "appointment.schedule_denied",
+        targetType: "appointment",
+        targetId: record.id,
+        detail: inputErrors.join("; "),
+        reasonCode: "AP_INVALID_INPUT",
+        ruleVersion: "appointment.v1.0.0",
+        occurredAt: now.toISOString(),
+      });
+      return { ok: false, denialCode: "INVALID_INPUT", inputErrors, emittedEventIds: [] };
+    }
+
+    this.counter += 1;
+    const appointment: Appointment = {
+      id: `ap-${record.id}-${this.counter}`,
+      clientId: record.id,
+      staffId: actor.id,
+      purpose,
+      scheduledAt: new Date(scheduledMs).toISOString(),
+      channel: input.channel,
+    };
+    this.db.appointments.push(appointment);
+    record.lastActivityAt = now.toISOString();
+
+    const event = createEvent({
+      eventType: "AppointmentScheduled",
+      organizationId: input.organizationId,
+      aggregateId: appointment.id,
+      actorId: actor.id,
+      occurredAt: now.toISOString(),
+      payload: {
+        clientId: record.id,
+        appointmentId: appointment.id,
+        staffMemberId: actor.id,
+        scheduledAt: appointment.scheduledAt,
+        channel: input.channel,
+      },
+    });
+    this.outbox.push(toOutboxRecord(event, { now }));
+
+    this.audit({
+      organizationId: input.organizationId,
+      actorStaffId: actor.id,
+      action: "appointment.scheduled",
+      targetType: "appointment",
+      targetId: appointment.id,
+      detail: `client ${record.id}: "${purpose}" at ${appointment.scheduledAt} (${input.channel})`,
+      reasonCode: "AP_SCHEDULED",
+      ruleVersion: "appointment.v1.0.0",
+      occurredAt: now.toISOString(),
+    });
+
+    return { ok: true, appointment, emittedEventIds: [event.eventId] };
+  }
+
+  /** Append an internal staff note. Audit-only — notes never reach the client portal. */
+  addNote(input: AddNoteInput): NoteActionResult {
+    const now = this.clock();
+    const record = this.findRecord(input.organizationId, input.clientId);
+    if (!record) return { ok: false, denialCode: "CLIENT_NOT_FOUND" };
+    const actor = this.findActor(input.organizationId, input.actorStaffId);
+    if (!actor) return { ok: false, denialCode: "ACTOR_NOT_IN_ORG" };
+
+    const body = input.body.trim();
+    if (body.length === 0) {
+      return { ok: false, denialCode: "INVALID_INPUT", inputErrors: ["note body is required"] };
+    }
+
+    this.counter += 1;
+    const note: AdminNote = {
+      id: `n-${record.id}-${this.counter}`,
+      clientId: record.id,
+      staffId: actor.id,
+      body,
+      createdAt: now.toISOString(),
+    };
+    this.db.notes.push(note);
+
+    this.audit({
+      organizationId: input.organizationId,
+      actorStaffId: actor.id,
+      action: "note.added",
+      targetType: "note",
+      targetId: note.id,
+      detail: `client ${record.id}: note added`,
+      reasonCode: "NOTE_ADDED",
+      ruleVersion: "note.v1.0.0",
+      occurredAt: now.toISOString(),
+    });
+
+    return { ok: true, note };
   }
 
   /** Recorded assessment history for one client, oldest first, org-verified. */

@@ -1,4 +1,5 @@
 export * from "./action";
+export * from "./document";
 export * from "./lifecycle";
 export * from "./time";
 export * from "./readiness";
