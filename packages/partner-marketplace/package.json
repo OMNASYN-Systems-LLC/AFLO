@@ -1,0 +1,8 @@
+{
+  "name": "@aflo/partner-marketplace",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Partner provider catalog, product categories, eligibility rules, compensation disclosures, referral links, application status, outcome tracking, and conflict-of-interest disclosures — including the Partner Neutrality Engine. Stub until the V1 partner-directory slice.",
+  "exports": { ".": "./src/index.ts" }
+}

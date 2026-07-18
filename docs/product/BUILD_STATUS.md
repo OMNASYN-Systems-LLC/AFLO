@@ -2,7 +2,7 @@
 
 Living status of the AFLO V1 build. Updated every implementation cycle. Newest state at top of each list.
 
-_Last updated: 2026-07-18 · PR #2 merged to `main`; branch `claude/billing-state-machine` in flight._
+_Last updated: 2026-07-18 · PRs #2 and #3 merged to `main`; branch `claude/partner-orchestration-roadmap` in flight. Backlog reprioritized per the founder's partner-orchestration decision (`PARTNER_ORCHESTRATION_ROADMAP.md`)._
 
 ## Legend
 
@@ -23,20 +23,26 @@ _Last updated: 2026-07-18 · PR #2 merged to `main`; branch `claude/billing-stat
 - Env examples (`apps/web`, `apps/worker`) — placeholders only.
 - Deployment config-as-code: `apps/web/vercel.json`, `apps/worker/railway.json`; `DEPLOYMENT.md` updated with the account-authorization blockers.
 - **PR #2 merged to `main`** — `main` contains the deployable monorepo (merge commit `1d76772`).
-- Deterministic billing kernel (`@aflo/billing`, `billing.v1.0.0`): invoice/subscription/payment allow-list state machines with reason codes, `isInvoicePastDue`, the grace-aware subscription-access entitlement gate, and a billing rule registry — pure, Stripe-free, readiness-free (20 tests). _In PR (branch `claude/billing-state-machine`)._
+- Deterministic billing kernel (`@aflo/billing`, `billing.v1.0.0`): invoice/subscription/payment allow-list state machines with reason codes, `isInvoicePastDue`, the grace-aware subscription-access entitlement gate, and a billing rule registry — pure, Stripe-free, readiness-free (20 tests). **Merged (PR #3).**
+- Partner-orchestration roadmap captured as an authoritative founder decision (`PARTNER_ORCHESTRATION_ROADMAP.md`), with ADR-0007, compliance/scope reconciliation, and five gated stub packages (`academy`, `partner-marketplace`, `credit-data`, `opportunity-intelligence`, `embedded-finance`). _In PR (branch `claude/partner-orchestration-roadmap`)._
 
 ## In progress 🔨
 
-- Billing kernel PR review + merge (`claude/billing-state-machine`).
+- Partner-orchestration roadmap PR (docs + stubs + milestone issues).
 
-## Next ⏭
+## Next ⏭ (founder-approved build-now order)
 
-- Event model / outbox typed contracts (`packages/shared`) — the charter event catalog and envelope.
-- Notifications templates + mock delivery (`packages/notifications`) — Resend behind the interface, mock in dev/preview.
-- Administrative settings layer (typed configuration: pipeline stages, service packages, templates, education modules, appointment types, staff assignments, partner categories, billing terms, reminder schedules).
-- Billing entities DDL (`service_packages`, `subscriptions`, `invoices`, …) added to `DATABASE_SCHEMA.md` with the persistence slice; the `@aflo/billing` kernel already defines their state semantics.
-- Event model / outbox typed contracts (`packages/shared`).
-- Notifications templates + mock delivery (`packages/notifications`).
+1. **Golden Key client lifecycle** — event model / outbox typed contracts, then lead→client conversion, intake, and lifecycle workflows over the existing deterministic stage engine.
+2. **Automated email workflows** — `packages/notifications`: template registry, consent/opt-out handling, delivery-event logging, retry/idempotency contracts, mock delivery in dev/preview.
+3. **Billing + Stripe test-mode payments** — billing entities DDL, service-package catalog, test-mode invoices/subscriptions consuming the `@aflo/billing` kernel; webhook verification is a founder-review item (never auto-merged).
+4. **Wealth Unlockers Academy** — `packages/academy`: staff-authored lesson library, stage/trigger-based assignment from verified facts, completion tracking; completion never unlocks regulated products.
+5. **Partner directory + referral tracking** — `packages/partner-marketplace` with the Partner Neutrality Engine record on every recommendation.
+6. **Credit-builder opportunity rules (mock providers only)** — deterministic Credit-Building Opportunity Engine; "no new account" is a first-class outcome; no partner names or compensation figures.
+
+## Phased later (gated — see `PARTNER_ORCHESTRATION_ROADMAP.md`)
+
+- **After pilot:** real affiliate integrations · bureau-data provider adapter · credit monitoring/alerts · opportunity & regulatory intelligence feed.
+- **After commercial + compliance validation:** embedded credit-builder applications · AFLO-branded secured card (sequence: referrals → embedded apps → co-brand pilot → branded card) · deposit/savings-linked products · interchange-based revenue model.
 
 ## Blocked ⛔ / Founder decision required 👤
 

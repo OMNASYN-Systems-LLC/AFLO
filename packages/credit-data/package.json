@@ -1,0 +1,8 @@
+{
+  "name": "@aflo/credit-data",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Provider-neutral bureau-data adapters, consumer consent, score-model metadata, report normalization into the AFLO credit model, monitoring alerts, and stale-data tracking. Stub — DISABLED until a bureau contract and compliance review exist (PARTNER_ORCHESTRATION_ROADMAP.md).",
+  "exports": { ".": "./src/index.ts" }
+}

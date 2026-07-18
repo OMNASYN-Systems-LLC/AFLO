@@ -1,0 +1,8 @@
+{
+  "name": "@aflo/academy",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Wealth Unlockers Academy: course/lesson library, stage-based and trigger-based assignment from verified facts, completion tracking, knowledge checks, staff-authored content, engagement analytics. Stub until the V1 Academy slice (build-now item 4).",
+  "exports": { ".": "./src/index.ts" }
+}
