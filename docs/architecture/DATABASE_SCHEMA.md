@@ -9,6 +9,23 @@ This document proposes the relational schema for the domains defined in
 migration set in `packages/database`; DDL below is illustrative and will be refined
 during implementation review.
 
+> **Authoritative source for the implemented core (2026-07-18).** `packages/database`
+> now holds the executable Drizzle schema and generated migration for the identity,
+> tenancy, governance, and CRM tables. Where this proposal and the Drizzle schema
+> differ, **the Drizzle schema wins** — it is reconciled to the implemented model
+> (slices C–M) and lockstep-tested against the rules kernel. Two proposal decisions
+> are already superseded there:
+> - **Leads and clients are one `clients` table** discriminated by `client_kind`
+>   (`lead` | `client`) with a configurable `pipeline_stage_id`, not the separate
+>   `leads`/`clients` tables + `lead_status` enum shown below. The pipeline is
+>   organization-configurable settings, evaluated by `pipeline.v1.0.0`.
+> - **`document_review_status` and the task/action status vocabularies** follow the
+>   kernel (`requested/uploaded/in_review/approved/needs_attention`; `todo/in_progress/done`),
+>   not the `document_review_status`/`task_status` enums below.
+>
+> The remaining tables (readiness, roadmap, task, document, appointment, report,
+> partner, simulation, billing) are still proposal-only until their Drizzle slice lands.
+
 ---
 
 ## 1. Conventions

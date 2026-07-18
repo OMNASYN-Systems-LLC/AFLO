@@ -3,6 +3,29 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Neon PostgreSQL schema, Drizzle ORM models, and SQL migrations. Stub until Sprint 3 (first Neon-backed slice).",
-  "exports": { ".": "./src/index.ts" }
+  "description": "Neon PostgreSQL schema (Drizzle ORM, ADR-0005) and SQL migrations. Schema-as-code and offline migration generation; the live connection and repository implementations are gated on DATABASE_URL.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src test",
+    "test": "vitest run",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "drizzle-kit migrate"
+  },
+  "dependencies": {
+    "@aflo/notifications": "workspace:*",
+    "@aflo/rules": "workspace:*",
+    "drizzle-orm": "^0.45.2"
+  },
+  "devDependencies": {
+    "@aflo/shared": "workspace:*",
+    "@eslint/js": "^10.0.1",
+    "drizzle-kit": "^0.31.10",
+    "eslint": "^9.39.5",
+    "typescript": "^5.9.2",
+    "typescript-eslint": "^8.64.0",
+    "vitest": "^4.1.10"
+  }
 }
