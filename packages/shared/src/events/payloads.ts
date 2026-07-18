@@ -34,6 +34,16 @@ export interface IntakeStartedPayload {
   intakeId: string;
 }
 
+export interface IntakeSectionCompletedPayload {
+  clientId: string;
+  intakeId: string;
+  /** Section id from the organization's intake definition. */
+  sectionId: string;
+  /** Deterministic progress after this completion (intake.completeness). */
+  completedRequiredCount: number;
+  requiredCount: number;
+}
+
 export interface IntakeCompletedPayload {
   clientId: string;
   intakeId: string;
@@ -205,6 +215,7 @@ export interface EventPayloadMap {
   LeadCreated: LeadCreatedPayload;
   LeadStatusChanged: LeadStatusChangedPayload;
   IntakeStarted: IntakeStartedPayload;
+  IntakeSectionCompleted: IntakeSectionCompletedPayload;
   IntakeCompleted: IntakeCompletedPayload;
   ClientActivated: ClientActivatedPayload;
   FinancialProfileUpdated: FinancialProfileUpdatedPayload;

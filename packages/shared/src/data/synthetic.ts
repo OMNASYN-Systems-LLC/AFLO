@@ -1,5 +1,12 @@
 import type { AgentEnvelope } from "@aflo/ai";
-import { MS_PER_DAY, PIPELINE_RULES_VERSION, type PipelineDefinition } from "@aflo/rules";
+import {
+  DEFAULT_INTAKE,
+  INTAKE_RULES_VERSION,
+  MS_PER_DAY,
+  PIPELINE_RULES_VERSION,
+  type IntakeDefinition,
+  type PipelineDefinition,
+} from "@aflo/rules";
 import type {
   AdminNote,
   Appointment,
@@ -8,6 +15,7 @@ import type {
   CreditProfile,
   FinancialProfile,
   Goal,
+  IntakeRecord,
   MonthlyAction,
   Organization,
   QuarterlyReport,
@@ -47,8 +55,11 @@ export interface SyntheticDatabase {
   organization: Organization;
   /** The organization's configured pipeline (future: organizations.settings). */
   pipeline: PipelineDefinition;
+  /** The organization's configured intake sections (future: organizations.settings). */
+  intake: IntakeDefinition;
   staff: StaffMember[];
   clients: ClientRecord[];
+  intakes: IntakeRecord[];
   financialProfiles: FinancialProfile[];
   creditProfiles: CreditProfile[];
   goals: Goal[];
@@ -79,6 +90,17 @@ export const GOLDEN_KEY_PIPELINE: PipelineDefinition = {
     { id: "intake_completed", label: "Intake completed", order: 5, required: true, terminal: false },
     { id: "client_activated", label: "Client activated", order: 6, required: true, terminal: true },
   ],
+};
+
+/**
+ * Golden Key's configured intake: the founder-required default section set.
+ * Section ids are referenced by IntakeRecord.completedSectionIds; completion
+ * only via @aflo/rules intake.completeness.
+ */
+export const GOLDEN_KEY_INTAKE: IntakeDefinition = {
+  id: "golden-key-intake-v1",
+  version: INTAKE_RULES_VERSION,
+  sections: DEFAULT_INTAKE.sections,
 };
 
 const organization: Organization = {
@@ -156,6 +178,45 @@ const clients: ClientRecord[] = [
   lead("l-cole", "new_lead", "Terrence", "Cole", "s-lin", 2, 1),
   lead("l-lawson", "contacted", "Beatrice", "Lawson", "s-lin", 45, 38),
   lead("l-haddad", "intake_started", "Omar", "Haddad", "s-boyd", 20, 6),
+];
+
+/** Historical completed intake for an activated client. */
+function completedIntake(clientId: string, startedDaysAgo: number): IntakeRecord {
+  return {
+    id: `intake-${clientId}`,
+    clientId,
+    status: "completed",
+    completedSectionIds: GOLDEN_KEY_INTAKE.sections.map((s) => s.id),
+    startedAt: daysAgo(startedDaysAgo),
+    completedAt: daysAgo(startedDaysAgo - 7),
+  };
+}
+
+const intakes: IntakeRecord[] = [
+  ...clients
+    .filter((c) => c.kind === "client")
+    .map((c) => completedIntake(c.id, Math.round((SYNTHETIC_NOW.getTime() - Date.parse(c.joinedAt)) / MS_PER_DAY))),
+  // Omar Haddad is mid-intake: cash flow, identity, consent, and logistics are
+  // captured; his primary goal, self-reported credit info, and itemized debts
+  // are still outstanding (which is why he has no credit profile yet).
+  {
+    id: "intake-l-haddad",
+    clientId: "l-haddad",
+    status: "in_progress",
+    completedSectionIds: [
+      "identity",
+      "communication_preferences",
+      "consent",
+      "income_sources",
+      "monthly_obligations",
+      "savings_reserves",
+      "documents",
+      "appointments",
+      "staff_assignment",
+    ],
+    startedAt: daysAgo(9),
+    completedAt: null,
+  },
 ];
 
 const financialProfiles: FinancialProfile[] = [
@@ -473,8 +534,10 @@ const aiSuggestions: AgentEnvelope[] = [
 export const syntheticDatabase: SyntheticDatabase = {
   organization,
   pipeline: GOLDEN_KEY_PIPELINE,
+  intake: GOLDEN_KEY_INTAKE,
   staff,
   clients,
+  intakes,
   financialProfiles,
   creditProfiles,
   goals,

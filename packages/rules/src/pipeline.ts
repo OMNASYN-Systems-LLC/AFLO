@@ -30,6 +30,21 @@ export interface PipelineDefinition {
 }
 
 /**
+ * Founder-required backbone stage ids. Organizations may insert optional
+ * stages around them, but these ids are the stable workflow contract other
+ * workflows key off (e.g. the intake workflow starts at `intakeStarted` and
+ * gates entry to `intakeCompleted` on intake completeness). Renaming one is
+ * a breaking workflow change, never a config tweak.
+ */
+export const PIPELINE_BACKBONE = {
+  newLead: "new_lead",
+  consultationScheduled: "consultation_scheduled",
+  intakeStarted: "intake_started",
+  intakeCompleted: "intake_completed",
+  clientActivated: "client_activated",
+} as const;
+
+/**
  * Golden Key default pipeline (founder-required path). Organizations may
  * insert optional stages between the required ones via settings; the
  * required backbone below is the workflow contract:
@@ -39,11 +54,11 @@ export const DEFAULT_PIPELINE: PipelineDefinition = {
   id: "golden-key-default",
   version: PIPELINE_RULES_VERSION,
   stages: [
-    { id: "new_lead", label: "New lead", order: 1, required: true, terminal: false },
-    { id: "consultation_scheduled", label: "Consultation scheduled", order: 2, required: true, terminal: false },
-    { id: "intake_started", label: "Intake started", order: 3, required: true, terminal: false },
-    { id: "intake_completed", label: "Intake completed", order: 4, required: true, terminal: false },
-    { id: "client_activated", label: "Client activated", order: 5, required: true, terminal: true },
+    { id: PIPELINE_BACKBONE.newLead, label: "New lead", order: 1, required: true, terminal: false },
+    { id: PIPELINE_BACKBONE.consultationScheduled, label: "Consultation scheduled", order: 2, required: true, terminal: false },
+    { id: PIPELINE_BACKBONE.intakeStarted, label: "Intake started", order: 3, required: true, terminal: false },
+    { id: PIPELINE_BACKBONE.intakeCompleted, label: "Intake completed", order: 4, required: true, terminal: false },
+    { id: PIPELINE_BACKBONE.clientActivated, label: "Client activated", order: 5, required: true, terminal: true },
   ],
 };
 

@@ -1,10 +1,11 @@
-import { fullName, LIFECYCLE_STAGES } from "@aflo/shared";
+import { fullName, intakeCompleteness, LIFECYCLE_STAGES } from "@aflo/shared";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { AgentSuggestionCard } from "@/components/agent-card";
 import {
   DocStatusBadge,
   EngagementBadge,
+  IntakeStatusBadge,
   KindBadge,
   ClientStatusBadge,
   PipelineBadge,
@@ -13,7 +14,7 @@ import {
 } from "@/components/badges";
 import { StageTrack } from "@/components/stage";
 import { EmptyState, ProgressBar, SectionCard } from "@/components/ui";
-import { DEMO_ORG_ID, clientRepository, demoNow } from "@/lib/data";
+import { DEMO_ORG_ID, clientRepository, demoNow, store } from "@/lib/data";
 import {
   ACTION_STATUS_LABELS,
   fmtDate,
@@ -42,6 +43,12 @@ export default async function ClientDetailPage({
   const otherGoals = detail.goals.filter((g) => !g.isPrimary);
   const milestonesDone = detail.milestones.filter((m) => m.status === "completed").length;
   const pendingAi = detail.aiSuggestions.filter((s) => s.reviewStatus === "pending_review");
+  const intake = store.intakeFor(DEMO_ORG_ID, clientId);
+  const intakeDefinition = store.intakeDefinitionFor(DEMO_ORG_ID);
+  const intakeProgress =
+    intake && intakeDefinition
+      ? intakeCompleteness(intakeDefinition, intake.completedSectionIds)
+      : null;
 
   return (
     <div className="space-y-6">
@@ -232,6 +239,35 @@ export default async function ClientDetailPage({
 
         {/* Side column */}
         <div className="space-y-6">
+          <SectionCard
+            title="Intake"
+            action={
+              <Link
+                href={`/clients/${clientId}/intake`}
+                className="text-xs font-medium text-emerald hover:text-emerald-deep"
+              >
+                Open workspace →
+              </Link>
+            }
+          >
+            {intake && intakeProgress ? (
+              <div className="space-y-3">
+                <IntakeStatusBadge status={intake.status} />
+                <ProgressBar
+                  pct={(intakeProgress.completedRequiredCount / intakeProgress.requiredCount) * 100}
+                  label={`${intakeProgress.completedRequiredCount}/${intakeProgress.requiredCount}`}
+                />
+                <p className="text-xs text-ink-faint">
+                  {intake.status === "completed" && intake.completedAt
+                    ? `Completed ${fmtDate(intake.completedAt)}`
+                    : `${intakeProgress.completedRequiredCount} of ${intakeProgress.requiredCount} required sections complete`}
+                </p>
+              </div>
+            ) : (
+              <EmptyState message="Not started — opens when the lead reaches Intake started." />
+            )}
+          </SectionCard>
+
           <SectionCard title="Current goal">
             {primaryGoal ? (
               <div>

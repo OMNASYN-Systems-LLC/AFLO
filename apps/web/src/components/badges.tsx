@@ -3,6 +3,7 @@ import type {
   ClientStatus,
   DocumentReviewStatus,
   EngagementStatus,
+  IntakeStatus,
   LifecycleStage,
   ReportStatus,
   ReviewStatus,
@@ -73,6 +74,16 @@ export function ClientStatusBadge({ status }: { status: ClientStatus }) {
   return (
     <Badge tone={status === "active" ? "good" : "calm"} label={CLIENT_STATUS_LABELS[status]} />
   );
+}
+
+const INTAKE_STATUS: Record<IntakeStatus, { label: string; tone: Tone }> = {
+  in_progress: { label: "Intake in progress", tone: "warn" },
+  completed: { label: "Intake complete", tone: "good" },
+};
+
+export function IntakeStatusBadge({ status }: { status: IntakeStatus }) {
+  const s = INTAKE_STATUS[status];
+  return <Badge tone={s.tone} label={s.label} />;
 }
 
 const DOC_STATUS: Record<DocumentReviewStatus, { label: string; tone: Tone }> = {
