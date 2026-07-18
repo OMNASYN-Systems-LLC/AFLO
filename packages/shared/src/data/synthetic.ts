@@ -23,8 +23,11 @@ import type {
   ReadinessAssessmentRecord,
   Roadmap,
   RoadmapMilestone,
+  SimulationSettings,
   StaffMember,
+  VirtualTransaction,
 } from "../domain/types";
+import { roundUpAmountCents } from "@aflo/rules";
 
 /**
  * Synthetic Golden Key Wealth dataset for the first visual slice.
@@ -81,6 +84,10 @@ export interface SyntheticDatabase {
    * until portal user accounts land, at which point this keys on user id.
    */
   consentRecords: ConsentRecord[];
+  /** Round-up simulator config per client (simulation only). */
+  simulationSettings: SimulationSettings[];
+  /** Hypothetical transactions for the round-up simulator (never real). */
+  virtualTransactions: VirtualTransaction[];
   aiSuggestions: AgentEnvelope[];
 }
 
@@ -572,6 +579,47 @@ const consentRecords: ConsentRecord[] = [
 ];
 
 /**
+ * Round-up simulator: enabled for two clients with a handful of synthetic
+ * hypothetical transactions. Round-up amounts are computed by the rule so
+ * the seed can never disagree with the calculator.
+ */
+const simulationSettings: SimulationSettings[] = [
+  { clientId: "c-grant", roundToCents: 100, multiplier: 1, enabled: true },
+  { clientId: "c-ramirez", roundToCents: 100, multiplier: 2, enabled: true },
+];
+
+function vtx(
+  id: string,
+  clientId: string,
+  label: string,
+  dollars: number,
+  daysAgoOccurred: number,
+): VirtualTransaction {
+  const settings = simulationSettings.find((s) => s.clientId === clientId)!;
+  const amountCents = cents(dollars);
+  return {
+    id,
+    clientId,
+    label,
+    amountCents,
+    roundUpAmountCents: roundUpAmountCents(amountCents, settings.roundToCents, settings.multiplier),
+    occurredOn: daysAgo(daysAgoOccurred).slice(0, 10),
+  };
+}
+
+const virtualTransactions: VirtualTransaction[] = [
+  vtx("vt-grant-1", "c-grant", "Coffee", 4.35, 12),
+  vtx("vt-grant-2", "c-grant", "Groceries", 62.18, 10),
+  vtx("vt-grant-3", "c-grant", "Gas", 41.02, 7),
+  vtx("vt-grant-4", "c-grant", "Lunch", 13.5, 4),
+  vtx("vt-grant-5", "c-grant", "Pharmacy", 8.99, 2),
+  vtx("vt-ramirez-1", "c-ramirez", "Coffee", 3.75, 11),
+  vtx("vt-ramirez-2", "c-ramirez", "Groceries", 54.4, 8),
+  vtx("vt-ramirez-3", "c-ramirez", "Transit", 2.5, 5),
+  vtx("vt-ramirez-4", "c-ramirez", "Dinner", 27.1, 3),
+];
+
+/**
  * Synthetic examples of the typed agent envelope (drafts only — proposals,
  * never facts). These illustrate the review workflow in the UI.
  */
@@ -672,5 +720,7 @@ export const syntheticDatabase: SyntheticDatabase = {
   reports,
   notes,
   consentRecords,
+  simulationSettings,
+  virtualTransactions,
   aiSuggestions,
 };

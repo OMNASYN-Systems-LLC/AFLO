@@ -127,6 +127,24 @@ export async function addNoteAction(clientId: string, formData: FormData): Promi
 }
 
 /**
+ * Round-up simulator action (simulation only — never moves money). The store
+ * computes round-ups via roundup.v1.0.0 and validates all input.
+ */
+export async function addVirtualTransactionAction(clientId: string, formData: FormData): Promise<void> {
+  const session = await getStaffSession();
+  const dollars = Number(formData.get("amount") ?? "0");
+  store.addVirtualTransaction({
+    organizationId: session.organizationId,
+    clientId,
+    label: String(formData.get("label") ?? ""),
+    amountCents: Math.round(dollars * 100),
+    occurredOn: String(formData.get("occurredOn") ?? ""),
+    actorStaffId: session.staffId,
+  });
+  revalidatePath(`/clients/${clientId}`);
+}
+
+/**
  * Quarterly-report workflow actions (report.v1.0.0). Generation draws only
  * on recorded facts; the store enforces eligibility, one report per
  * quarter, and the review workflow — denials are audited server-side.
