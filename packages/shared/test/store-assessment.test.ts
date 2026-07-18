@@ -138,8 +138,9 @@ describe("runReadinessAssessment — eligibility and blockers", () => {
 
 describe("seed integrity", () => {
   it("never mutates the module-level synthetic seed", () => {
+    const seededCount = syntheticDatabase.assessments.length;
     const store = makeStore();
     store.runReadinessAssessment({ organizationId: ORG, clientId: "c-whitaker", actorStaffId: "s-boyd" });
-    expect(syntheticDatabase.assessments).toHaveLength(2);
+    expect(syntheticDatabase.assessments).toHaveLength(seededCount);
   });
 });

@@ -2,6 +2,7 @@ import {
   assessEngagement,
   assessReadiness,
   ENGAGEMENT_STATUS_LABELS,
+  LIFECYCLE_STAGE_LABELS,
   MS_PER_DAY,
 } from "@aflo/rules";
 import { syntheticDatabase, type SyntheticDatabase } from "../data/synthetic";
@@ -14,6 +15,8 @@ import type {
   DashboardRepository,
   DashboardSnapshot,
   PipelineCount,
+  PortalRepository,
+  PortalView,
   StageCount,
   UpcomingAppointment,
 } from "./interfaces";
@@ -205,6 +208,82 @@ function toSummary(scope: OrgScope, c: ClientRecord, now: Date): ClientSummary {
     nextAppointmentAt: scope.nextAppointmentByClient.get(c.id)?.scheduledAt ?? null,
     assignedStaffName: scope.staffById.get(c.assignedStaffId)?.name ?? "Unassigned",
   };
+}
+
+/**
+ * Portal projection over the same dataset. Everything here is client-safe by
+ * construction: only published roadmaps/reports, only assessments cleared of
+ * human review, no reason codes, no review flags, no staff-internal records.
+ */
+export class MockPortalRepository implements PortalRepository {
+  constructor(private readonly db: SyntheticDatabase = syntheticDatabase) {}
+
+  async getPortalView(organizationId: string, clientId: string, now: Date): Promise<PortalView | null> {
+    const scope = new OrgScope(this.db, organizationId, now);
+    const record = scope.clientById.get(clientId);
+    // Fail closed: unknown, foreign-org, and not-yet-activated records have no portal.
+    if (!record || record.kind !== "client") return null;
+
+    const assessment = this.db.assessments
+      .filter((a) => a.clientId === clientId && !a.requiresHumanReview)
+      .at(-1);
+    const goal = scope.primaryGoalByClient.get(clientId);
+    const roadmap = this.db.roadmaps
+      .filter((r) => r.clientId === clientId && r.status === "published")
+      .at(-1);
+    const month = now.toISOString().slice(0, 7);
+    const next = scope.nextAppointmentByClient.get(clientId);
+
+    return {
+      organizationName: this.db.organization.name,
+      clientFirstName: record.firstName,
+      clientName: fullName(record),
+      stage: assessment
+        ? {
+            label: LIFECYCLE_STAGE_LABELS[assessment.stage],
+            focus: assessment.proposedNextAction,
+            assessedAt: assessment.assessedAt,
+          }
+        : null,
+      primaryGoal: goal
+        ? { title: goal.title, targetDate: goal.targetDate, progressPct: goal.progressPct }
+        : null,
+      roadmap: roadmap
+        ? {
+            title: roadmap.title,
+            milestones: this.db.milestones
+              .filter((m) => m.roadmapId === roadmap.id)
+              .sort((x, y) => x.order - y.order)
+              .map((m) => ({
+                title: m.title,
+                description: m.description,
+                status: m.status,
+                targetMonth: m.targetMonth,
+              })),
+          }
+        : null,
+      monthlyActions: this.db.monthlyActions
+        .filter((a) => a.clientId === clientId && a.month === month)
+        .map((a) => ({ title: a.title, category: a.category, status: a.status, dueDate: a.dueDate })),
+      publishedReports: this.db.reports
+        .filter((r) => r.clientId === clientId && r.status === "published")
+        .sort((x, y) => y.quarter.localeCompare(x.quarter))
+        .map((r) => ({
+          quarter: r.quarter,
+          highlights: r.highlights,
+          focusForNextQuarter: r.focusForNextQuarter,
+          generatedAt: r.generatedAt,
+        })),
+      nextAppointment: next
+        ? {
+            purpose: next.purpose,
+            scheduledAt: next.scheduledAt,
+            channel: next.channel,
+            staffName: scope.staffById.get(next.staffId)?.name ?? "Your advisor",
+          }
+        : null,
+    };
+  }
 }
 
 export class MockDashboardRepository implements DashboardRepository {
