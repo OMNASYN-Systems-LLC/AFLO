@@ -1,10 +1,12 @@
 import {
+  documentTransitionsFrom,
   fullName,
   intakeCompleteness,
   LIFECYCLE_STAGES,
   quarterOf,
   REVIEW_REASON_DESCRIPTIONS,
   roadmapTransitionsFrom,
+  type DocumentReviewStatusId,
   type RoadmapStatus,
 } from "@aflo/shared";
 import Link from "next/link";
@@ -24,8 +26,12 @@ import {
 } from "@/components/badges";
 import {
   addMonthlyActionAction,
+  addNoteAction,
   generateReportAction,
+  requestDocumentAction,
   runReadinessAssessmentAction,
+  scheduleAppointmentAction,
+  transitionDocumentAction,
   transitionMonthlyActionAction,
   transitionReportAction,
   transitionRoadmapAction,
@@ -63,6 +69,10 @@ export default async function ClientDetailPage({
   const pendingAi = detail.aiSuggestions.filter((s) => s.reviewStatus === "pending_review");
   const intake = store.intakeFor(DEMO_ORG_ID, clientId);
   const intakeDefinition = store.intakeDefinitionFor(DEMO_ORG_ID);
+  const upcomingAppointments = store
+    .database()
+    .appointments.filter((ap) => ap.clientId === clientId && new Date(ap.scheduledAt) > demoNow)
+    .sort((x, y) => x.scheduledAt.localeCompare(y.scheduledAt));
   const intakeProgress =
     intake && intakeDefinition
       ? intakeCompleteness(intakeDefinition, intake.completedSectionIds)
@@ -484,18 +494,112 @@ export default async function ClientDetailPage({
             ) : (
               <ul className="space-y-2.5">
                 {detail.documents.map((d) => (
-                  <li key={d.id} className="flex items-center justify-between gap-2">
+                  <li key={d.id} className="flex flex-wrap items-center justify-between gap-2">
                     <div className="min-w-0">
                       <p className="truncate text-sm text-ink" title={d.name}>
                         {d.name}
                       </p>
                       <p className="text-[11px] text-ink-faint">{fmtDate(d.updatedAt)}</p>
                     </div>
-                    <DocStatusBadge status={d.reviewStatus} />
+                    <div className="flex shrink-0 items-center gap-1.5">
+                      {documentTransitionsFrom(d.reviewStatus).map((to) => (
+                        <form key={to} action={transitionDocumentAction.bind(null, clientId, d.id, to)}>
+                          <ActionButton
+                            label={DOC_ACTION_LABELS[to]?.(d.reviewStatus) ?? to}
+                            primary={to === "approved"}
+                          />
+                        </form>
+                      ))}
+                      <DocStatusBadge status={d.reviewStatus} />
+                    </div>
                   </li>
                 ))}
               </ul>
             )}
+            <form
+              action={requestDocumentAction.bind(null, clientId)}
+              className="mt-4 flex flex-wrap items-end gap-2 border-t border-line/70 pt-4"
+            >
+              <label className="min-w-0 flex-1">
+                <span className="mb-1 block text-[11px] font-medium uppercase tracking-[0.14em] text-ink-soft">
+                  Request document
+                </span>
+                <input
+                  name="name"
+                  required
+                  placeholder="Document name"
+                  className="w-full rounded-md border border-line bg-card px-3 py-1.5 text-sm text-ink placeholder:text-ink-faint"
+                />
+              </label>
+              <select
+                name="docType"
+                className="rounded-md border border-line bg-card px-2 py-1.5 text-sm text-ink"
+                defaultValue="other"
+              >
+                <option value="credit_report">Credit report</option>
+                <option value="income_verification">Income verification</option>
+                <option value="bank_statement">Bank statement</option>
+                <option value="identification">Identification</option>
+                <option value="other">Other</option>
+              </select>
+              <button
+                type="submit"
+                className="rounded-md bg-emerald px-3 py-2 text-xs font-medium text-ivory-ink transition-colors hover:bg-emerald-deep"
+              >
+                Request
+              </button>
+            </form>
+          </SectionCard>
+
+          <SectionCard title="Appointments">
+            {upcomingAppointments.length === 0 ? (
+              <EmptyState message="No upcoming appointments." />
+            ) : (
+              <ul className="space-y-2.5">
+                {upcomingAppointments.map((ap) => (
+                  <li key={ap.id}>
+                    <p className="text-sm text-ink">{ap.purpose}</p>
+                    <p className="text-[11px] text-ink-faint">
+                      {fmtDateTime(ap.scheduledAt)} · {ap.channel.replace("_", " ")}
+                    </p>
+                  </li>
+                ))}
+              </ul>
+            )}
+            <form
+              action={scheduleAppointmentAction.bind(null, clientId)}
+              className="mt-4 space-y-2 border-t border-line/70 pt-4"
+            >
+              <input
+                name="purpose"
+                required
+                placeholder="Purpose"
+                className="w-full rounded-md border border-line bg-card px-3 py-1.5 text-sm text-ink placeholder:text-ink-faint"
+              />
+              <div className="flex flex-wrap items-center gap-2">
+                <input
+                  name="scheduledAt"
+                  type="datetime-local"
+                  required
+                  className="rounded-md border border-line bg-card px-2 py-1.5 text-sm text-ink"
+                />
+                <select
+                  name="channel"
+                  className="rounded-md border border-line bg-card px-2 py-1.5 text-sm text-ink"
+                  defaultValue="video"
+                >
+                  <option value="video">Video</option>
+                  <option value="phone">Phone</option>
+                  <option value="in_person">In person</option>
+                </select>
+                <button
+                  type="submit"
+                  className="rounded-md bg-emerald px-3 py-2 text-xs font-medium text-ivory-ink transition-colors hover:bg-emerald-deep"
+                >
+                  Schedule
+                </button>
+              </div>
+            </form>
           </SectionCard>
 
           <SectionCard
@@ -561,7 +665,7 @@ export default async function ClientDetailPage({
             ) : null}
           </SectionCard>
 
-          <SectionCard title="Notes">
+          <SectionCard title="Notes" subtitle="Internal — never visible in the client portal">
             {detail.notes.length === 0 ? (
               <EmptyState message="No notes yet." />
             ) : (
@@ -574,6 +678,24 @@ export default async function ClientDetailPage({
                 ))}
               </ul>
             )}
+            <form
+              action={addNoteAction.bind(null, clientId)}
+              className="mt-4 space-y-2 border-t border-line/70 pt-4"
+            >
+              <textarea
+                name="body"
+                required
+                rows={2}
+                placeholder="Add an internal note…"
+                className="w-full rounded-md border border-line bg-card px-3 py-2 text-sm text-ink placeholder:text-ink-faint"
+              />
+              <button
+                type="submit"
+                className="rounded-md bg-emerald px-3 py-1.5 text-xs font-medium text-ivory-ink transition-colors hover:bg-emerald-deep"
+              >
+                Add note
+              </button>
+            </form>
           </SectionCard>
 
           <SectionCard title="Profile">
@@ -652,6 +774,14 @@ function MilestoneMarker({ status }: { status: "completed" | "in_progress" | "up
   }
   return <span className="mt-0.5 h-5 w-5 shrink-0 rounded-full border-2 border-line" />;
 }
+
+/** Staff-facing labels for rule-legal document moves, keyed by target status. */
+const DOC_ACTION_LABELS: Partial<Record<DocumentReviewStatusId, (from: string) => string>> = {
+  uploaded: (from) => (from === "needs_attention" ? "Mark re-uploaded" : "Mark uploaded"),
+  in_review: () => "Start review",
+  approved: () => "Approve",
+  needs_attention: () => "Needs attention",
+};
 
 function ActionButton({ label, primary = false }: { label: string; primary?: boolean }) {
   return (
