@@ -66,6 +66,28 @@ export const REASON_CODE_DESCRIPTIONS: Record<ReasonCode, string> = {
   RC_SCORE_MISSING: "No credit score on file",
 };
 
+/**
+ * Deterministic next-action proposal per reason code, versioned with the
+ * rules so the numbers never drift from the active thresholds. The binding
+ * blocker (first reason code of an assessment) selects the proposal. Coaching
+ * guidance only — never a promise of score movement or approval.
+ */
+export const REASON_CODE_NEXT_ACTIONS: Record<ReasonCode, string> = {
+  RC_INCOME_UNSTABLE: "Document and stabilize income sources before credit work begins",
+  RC_PAYMENT_HISTORY_POOR: "Set up autopay minimums on every open account and verify each statement cycle",
+  RC_DEROGATORY_HIGH: "Build a resolution plan for the derogatory accounts, starting with the smallest",
+  RC_DTI_HIGH: `Plan paydown of the highest-payment obligations toward a DTI under ${T.maxStabilizationDtiPct}%`,
+  RC_RESERVES_LOW: `Automate transfers toward ${T.minReserveMonths} month of essential-expense reserves`,
+  RC_SCORE_BELOW_CREDIT_FLOOR: `Continue utilization and payment-history work toward the ${T.minCreditScore} score floor`,
+  RC_UTILIZATION_ABOVE_30: `Sequence revolving paydown to bring reported utilization under ${T.maxCreditUtilizationPct}%`,
+  RC_SCORE_BELOW_CAPITAL_FLOOR: `Hold current habits while reported history builds toward the ${T.minCapitalScore} capital floor`,
+  RC_UTILIZATION_ABOVE_10: `Target reporting-date balances to bring utilization under ${T.maxCapitalUtilizationPct}%`,
+  RC_RESERVES_BELOW_3M: `Step up reserve transfers toward ${T.minCapitalReserveMonths} months of essential expenses`,
+  RC_DTI_ABOVE_36: `Reduce monthly obligations toward a DTI under ${T.maxCapitalDtiPct}% before capital applications`,
+  RC_ALL_ACQUISITION_GATES_MET: "Begin acquisition planning against the client's primary goal",
+  RC_SCORE_MISSING: "Capture a verified credit score via manual entry or an uploaded report",
+};
+
 export interface ReadinessFacts {
   /** FICO-range score entered manually or from an uploaded report; null if not yet captured. */
   creditScore: number | null;

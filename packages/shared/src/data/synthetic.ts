@@ -19,6 +19,7 @@ import type {
   MonthlyAction,
   Organization,
   QuarterlyReport,
+  ReadinessAssessmentRecord,
   RoadmapMilestone,
   StaffMember,
 } from "../domain/types";
@@ -60,6 +61,8 @@ export interface SyntheticDatabase {
   staff: StaffMember[];
   clients: ClientRecord[];
   intakes: IntakeRecord[];
+  /** Append-only recorded readiness assessments (latest = standing). */
+  assessments: ReadinessAssessmentRecord[];
   financialProfiles: FinancialProfile[];
   creditProfiles: CreditProfile[];
   goals: Goal[];
@@ -241,6 +244,42 @@ const creditProfiles: CreditProfile[] = [
   { clientId: "c-whitaker", score: 705, scoreSource: "uploaded_report", scoreAsOf: daysAgo(6), revolvingBalanceCents: cents(900), revolvingLimitCents: cents(18000), openTradelines: 9, derogatoryMarks: 0, onTimePaymentRate: 1.0 },
   { clientId: "c-ramirez", score: 638, scoreSource: "manual_entry", scoreAsOf: daysAgo(40), revolvingBalanceCents: cents(2900), revolvingLimitCents: cents(7000), openTradelines: 4, derogatoryMarks: 2, onTimePaymentRate: 0.93 },
   { clientId: "c-ngo", score: 688, scoreSource: "uploaded_report", scoreAsOf: daysAgo(80), revolvingBalanceCents: cents(2100), revolvingLimitCents: cents(14000), openTradelines: 7, derogatoryMarks: 0, onTimePaymentRate: 0.98 },
+];
+
+/**
+ * James Whitaker's recorded assessment history: a realistic progression whose
+ * latest record (capital_readiness, 90 days ago) now trails his current
+ * verified facts — re-running the assessment is the natural staff action.
+ */
+const assessments: ReadinessAssessmentRecord[] = [
+  {
+    id: "ra-whitaker-1",
+    clientId: "c-whitaker",
+    stage: "credit_readiness",
+    previousStage: null,
+    ruleVersion: "readiness.v1.0.0",
+    reasonCodes: ["RC_UTILIZATION_ABOVE_30"],
+    factsUsed: ["creditScore", "utilizationPct", "dtiPct", "reserveMonths", "derogatoryMarks", "onTimePaymentRate", "incomeStability"],
+    proposedNextAction: "Sequence revolving paydown to bring reported utilization under 30%",
+    requiresHumanReview: false,
+    reviewReasonCodes: [],
+    assessedAt: daysAgo(200),
+    actorStaffId: "s-boyd",
+  },
+  {
+    id: "ra-whitaker-2",
+    clientId: "c-whitaker",
+    stage: "capital_readiness",
+    previousStage: "credit_readiness",
+    ruleVersion: "readiness.v1.0.0",
+    reasonCodes: ["RC_UTILIZATION_ABOVE_10"],
+    factsUsed: ["creditScore", "utilizationPct", "dtiPct", "reserveMonths", "derogatoryMarks", "onTimePaymentRate", "incomeStability"],
+    proposedNextAction: "Target reporting-date balances to bring utilization under 10%",
+    requiresHumanReview: false,
+    reviewReasonCodes: [],
+    assessedAt: daysAgo(90),
+    actorStaffId: "s-boyd",
+  },
 ];
 
 const goals: Goal[] = [
@@ -538,6 +577,7 @@ export const syntheticDatabase: SyntheticDatabase = {
   staff,
   clients,
   intakes,
+  assessments,
   financialProfiles,
   creditProfiles,
   goals,

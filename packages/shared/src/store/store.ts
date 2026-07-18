@@ -1,17 +1,23 @@
 import {
   INTAKE_RULES_VERSION,
   PIPELINE_BACKBONE,
+  READINESS_RULES_VERSION,
+  REASON_CODE_NEXT_ACTIONS,
+  assessReadiness,
+  assessmentReviewGate,
   intakeCompleteness,
   nextRequiredStage,
   pipelineTransition,
   sectionCompletion,
   type IntakeCompletenessResult,
   type PipelineTransitionResult,
+  type ReviewGateResult,
 } from "@aflo/rules";
 import { createEvent, type DomainEvent } from "../events";
 import { toOutboxRecord, type OutboxRecord } from "../outbox";
 import { syntheticDatabase, type SyntheticDatabase } from "../data/synthetic";
-import type { ClientRecord, IntakeRecord } from "../domain/types";
+import { toReadinessFacts } from "../domain/facts";
+import type { ClientRecord, IntakeRecord, ReadinessAssessmentRecord } from "../domain/types";
 
 /**
  * Mutable in-memory application store for the prototype phase (ADR-0002:
@@ -95,6 +101,28 @@ export interface IntakeSectionInput {
 }
 
 export interface CompleteIntakeInput {
+  organizationId: string;
+  clientId: string;
+  actorStaffId: string;
+}
+
+export type AssessmentDenialCode =
+  | "CLIENT_NOT_FOUND"
+  | "ACTOR_NOT_IN_ORG"
+  | "INTAKE_NOT_COMPLETED"
+  | "MISSING_FACTS";
+
+export interface AssessmentResult {
+  ok: boolean;
+  denialCode?: AssessmentDenialCode;
+  /** Profile data absent when the attempt was blocked (MISSING_FACTS). */
+  missingFacts?: string[];
+  record?: ReadinessAssessmentRecord;
+  review?: ReviewGateResult;
+  emittedEventIds: string[];
+}
+
+export interface RunAssessmentInput {
   organizationId: string;
   clientId: string;
   actorStaffId: string;
@@ -496,6 +524,122 @@ export class AfloStore {
     });
 
     return { ok: true, intake, transition, completeness, emittedEventIds: emitted.map((e) => e.eventId) };
+  }
+
+  /** Recorded assessment history for one client, oldest first, org-verified. */
+  assessmentsFor(organizationId: string, clientId: string): ReadinessAssessmentRecord[] {
+    const record = this.findRecord(organizationId, clientId);
+    if (!record) return [];
+    return this.db.assessments.filter((a) => a.clientId === clientId);
+  }
+
+  /**
+   * Run the deterministic readiness rules over the client's verified
+   * profiles and record the result. Eligibility requires a completed intake
+   * (facts are captured there); an attempt without the needed profiles is
+   * audited as blocked, never recorded. The review gate (review.v1.0.0)
+   * flags regressions and multi-stage advances for staff — deterministically,
+   * never via AI.
+   */
+  runReadinessAssessment(input: RunAssessmentInput): AssessmentResult {
+    const now = this.clock();
+    const record = this.findRecord(input.organizationId, input.clientId);
+    if (!record) return { ok: false, denialCode: "CLIENT_NOT_FOUND", emittedEventIds: [] };
+    const actor = this.findActor(input.organizationId, input.actorStaffId);
+    if (!actor) return { ok: false, denialCode: "ACTOR_NOT_IN_ORG", emittedEventIds: [] };
+
+    const intake = this.db.intakes.find((i) => i.clientId === record.id);
+    if (!intake || intake.status !== "completed") {
+      this.audit({
+        organizationId: input.organizationId,
+        actorStaffId: actor.id,
+        action: "readiness.assessment_denied",
+        targetType: "readiness_assessment",
+        targetId: record.id,
+        detail: intake ? "intake not yet completed" : "intake not started",
+        reasonCode: "INTAKE_NOT_COMPLETED",
+        ruleVersion: INTAKE_RULES_VERSION,
+        occurredAt: now.toISOString(),
+      });
+      return { ok: false, denialCode: "INTAKE_NOT_COMPLETED", emittedEventIds: [] };
+    }
+
+    const financial = this.db.financialProfiles.find((p) => p.clientId === record.id);
+    const credit = this.db.creditProfiles.find((p) => p.clientId === record.id);
+    if (!financial || !credit) {
+      const missingFacts = [
+        ...(financial ? [] : ["financial_profile"]),
+        ...(credit ? [] : ["credit_profile"]),
+      ];
+      this.audit({
+        organizationId: input.organizationId,
+        actorStaffId: actor.id,
+        action: "readiness.assessment_blocked",
+        targetType: "readiness_assessment",
+        targetId: record.id,
+        detail: `missing verified facts: ${missingFacts.join(", ")}`,
+        reasonCode: "FACTS_MISSING",
+        ruleVersion: READINESS_RULES_VERSION,
+        occurredAt: now.toISOString(),
+      });
+      return { ok: false, denialCode: "MISSING_FACTS", missingFacts, emittedEventIds: [] };
+    }
+
+    const assessment = assessReadiness(toReadinessFacts(financial, credit));
+    const previous = this.db.assessments.filter((a) => a.clientId === record.id).at(-1) ?? null;
+    const review = assessmentReviewGate(previous?.stage ?? null, assessment.stage);
+    const bindingBlocker = assessment.reasonCodes[0];
+
+    this.counter += 1;
+    const assessmentRecord: ReadinessAssessmentRecord = {
+      id: `ra-${record.id}-${this.counter}`,
+      clientId: record.id,
+      stage: assessment.stage,
+      previousStage: previous?.stage ?? null,
+      ruleVersion: assessment.ruleVersion,
+      reasonCodes: assessment.reasonCodes,
+      factsUsed: assessment.factsUsed,
+      proposedNextAction: bindingBlocker ? REASON_CODE_NEXT_ACTIONS[bindingBlocker] : "",
+      requiresHumanReview: review.requiresHumanReview,
+      reviewReasonCodes: review.reasonCodes,
+      assessedAt: now.toISOString(),
+      actorStaffId: actor.id,
+    };
+    this.db.assessments.push(assessmentRecord);
+
+    const event = createEvent({
+      eventType: "ReadinessAssessed",
+      organizationId: input.organizationId,
+      aggregateId: assessmentRecord.id,
+      actorId: actor.id,
+      occurredAt: now.toISOString(),
+      payload: {
+        clientId: record.id,
+        assessmentId: assessmentRecord.id,
+        stage: assessment.stage,
+        previousStage: previous?.stage ?? null,
+        ruleVersion: assessment.ruleVersion,
+        reasonCodes: assessment.reasonCodes,
+        requiresHumanReview: review.requiresHumanReview,
+      },
+    });
+    this.outbox.push(toOutboxRecord(event, { now }));
+
+    this.audit({
+      organizationId: input.organizationId,
+      actorStaffId: actor.id,
+      action: "readiness.assessed",
+      targetType: "readiness_assessment",
+      targetId: record.id,
+      detail: `stage ${assessment.stage}${previous ? ` (was ${previous.stage})` : ""}${
+        review.requiresHumanReview ? ` — review required: ${review.reasonCodes.join(", ")}` : ""
+      }`,
+      reasonCode: bindingBlocker ?? "RC_ALL_ACQUISITION_GATES_MET",
+      ruleVersion: assessment.ruleVersion,
+      occurredAt: now.toISOString(),
+    });
+
+    return { ok: true, record: assessmentRecord, review, emittedEventIds: [event.eventId] };
   }
 
   /** The forward stage a lead should reach next (UI "next action"). */

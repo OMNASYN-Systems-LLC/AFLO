@@ -154,6 +154,8 @@ export class MockClientRepository implements ClientRepository {
           }
         : null,
       assessment: facts ? assessReadiness(facts) : null,
+      latestAssessmentRecord:
+        this.db.assessments.filter((a) => a.clientId === clientId).at(-1) ?? null,
       engagement: assessEngagement(record.lastActivityAt, now),
       goals: this.db.goals.filter((g) => g.clientId === clientId),
       milestones: this.db.milestones

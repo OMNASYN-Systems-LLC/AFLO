@@ -3,6 +3,7 @@ import { ENGAGEMENT_RULES_VERSION } from "../src/engagement";
 import { INTAKE_RULES_VERSION } from "../src/intake";
 import { PIPELINE_RULES_VERSION } from "../src/pipeline";
 import { READINESS_RULES_VERSION, REASON_CODE_DESCRIPTIONS } from "../src/readiness";
+import { REVIEW_REASON_DESCRIPTIONS, REVIEW_RULES_VERSION } from "../src/review";
 import { getRule, RULE_REGISTRY } from "../src/registry";
 
 describe("rule registry", () => {
@@ -30,7 +31,14 @@ describe("rule registry", () => {
     expect(getRule("readiness.utilization")?.version).toBe(READINESS_RULES_VERSION);
     expect(getRule("pipeline.transition")?.version).toBe(PIPELINE_RULES_VERSION);
     expect(getRule("intake.completeness")?.version).toBe(INTAKE_RULES_VERSION);
+    expect(getRule("readiness.review_gate")?.version).toBe(REVIEW_RULES_VERSION);
     expect(getRule("engagement.status")?.version).toBe(ENGAGEMENT_RULES_VERSION);
+  });
+
+  it("registers every review reason code", () => {
+    expect(getRule("readiness.review_gate")?.reasonCodes.sort()).toEqual(
+      Object.keys(REVIEW_REASON_DESCRIPTIONS).sort(),
+    );
   });
 
   it("registers every readiness reason code", () => {

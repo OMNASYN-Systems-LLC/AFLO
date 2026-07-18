@@ -1,6 +1,7 @@
 import { ENGAGEMENT_RULES_VERSION } from "./engagement";
 import { INTAKE_RULES_VERSION } from "./intake";
 import { PIPELINE_RULES_VERSION } from "./pipeline";
+import { REVIEW_REASON_DESCRIPTIONS, REVIEW_RULES_VERSION } from "./review";
 import { READINESS_RULES_VERSION, REASON_CODE_DESCRIPTIONS } from "./readiness";
 
 /**
@@ -124,6 +125,20 @@ export const RULE_REGISTRY: readonly RuleDefinition[] = [
     sources: [],
     changeHistory: [
       { version: "pipeline.v1.0.0", date: "2026-07-18", note: "Initial configurable pipeline state machine (founder workstream slice C)." },
+    ],
+  },
+  {
+    id: "readiness.review_gate",
+    version: REVIEW_RULES_VERSION,
+    effectiveDate: "2026-07-18",
+    description:
+      "Staff-review gate over recorded readiness assessments: a first assessment stands on its own; a stage regression or a multi-stage advance (two or more steps) in a single assessment requires human review before downstream consumption. The readiness engine never silently overrides human-approved exceptions.",
+    inputs: ["previousStage", "nextStage"],
+    output: "ReviewGateResult { requiresHumanReview, reasonCodes }",
+    reasonCodes: Object.keys(REVIEW_REASON_DESCRIPTIONS),
+    sources: [],
+    changeHistory: [
+      { version: "review.v1.0.0", date: "2026-07-18", note: "Initial gate (founder workstream slice E)." },
     ],
   },
   {

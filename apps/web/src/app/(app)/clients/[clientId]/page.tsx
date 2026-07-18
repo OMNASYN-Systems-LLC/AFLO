@@ -1,8 +1,9 @@
-import { fullName, intakeCompleteness, LIFECYCLE_STAGES } from "@aflo/shared";
+import { fullName, intakeCompleteness, LIFECYCLE_STAGES, REVIEW_REASON_DESCRIPTIONS } from "@aflo/shared";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { AgentSuggestionCard } from "@/components/agent-card";
 import {
+  Badge,
   DocStatusBadge,
   EngagementBadge,
   IntakeStatusBadge,
@@ -12,6 +13,7 @@ import {
   ReportStatusBadge,
   StageBadge,
 } from "@/components/badges";
+import { runReadinessAssessmentAction } from "./actions";
 import { StageTrack } from "@/components/stage";
 import { EmptyState, ProgressBar, SectionCard } from "@/components/ui";
 import { DEMO_ORG_ID, clientRepository, demoNow, store } from "@/lib/data";
@@ -108,6 +110,68 @@ export default async function ClientDetailPage({
             }
             action={<StageBadge stage={assessment?.stage ?? null} />}
           >
+            <div className="mb-5 rounded-md border border-line/70 bg-ivory px-4 py-3.5">
+              {detail.latestAssessmentRecord ? (
+                <div className="space-y-1.5">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p className="text-sm text-ink">
+                      <span className="font-medium">Recorded:</span>{" "}
+                      {STAGE_LABELS[detail.latestAssessmentRecord.stage]} ·{" "}
+                      {fmtDate(detail.latestAssessmentRecord.assessedAt)}
+                      {detail.latestAssessmentRecord.previousStage
+                        ? ` · previously ${STAGE_LABELS[detail.latestAssessmentRecord.previousStage]}`
+                        : ""}
+                    </p>
+                    {detail.latestAssessmentRecord.requiresHumanReview ? (
+                      <Badge tone="warn" label="Review required" />
+                    ) : null}
+                  </div>
+                  {detail.latestAssessmentRecord.requiresHumanReview ? (
+                    <p className="text-xs text-gold-deep">
+                      {detail.latestAssessmentRecord.reviewReasonCodes
+                        .map((code) => REVIEW_REASON_DESCRIPTIONS[code])
+                        .join(" · ")}
+                    </p>
+                  ) : null}
+                  <p className="text-xs text-ink-soft">
+                    <span className="font-medium text-ink">Proposed next action:</span>{" "}
+                    {detail.latestAssessmentRecord.proposedNextAction}
+                  </p>
+                </div>
+              ) : (
+                <p className="text-sm text-ink-soft">
+                  No recorded assessment yet — the workflow records stage, reason codes, and the
+                  proposed next action from verified facts.
+                </p>
+              )}
+              <div className="mt-3">
+                {intake?.status === "completed" && detail.financialProfile && detail.creditProfile ? (
+                  <form action={runReadinessAssessmentAction.bind(null, clientId)}>
+                    <button
+                      type="submit"
+                      className="rounded-md bg-emerald px-3.5 py-1.5 text-xs font-medium text-ivory-ink transition-colors hover:bg-emerald-deep"
+                    >
+                      {detail.latestAssessmentRecord ? "Re-run assessment" : "Run assessment"}
+                    </button>
+                  </form>
+                ) : intake?.status !== "completed" ? (
+                  <p className="text-xs text-ink-faint">
+                    Assessment opens once the intake completes.
+                  </p>
+                ) : (
+                  <p className="text-xs text-ink-faint">
+                    Blocked — missing{" "}
+                    {[
+                      !detail.financialProfile && "financial profile",
+                      !detail.creditProfile && "credit profile",
+                    ]
+                      .filter(Boolean)
+                      .join(" and ")}{" "}
+                    data. Attempts are audited, never recorded.
+                  </p>
+                )}
+              </div>
+            </div>
             {assessment && detail.derived && detail.creditProfile ? (
               <div className="space-y-5">
                 <div>

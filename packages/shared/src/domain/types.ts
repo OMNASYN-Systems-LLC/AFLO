@@ -7,7 +7,7 @@
  * behind the same interfaces (ADR-0002).
  */
 
-import type { EngagementStatus, LifecycleStage } from "@aflo/rules";
+import type { EngagementStatus, LifecycleStage, ReasonCode, ReviewReasonCode } from "@aflo/rules";
 
 // Lifecycle stages and engagement statuses are versioned domain
 // configuration owned by the rules kernel (@aflo/rules); re-exported here
@@ -74,6 +74,32 @@ export interface ClientRecord {
   assignedStaffId: string;
   joinedAt: string; // ISO date
   lastActivityAt: string; // ISO date — drives engagement rules
+}
+
+/**
+ * A recorded readiness assessment — the workflow fact produced when staff
+ * (or later a scheduled job) runs the deterministic readiness rules over the
+ * client's verified profiles. Records are append-only history; the latest
+ * one is the client's standing assessment. An attempt that cannot run
+ * (missing profiles) is audited, never recorded.
+ */
+export interface ReadinessAssessmentRecord {
+  id: string;
+  clientId: string;
+  stage: LifecycleStage;
+  /** Stage of the previous recorded assessment; null for the first. */
+  previousStage: LifecycleStage | null;
+  ruleVersion: string;
+  reasonCodes: ReasonCode[];
+  factsUsed: string[];
+  /** Deterministic proposal selected by the binding blocker (first reason code). */
+  proposedNextAction: string;
+  /** Set by the deterministic review gate (review.v1.0.0), never by AI. */
+  requiresHumanReview: boolean;
+  reviewReasonCodes: ReviewReasonCode[];
+  assessedAt: string; // ISO datetime
+  /** Null when a scheduled job (worker) ran the assessment. */
+  actorStaffId: string | null;
 }
 
 export type IntakeStatus = "in_progress" | "completed";
