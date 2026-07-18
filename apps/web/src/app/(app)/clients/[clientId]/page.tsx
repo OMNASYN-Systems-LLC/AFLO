@@ -3,9 +3,11 @@ import {
   fullName,
   intakeCompleteness,
   LIFECYCLE_STAGES,
+  projectedMonthlySavingsCents,
   quarterOf,
   REVIEW_REASON_DESCRIPTIONS,
   roadmapTransitionsFrom,
+  totalRoundUpCents,
   type DocumentReviewStatusId,
   type RoadmapStatus,
 } from "@aflo/shared";
@@ -27,6 +29,7 @@ import {
 import {
   addMonthlyActionAction,
   addNoteAction,
+  addVirtualTransactionAction,
   generateReportAction,
   requestDocumentAction,
   runReadinessAssessmentAction,
@@ -44,6 +47,7 @@ import {
   fmtDate,
   fmtDateTime,
   fmtMoney,
+  fmtMoneyCents,
   fmtMonth,
   fmtPct,
   REASON_CODE_LABELS,
@@ -74,6 +78,26 @@ export default async function ClientDetailPage({
     .appointments.filter((ap) => ap.clientId === clientId && new Date(ap.scheduledAt) > demoNow)
     .sort((x, y) => x.scheduledAt.localeCompare(y.scheduledAt));
   const communications = store.communicationsFor(DEMO_ORG_ID, clientId).slice(-6).reverse();
+  const simulation = store.simulationFor(DEMO_ORG_ID, clientId);
+  const virtualTransactions = store.virtualTransactionsFor(DEMO_ORG_ID, clientId);
+  const roundUpTotalCents = simulation
+    ? totalRoundUpCents(
+        virtualTransactions.map((t) => t.amountCents),
+        { roundToCents: simulation.roundToCents, multiplier: simulation.multiplier, enabled: simulation.enabled },
+      )
+    : 0;
+  const roundUpWindowDays =
+    virtualTransactions.length > 1
+      ? Math.max(
+          1,
+          Math.round(
+            (Date.parse(virtualTransactions[0]!.occurredOn) -
+              Date.parse(virtualTransactions[virtualTransactions.length - 1]!.occurredOn)) /
+              (1000 * 60 * 60 * 24),
+          ),
+        )
+      : 30;
+  const projectedMonthlyCents = projectedMonthlySavingsCents(roundUpTotalCents, roundUpWindowDays);
   const intakeProgress =
     intake && intakeDefinition
       ? intakeCompleteness(intakeDefinition, intake.completedSectionIds)
@@ -664,6 +688,78 @@ export default async function ClientDetailPage({
                 </p>
               </form>
             ) : null}
+          </SectionCard>
+
+          <SectionCard
+            title="Round-up simulator"
+            subtitle="Simulation only — hypothetical, never moves money"
+            action={
+              simulation ? (
+                <span className="font-display text-lg text-emerald-deep">
+                  {fmtMoney(projectedMonthlyCents)}/mo
+                </span>
+              ) : undefined
+            }
+          >
+            {simulation ? (
+              <div className="space-y-3">
+                <p className="text-xs text-ink-soft">
+                  Rounding to {fmtMoneyCents(simulation.roundToCents)} × {simulation.multiplier}
+                  {simulation.enabled ? "" : " (paused)"} · projected from{" "}
+                  {virtualTransactions.length} sample transaction
+                  {virtualTransactions.length === 1 ? "" : "s"}
+                </p>
+                {primaryGoal ? (
+                  <p className="rounded-md bg-status-good-tint px-3 py-2 text-xs text-emerald-deep">
+                    ≈ {fmtMoney(projectedMonthlyCents * 12)}/yr toward &ldquo;{primaryGoal.title}&rdquo;
+                  </p>
+                ) : null}
+                <ul className="divide-y divide-line/60">
+                  {virtualTransactions.slice(0, 5).map((t) => (
+                    <li key={t.id} className="flex items-center justify-between gap-2 py-1.5 text-xs">
+                      <span className="truncate text-ink-soft">{t.label}</span>
+                      <span className="shrink-0 text-ink-faint">
+                        {fmtMoneyCents(t.amountCents)} → +{fmtMoneyCents(t.roundUpAmountCents)}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : (
+              <EmptyState message="Not enabled — add a hypothetical transaction to start the simulation." />
+            )}
+            <form
+              action={addVirtualTransactionAction.bind(null, clientId)}
+              className="mt-4 flex flex-wrap items-end gap-2 border-t border-line/70 pt-4"
+            >
+              <input
+                name="label"
+                required
+                placeholder="Label (e.g. Coffee)"
+                className="min-w-0 flex-1 rounded-md border border-line bg-card px-3 py-1.5 text-sm text-ink placeholder:text-ink-faint"
+              />
+              <input
+                name="amount"
+                type="number"
+                step="0.01"
+                min="0.01"
+                required
+                placeholder="Amount"
+                className="w-24 rounded-md border border-line bg-card px-2 py-1.5 text-sm text-ink"
+              />
+              <input
+                name="occurredOn"
+                type="date"
+                required
+                className="rounded-md border border-line bg-card px-2 py-1.5 text-sm text-ink"
+              />
+              <button
+                type="submit"
+                className="rounded-md bg-emerald px-3 py-2 text-xs font-medium text-ivory-ink transition-colors hover:bg-emerald-deep"
+              >
+                Add
+              </button>
+            </form>
           </SectionCard>
 
           <SectionCard

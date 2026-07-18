@@ -18,6 +18,8 @@ import {
   quarterOf,
   reportTransition,
   roadmapTransition,
+  roundUpAmountCents,
+  ROUNDUP_RULES_VERSION,
   sectionCompletion,
   type ActionStatusId,
   type ActionTransitionResult,
@@ -51,6 +53,8 @@ import type {
   QuarterlyReport,
   ReadinessAssessmentRecord,
   Roadmap,
+  SimulationSettings,
+  VirtualTransaction,
 } from "../domain/types";
 
 /**
@@ -217,6 +221,34 @@ export interface TransitionReportInput {
   organizationId: string;
   reportId: string;
   toStatus: ReportStatusId;
+  actorStaffId: string;
+}
+
+export type SimulationDenialCode = "CLIENT_NOT_FOUND" | "ACTOR_NOT_IN_ORG" | "INVALID_INPUT";
+
+export interface SimulationResult {
+  ok: boolean;
+  denialCode?: SimulationDenialCode;
+  inputErrors?: string[];
+  settings?: SimulationSettings;
+  transaction?: VirtualTransaction;
+}
+
+export interface ConfigureSimulationInput {
+  organizationId: string;
+  clientId: string;
+  roundToCents: number;
+  multiplier: number;
+  enabled: boolean;
+  actorStaffId: string;
+}
+
+export interface AddVirtualTransactionInput {
+  organizationId: string;
+  clientId: string;
+  label: string;
+  amountCents: number;
+  occurredOn: string; // ISO date
   actorStaffId: string;
 }
 
@@ -1493,6 +1525,133 @@ export class AfloStore {
     });
 
     return { ok: true, note };
+  }
+
+  /** Round-up simulator settings for one client, org-verified. */
+  simulationFor(organizationId: string, clientId: string): SimulationSettings | null {
+    const record = this.findRecord(organizationId, clientId);
+    if (!record) return null;
+    return this.db.simulationSettings.find((s) => s.clientId === clientId) ?? null;
+  }
+
+  /** Hypothetical transactions for one client, newest first, org-verified. */
+  virtualTransactionsFor(organizationId: string, clientId: string): VirtualTransaction[] {
+    const record = this.findRecord(organizationId, clientId);
+    if (!record) return [];
+    return this.db.virtualTransactions
+      .filter((t) => t.clientId === clientId)
+      .sort((a, b) => b.occurredOn.localeCompare(a.occurredOn));
+  }
+
+  /**
+   * Configure the round-up simulator for a client (simulation only — never
+   * moves money). Creates settings on first use. Validated and audited.
+   */
+  configureSimulation(input: ConfigureSimulationInput): SimulationResult {
+    const now = this.clock();
+    const record = this.findRecord(input.organizationId, input.clientId);
+    if (!record) return { ok: false, denialCode: "CLIENT_NOT_FOUND" };
+    const actor = this.findActor(input.organizationId, input.actorStaffId);
+    if (!actor) return { ok: false, denialCode: "ACTOR_NOT_IN_ORG" };
+
+    const inputErrors: string[] = [];
+    if (!Number.isInteger(input.roundToCents) || input.roundToCents <= 0) {
+      inputErrors.push("round-up boundary must be a positive whole number of cents");
+    }
+    if (!Number.isFinite(input.multiplier) || input.multiplier <= 0) {
+      inputErrors.push("multiplier must be positive");
+    }
+    if (inputErrors.length > 0) {
+      return { ok: false, denialCode: "INVALID_INPUT", inputErrors };
+    }
+
+    let settings = this.db.simulationSettings.find((s) => s.clientId === record.id);
+    if (settings) {
+      settings.roundToCents = input.roundToCents;
+      settings.multiplier = input.multiplier;
+      settings.enabled = input.enabled;
+    } else {
+      settings = {
+        clientId: record.id,
+        roundToCents: input.roundToCents,
+        multiplier: input.multiplier,
+        enabled: input.enabled,
+      };
+      this.db.simulationSettings.push(settings);
+    }
+
+    this.audit({
+      organizationId: input.organizationId,
+      actorStaffId: actor.id,
+      action: "simulation.configured",
+      targetType: "simulation",
+      targetId: record.id,
+      detail: `round to ${input.roundToCents}c × ${input.multiplier}, ${input.enabled ? "enabled" : "disabled"}`,
+      reasonCode: "SIM_CONFIGURED",
+      ruleVersion: ROUNDUP_RULES_VERSION,
+      occurredAt: now.toISOString(),
+    });
+
+    return { ok: true, settings };
+  }
+
+  /**
+   * Add a hypothetical transaction; its round-up is computed by the rule so
+   * the stored value can never disagree with the calculator. Simulation only.
+   */
+  addVirtualTransaction(input: AddVirtualTransactionInput): SimulationResult {
+    const now = this.clock();
+    const record = this.findRecord(input.organizationId, input.clientId);
+    if (!record) return { ok: false, denialCode: "CLIENT_NOT_FOUND" };
+    const actor = this.findActor(input.organizationId, input.actorStaffId);
+    if (!actor) return { ok: false, denialCode: "ACTOR_NOT_IN_ORG" };
+
+    const label = input.label.trim();
+    const inputErrors: string[] = [];
+    if (label.length === 0) inputErrors.push("label is required");
+    if (!Number.isFinite(input.amountCents) || input.amountCents <= 0) {
+      inputErrors.push("amount must be positive");
+    }
+    if (Number.isNaN(Date.parse(input.occurredOn))) {
+      inputErrors.push(`date is not valid: ${input.occurredOn}`);
+    }
+    if (inputErrors.length > 0) {
+      return { ok: false, denialCode: "INVALID_INPUT", inputErrors };
+    }
+
+    const settings =
+      this.db.simulationSettings.find((s) => s.clientId === record.id) ??
+      ({ clientId: record.id, roundToCents: 100, multiplier: 1, enabled: true } as SimulationSettings);
+    if (!this.db.simulationSettings.includes(settings)) this.db.simulationSettings.push(settings);
+
+    this.counter += 1;
+    const transaction: VirtualTransaction = {
+      id: `vt-${record.id}-${this.counter}`,
+      clientId: record.id,
+      label,
+      amountCents: Math.round(input.amountCents),
+      roundUpAmountCents: roundUpAmountCents(
+        Math.round(input.amountCents),
+        settings.roundToCents,
+        settings.multiplier,
+      ),
+      occurredOn: new Date(input.occurredOn).toISOString().slice(0, 10),
+    };
+    this.db.virtualTransactions.push(transaction);
+
+    this.audit({
+      organizationId: input.organizationId,
+      actorStaffId: actor.id,
+      action: "simulation.transaction_added",
+      targetType: "simulation",
+      targetId: record.id,
+      detail: `"${label}" ${transaction.amountCents}c → round-up ${transaction.roundUpAmountCents}c`,
+      reasonCode: "SIM_TXN_ADDED",
+      ruleVersion: ROUNDUP_RULES_VERSION,
+      occurredAt: now.toISOString(),
+    });
+
+    return { ok: true, settings, transaction };
   }
 
   /** Recorded assessment history for one client, oldest first, org-verified. */

@@ -242,6 +242,31 @@ export interface QuarterlyReport {
   generatedAt: string; // ISO date
 }
 
+/**
+ * Round-up simulator configuration for one client. SIMULATION ONLY — this
+ * never moves money or links to a real account (charter). Amounts are cents.
+ */
+export interface SimulationSettings {
+  clientId: string;
+  roundToCents: number; // e.g. 100 = nearest dollar
+  multiplier: number; // e.g. 2 = double round-ups
+  enabled: boolean;
+}
+
+/**
+ * A hypothetical transaction used to visualize round-up saving behavior.
+ * Synthetic or user-entered; never a real purchase. `roundUpAmountCents` is
+ * the deterministic calculator output (roundup.v1.0.0).
+ */
+export interface VirtualTransaction {
+  id: string;
+  clientId: string;
+  label: string;
+  amountCents: number;
+  roundUpAmountCents: number;
+  occurredOn: string; // ISO date
+}
+
 export interface AdminNote {
   id: string;
   clientId: string;

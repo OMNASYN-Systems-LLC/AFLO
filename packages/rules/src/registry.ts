@@ -4,6 +4,7 @@ import { ENGAGEMENT_RULES_VERSION } from "./engagement";
 import { INTAKE_RULES_VERSION } from "./intake";
 import { PIPELINE_RULES_VERSION } from "./pipeline";
 import { REPORT_RULES_VERSION } from "./report";
+import { ROUNDUP_RULES_VERSION } from "./roundup";
 import { REVIEW_REASON_DESCRIPTIONS, REVIEW_RULES_VERSION } from "./review";
 import { ROADMAP_RULES_VERSION } from "./roadmap";
 import { READINESS_RULES_VERSION, REASON_CODE_DESCRIPTIONS } from "./readiness";
@@ -255,6 +256,20 @@ export const RULE_REGISTRY: readonly RuleDefinition[] = [
     sources: [],
     changeHistory: [
       { version: "report.v1.0.0", date: "2026-07-18", note: "Initial workflow (founder workstream slice H)." },
+    ],
+  },
+  {
+    id: "roundup.calculator",
+    version: ROUNDUP_RULES_VERSION,
+    effectiveDate: "2026-07-18",
+    description:
+      "Deterministic virtual round-up / micro-allocation calculator (SIMULATION ONLY — never moves money or touches a real account). Rounds a transaction up to the next configured boundary times a multiplier in integer cents; totals and projects hypothetical monthly savings for goal visualization and education.",
+    inputs: ["amountCents", "roundToCents", "multiplier", "windowDays"],
+    output: "roundUpAmountCents / totalRoundUpCents / projectedMonthlySavingsCents",
+    reasonCodes: [],
+    sources: [],
+    changeHistory: [
+      { version: "roundup.v1.0.0", date: "2026-07-18", note: "Initial simulation calculator (charter round-up module)." },
     ],
   },
   {

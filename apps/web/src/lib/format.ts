@@ -57,6 +57,16 @@ export function fmtMoney(cents: number): string {
   });
 }
 
+/** Money with cents — for small amounts (e.g. round-ups) where whole-dollar rounding would mislead. */
+export function fmtMoneyCents(cents: number): string {
+  return (cents / 100).toLocaleString("en-US", {
+    style: "currency",
+    currency: "USD",
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+}
+
 export function fmtPct(value: number, digits = 0): string {
   return `${value.toFixed(digits)}%`;
 }
