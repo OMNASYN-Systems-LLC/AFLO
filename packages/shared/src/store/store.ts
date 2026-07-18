@@ -48,6 +48,15 @@ import {
   selectEducation,
   type EducationTrigger,
 } from "@aflo/academy";
+import {
+  PARTNER_RULES_VERSION,
+  partnerReferralTransition,
+  validateNeutralityRecord,
+  type NeutralityRecord,
+  type PartnerReferralStatus,
+  type PartnerReferralTransitionResult,
+  type ReferralOutcome,
+} from "@aflo/partner-marketplace";
 import { createEvent, type DomainEvent } from "../events";
 import { toOutboxRecord, type OutboxRecord } from "../outbox";
 import { syntheticDatabase, type SyntheticDatabase } from "../data/synthetic";
@@ -61,6 +70,7 @@ import type {
   Goal,
   IntakeRecord,
   MonthlyAction,
+  PartnerReferral,
   QuarterlyReport,
   ReadinessAssessmentRecord,
   Roadmap,
@@ -396,6 +406,46 @@ export interface CommunicationLogEntry {
   subject: string | null;
   suppressionReason: string | null;
   occurredAt: string;
+}
+
+export interface ReferralResult {
+  ok: boolean;
+  denialCode?:
+    | "CLIENT_NOT_FOUND"
+    | "ACTOR_NOT_IN_ORG"
+    | "PARTNER_NOT_FOUND"
+    | "PARTNER_INACTIVE"
+    | "NEUTRALITY_INCOMPLETE"
+    | "REFERRAL_NOT_FOUND";
+  missingNeutralityFields?: string[];
+  referral?: PartnerReferral;
+  transition?: PartnerReferralTransitionResult;
+  emittedEventIds: string[];
+}
+
+export interface CreateReferralInput {
+  organizationId: string;
+  clientId: string;
+  partnerId: string;
+  /** The eight-field neutrality record; a referral is refused without a complete one. */
+  neutrality: NeutralityRecord;
+  actorStaffId: string;
+}
+
+export interface TransitionReferralInput {
+  organizationId: string;
+  referralId: string;
+  /** Outcome is recorded via recordReferralOutcome, never this transition. */
+  toStatus: Exclude<PartnerReferralStatus, "suggested" | "outcome_recorded">;
+  actorStaffId: string;
+}
+
+export interface RecordReferralOutcomeInput {
+  organizationId: string;
+  referralId: string;
+  outcome: ReferralOutcome;
+  note?: string;
+  actorStaffId: string;
 }
 
 export class AfloStore {
@@ -2097,6 +2147,215 @@ export class AfloStore {
     const record = this.findRecord(organizationId, leadId);
     if (!record) return null;
     return nextRequiredStage(this.db.pipeline, record.pipelineStageId);
+  }
+
+  /** The organization's active partner directory (org-verified). */
+  partnersFor(organizationId: string) {
+    return this.db.partners.filter((p) => p.organizationId === organizationId && p.active);
+  }
+
+  /** Tracked referrals for one client, org-verified, newest first. */
+  referralsFor(organizationId: string, clientId: string): PartnerReferral[] {
+    const record = this.findRecord(organizationId, clientId);
+    if (!record) return [];
+    return this.db.partnerReferrals
+      .filter((r) => r.organizationId === organizationId && r.clientId === clientId)
+      .slice()
+      .reverse();
+  }
+
+  /**
+   * Create a tracked partner referral (partner.v1.0.0). Fails closed on a
+   * server-verified actor, an active partner in the org, and — the guardrail —
+   * a COMPLETE eight-field neutrality record (ADR-0007 §3). AFLO records that
+   * it routed the client to a licensed partner; it never approves or guarantees
+   * an outcome, and partner compensation never touches readiness. Emits
+   * PartnerReferralCreated; denials are audited and never mutate.
+   */
+  createReferral(input: CreateReferralInput): ReferralResult {
+    const now = this.clock();
+    const record = this.findRecord(input.organizationId, input.clientId);
+    if (!record) return { ok: false, denialCode: "CLIENT_NOT_FOUND", emittedEventIds: [] };
+    const actor = this.findActor(input.organizationId, input.actorStaffId);
+    if (!actor) return { ok: false, denialCode: "ACTOR_NOT_IN_ORG", emittedEventIds: [] };
+
+    const partner = this.db.partners.find(
+      (p) => p.id === input.partnerId && p.organizationId === input.organizationId,
+    );
+    if (!partner) return { ok: false, denialCode: "PARTNER_NOT_FOUND", emittedEventIds: [] };
+    if (!partner.active) return { ok: false, denialCode: "PARTNER_INACTIVE", emittedEventIds: [] };
+
+    const neutrality = validateNeutralityRecord(input.neutrality);
+    if (!neutrality.complete) {
+      this.audit({
+        organizationId: input.organizationId,
+        actorStaffId: actor.id,
+        action: "partner_referral.denied",
+        targetType: "referral",
+        targetId: record.id,
+        detail: `neutrality record incomplete for partner ${partner.id}: missing ${neutrality.missingFields.join(", ")}`,
+        reasonCode: neutrality.reasonCode,
+        ruleVersion: neutrality.ruleVersion,
+        occurredAt: now.toISOString(),
+      });
+      return {
+        ok: false,
+        denialCode: "NEUTRALITY_INCOMPLETE",
+        missingNeutralityFields: neutrality.missingFields,
+        emittedEventIds: [],
+      };
+    }
+
+    this.counter += 1;
+    const referral: PartnerReferral = {
+      id: `pr-${record.id}-${this.counter}`,
+      organizationId: input.organizationId,
+      clientId: record.id,
+      partnerId: partner.id,
+      status: "suggested",
+      neutrality: input.neutrality,
+      outcome: null,
+      outcomeNote: null,
+      createdByStaffId: actor.id,
+      createdAt: now.toISOString(),
+      sharedAt: null,
+      updatedAt: now.toISOString(),
+    };
+    this.db.partnerReferrals.push(referral);
+
+    const event = createEvent({
+      eventType: "PartnerReferralCreated",
+      organizationId: input.organizationId,
+      aggregateId: referral.id,
+      actorId: actor.id,
+      occurredAt: now.toISOString(),
+      payload: {
+        clientId: record.id,
+        referralId: referral.id,
+        partnerId: partner.id,
+        neutralityRecordId: `${referral.id}-neutrality`,
+      },
+    });
+    this.outbox.push(toOutboxRecord(event, { now }));
+
+    this.audit({
+      organizationId: input.organizationId,
+      actorStaffId: actor.id,
+      action: "partner_referral.created",
+      targetType: "referral",
+      targetId: referral.id,
+      detail: `client ${record.id} → ${partner.category} partner ${partner.id}${
+        partner.nonCommercial ? " (non-commercial)" : ""
+      }; staff-reviewed neutrality`,
+      reasonCode: "PR_CREATED",
+      ruleVersion: PARTNER_RULES_VERSION,
+      occurredAt: now.toISOString(),
+    });
+
+    return { ok: true, referral, emittedEventIds: [event.eventId] };
+  }
+
+  /**
+   * Move a referral through its lifecycle (partner.v1.0.0), except into
+   * `outcome_recorded` (use recordReferralOutcome). The rule validates the
+   * transition; denials are audited and never mutate.
+   */
+  transitionReferral(input: TransitionReferralInput): ReferralResult {
+    const now = this.clock();
+    const referral = this.db.partnerReferrals.find(
+      (r) => r.id === input.referralId && r.organizationId === input.organizationId,
+    );
+    if (!referral) return { ok: false, denialCode: "REFERRAL_NOT_FOUND", emittedEventIds: [] };
+    const actor = this.findActor(input.organizationId, input.actorStaffId);
+    if (!actor) return { ok: false, denialCode: "ACTOR_NOT_IN_ORG", emittedEventIds: [] };
+
+    const transition = partnerReferralTransition(referral.status, input.toStatus);
+    if (!transition.allowed) {
+      this.audit({
+        organizationId: input.organizationId,
+        actorStaffId: actor.id,
+        action: "partner_referral.transition_denied",
+        targetType: "referral",
+        targetId: referral.id,
+        detail: `${referral.status} → ${input.toStatus} denied`,
+        reasonCode: transition.reasonCode,
+        ruleVersion: transition.ruleVersion,
+        occurredAt: now.toISOString(),
+      });
+      return { ok: false, transition, emittedEventIds: [] };
+    }
+
+    const fromStatus = referral.status;
+    referral.status = input.toStatus;
+    referral.updatedAt = now.toISOString();
+    if (input.toStatus === "shared_with_client" && !referral.sharedAt) {
+      referral.sharedAt = now.toISOString();
+    }
+
+    this.audit({
+      organizationId: input.organizationId,
+      actorStaffId: actor.id,
+      action: "partner_referral.transitioned",
+      targetType: "referral",
+      targetId: referral.id,
+      detail: `client ${referral.clientId}: ${fromStatus} → ${input.toStatus}`,
+      reasonCode: transition.reasonCode,
+      ruleVersion: transition.ruleVersion,
+      occurredAt: now.toISOString(),
+    });
+
+    return { ok: true, transition, referral, emittedEventIds: [] };
+  }
+
+  /**
+   * Record a staff-observed outcome and move the referral to
+   * `outcome_recorded` (partner.v1.0.0). The outcome is an observation, never
+   * an approval — AFLO does not decide a partner's result. Rule-gated and
+   * audited.
+   */
+  recordReferralOutcome(input: RecordReferralOutcomeInput): ReferralResult {
+    const now = this.clock();
+    const referral = this.db.partnerReferrals.find(
+      (r) => r.id === input.referralId && r.organizationId === input.organizationId,
+    );
+    if (!referral) return { ok: false, denialCode: "REFERRAL_NOT_FOUND", emittedEventIds: [] };
+    const actor = this.findActor(input.organizationId, input.actorStaffId);
+    if (!actor) return { ok: false, denialCode: "ACTOR_NOT_IN_ORG", emittedEventIds: [] };
+
+    const transition = partnerReferralTransition(referral.status, "outcome_recorded");
+    if (!transition.allowed) {
+      this.audit({
+        organizationId: input.organizationId,
+        actorStaffId: actor.id,
+        action: "partner_referral.transition_denied",
+        targetType: "referral",
+        targetId: referral.id,
+        detail: `${referral.status} → outcome_recorded denied`,
+        reasonCode: transition.reasonCode,
+        ruleVersion: transition.ruleVersion,
+        occurredAt: now.toISOString(),
+      });
+      return { ok: false, transition, emittedEventIds: [] };
+    }
+
+    referral.status = "outcome_recorded";
+    referral.outcome = input.outcome;
+    referral.outcomeNote = input.note?.trim() ? input.note.trim() : null;
+    referral.updatedAt = now.toISOString();
+
+    this.audit({
+      organizationId: input.organizationId,
+      actorStaffId: actor.id,
+      action: "partner_referral.outcome_recorded",
+      targetType: "referral",
+      targetId: referral.id,
+      detail: `client ${referral.clientId}: outcome ${input.outcome}`,
+      reasonCode: "PR_OUTCOME",
+      ruleVersion: transition.ruleVersion,
+      occurredAt: now.toISOString(),
+    });
+
+    return { ok: true, transition, referral, emittedEventIds: [] };
   }
 
   private findRecord(organizationId: string, id: string): ClientRecord | undefined {

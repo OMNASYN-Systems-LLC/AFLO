@@ -8,6 +8,7 @@ const nextConfig: NextConfig = {
     "@aflo/auth",
     "@aflo/notifications",
     "@aflo/academy",
+    "@aflo/partner-marketplace",
   ],
 };
 

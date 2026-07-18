@@ -14,6 +14,11 @@ import type {
   ReviewReasonCode,
   RoadmapStatus,
 } from "@aflo/rules";
+import type {
+  NeutralityRecord,
+  PartnerReferralStatus,
+  ReferralOutcome,
+} from "@aflo/partner-marketplace";
 
 // Lifecycle stages and engagement statuses are versioned domain
 // configuration owned by the rules kernel (@aflo/rules); re-exported here
@@ -260,6 +265,31 @@ export interface QuarterlyReport {
   highlights: string[];
   focusForNextQuarter: string;
   generatedAt: string; // ISO date
+}
+
+/**
+ * A tracked referral to a licensed external partner (partner.v1.0.0). AFLO
+ * routes and records — it never approves a loan or guarantees acceptance. The
+ * neutrality record (ADR-0007 §3) is captured at creation and is immutable
+ * thereafter; the store refuses to create a referral without a complete one.
+ * `outcome` is a staff observation set at `outcome_recorded`, never an
+ * approval. Partner compensation never touches readiness.
+ */
+export interface PartnerReferral {
+  id: string;
+  organizationId: string;
+  clientId: string;
+  partnerId: string;
+  status: PartnerReferralStatus;
+  /** The eight-field neutrality disclosure captured when the referral was made. */
+  neutrality: NeutralityRecord;
+  /** Staff-observed result, set only at outcome_recorded; null before then. */
+  outcome: ReferralOutcome | null;
+  outcomeNote: string | null;
+  createdByStaffId: string;
+  createdAt: string; // ISO datetime
+  sharedAt: string | null; // ISO datetime once shared with the client
+  updatedAt: string; // ISO datetime
 }
 
 /**

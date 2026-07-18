@@ -3,6 +3,20 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Partner provider catalog, product categories, eligibility rules, compensation disclosures, referral links, application status, outcome tracking, and conflict-of-interest disclosures — including the Partner Neutrality Engine. Stub until the V1 partner-directory slice.",
-  "exports": { ".": "./src/index.ts" }
+  "description": "Tracked partner referrals and the Partner Neutrality Engine (partner.v1.0.0): referral lifecycle rules, the eight-field neutrality record required on every recommendation, and compensation-neutral option ordering. AFLO orchestrates and routes; it never approves loans, guarantees acceptance, or lets compensation influence readiness. No partner names or compensation figures are hardcoded here — providers are synthetic in dev (ADR-0007).",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src test",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "eslint": "^9.39.5",
+    "typescript": "^5.9.2",
+    "typescript-eslint": "^8.64.0",
+    "vitest": "^4.1.10"
+  }
 }

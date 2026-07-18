@@ -15,6 +15,7 @@
     "@aflo/academy": "workspace:*",
     "@aflo/ai": "workspace:*",
     "@aflo/notifications": "workspace:*",
+    "@aflo/partner-marketplace": "workspace:*",
     "@aflo/rules": "workspace:*"
   },
   "devDependencies": {
