@@ -2,13 +2,18 @@ import {
   documentTransitionsFrom,
   fullName,
   intakeCompleteness,
+  isChannelEnabled,
   LIFECYCLE_STAGES,
+  NOTIFICATION_DEFAULT_CHANNELS,
+  NOTIFICATION_TYPES,
   projectedMonthlySavingsCents,
   quarterOf,
   REVIEW_REASON_DESCRIPTIONS,
   roadmapTransitionsFrom,
   totalRoundUpCents,
   type DocumentReviewStatusId,
+  type NotificationChannel,
+  type NotificationType,
   type RoadmapStatus,
 } from "@aflo/shared";
 import Link from "next/link";
@@ -35,6 +40,7 @@ import {
   requestDocumentAction,
   runReadinessAssessmentAction,
   scheduleAppointmentAction,
+  setNotificationPreferenceAction,
   setPrimaryGoalAction,
   transitionDocumentAction,
   transitionMonthlyActionAction,
@@ -81,6 +87,7 @@ export default async function ClientDetailPage({
     .appointments.filter((ap) => ap.clientId === clientId && new Date(ap.scheduledAt) > demoNow)
     .sort((x, y) => x.scheduledAt.localeCompare(y.scheduledAt));
   const communications = store.communicationsFor(DEMO_ORG_ID, clientId).slice(-6).reverse();
+  const notificationPrefs = store.notificationPreferencesFor(DEMO_ORG_ID, clientId);
   const simulation = store.simulationFor(DEMO_ORG_ID, clientId);
   const virtualTransactions = store.virtualTransactionsFor(DEMO_ORG_ID, clientId);
   const roundUpTotalCents = simulation
@@ -842,12 +849,56 @@ export default async function ClientDetailPage({
                     {c.status === "sent" ? (
                       <Badge tone="good" label="Sent" />
                     ) : (
-                      <Badge tone="neutral" label="Suppressed — no consent" />
+                      <Badge
+                        tone="neutral"
+                        label={
+                          c.suppressionReason === "CHANNEL_DISABLED"
+                            ? "Off by preference"
+                            : "Suppressed — no consent"
+                        }
+                      />
                     )}
                   </li>
                 ))}
               </ul>
             )}
+          </SectionCard>
+
+          <SectionCard
+            title="Notification preferences"
+            subtitle="Granular per channel · enforced before every send"
+          >
+            <ul className="space-y-3">
+              {NOTIFICATION_TYPES.map((type) => (
+                <li key={type}>
+                  <p className="text-xs font-medium text-ink">{NOTIFICATION_TYPE_LABELS[type]}</p>
+                  <div className="mt-1.5 flex flex-wrap gap-1.5">
+                    {NOTIFICATION_DEFAULT_CHANNELS[type].map((channel) => {
+                      const enabled = isChannelEnabled(notificationPrefs, clientId, type, channel);
+                      return (
+                        <form
+                          key={channel}
+                          action={setNotificationPreferenceAction.bind(null, clientId, type, channel, !enabled)}
+                        >
+                          <button
+                            type="submit"
+                            aria-pressed={enabled}
+                            className={`rounded-full border px-2.5 py-1 text-[11px] font-medium transition-colors ${
+                              enabled
+                                ? "border-emerald/40 bg-status-good-tint text-emerald-deep"
+                                : "border-line bg-ivory text-ink-faint line-through"
+                            }`}
+                            title={`${NOTIFICATION_CHANNEL_LABELS[channel]}: ${enabled ? "on — click to turn off" : "off — click to turn on"}`}
+                          >
+                            {NOTIFICATION_CHANNEL_LABELS[channel]}
+                          </button>
+                        </form>
+                      );
+                    })}
+                  </div>
+                </li>
+              ))}
+            </ul>
           </SectionCard>
 
           <SectionCard title="Notes" subtitle="Internal — never visible in the client portal">
@@ -959,6 +1010,20 @@ function MilestoneMarker({ status }: { status: "completed" | "in_progress" | "up
   }
   return <span className="mt-0.5 h-5 w-5 shrink-0 rounded-full border-2 border-line" />;
 }
+
+const NOTIFICATION_TYPE_LABELS: Record<NotificationType, string> = {
+  appointment_scheduled: "Appointment scheduled",
+  roadmap_published: "Roadmap published",
+  report_published: "Report published",
+  document_requested: "Document requested",
+  task_assigned: "Task assigned",
+};
+
+const NOTIFICATION_CHANNEL_LABELS: Record<NotificationChannel, string> = {
+  in_app: "In-app",
+  email: "Email",
+  sms: "SMS",
+};
 
 /** Staff-facing labels for rule-legal document moves, keyed by target status. */
 const DOC_ACTION_LABELS: Partial<Record<DocumentReviewStatusId, (from: string) => string>> = {

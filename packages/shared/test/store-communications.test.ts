@@ -20,13 +20,10 @@ describe("notification wiring — consented clients", () => {
       actorStaffId: "s-mercer",
     });
     const comms = store.communicationsFor(ORG, "c-okafor");
-    expect(comms).toHaveLength(1);
-    expect(comms[0]).toMatchObject({
-      notificationType: "document_requested",
-      status: "sent",
-      suppressionReason: null,
-    });
-    expect(comms[0]?.subject).toContain("document");
+    // document_requested routes to in-app + email; a consented client sends both.
+    expect(comms.map((c) => c.channel).sort()).toEqual(["email", "in_app"]);
+    expect(comms.every((c) => c.status === "sent")).toBe(true);
+    expect(comms.find((c) => c.channel === "in_app")?.subject).toContain("document");
     expect(store.auditFor(ORG).at(-1)?.action).toBe("comm.sent");
   });
 
@@ -84,14 +81,19 @@ describe("notification wiring — the consent gate", () => {
       docType: "bank_statement",
       actorStaffId: "s-boyd",
     });
-    const comm = store.communicationsFor(ORG, "c-ngo").at(-1);
-    expect(comm).toMatchObject({
-      notificationType: "document_requested",
+    const comms = store.communicationsFor(ORG, "c-ngo");
+    // In-app still reaches the authenticated client; the external email
+    // channel is withheld for the client who revoked communication consent.
+    const inApp = comms.find((c) => c.channel === "in_app");
+    const email = comms.find((c) => c.channel === "email");
+    expect(inApp).toMatchObject({ status: "sent" });
+    expect(email).toMatchObject({
       status: "suppressed",
       suppressionReason: "NO_COMMUNICATION_CONSENT",
-      subject: null, // no content is rendered for a suppressed message
+      subject: null, // no external content when the channel is withheld
     });
-    expect(store.auditFor(ORG).at(-1)?.action).toBe("comm.suppressed");
+    // At least one channel sent, so the summary audit is comm.sent.
+    expect(store.auditFor(ORG).at(-1)?.action).toBe("comm.sent");
   });
 });
 

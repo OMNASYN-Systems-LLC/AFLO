@@ -8,7 +8,9 @@ export * from "./repositories/mock";
 export { GOLDEN_KEY_INTAKE, GOLDEN_KEY_PIPELINE, SYNTHETIC_NOW, syntheticDatabase } from "./data/synthetic";
 export type { SyntheticDatabase } from "./data/synthetic";
 
-// Facade re-exports: the rules kernel and AI boundary are separate packages
-// (charter monorepo layout); re-exported here so consumers keep one surface.
+// Facade re-exports: the rules kernel, AI boundary, and notifications kernel
+// are separate packages (charter monorepo layout); re-exported here so
+// consumers keep one import surface.
 export * from "@aflo/rules";
 export * from "@aflo/ai";
+export * from "@aflo/notifications";

@@ -35,7 +35,9 @@ import {
 } from "@aflo/rules";
 import {
   NOTIFICATION_RULES_VERSION,
-  planNotification,
+  renderNotification,
+  resolveDelivery,
+  type NotificationChannel,
   type NotificationType,
   type NotificationVarsMap,
 } from "@aflo/notifications";
@@ -1975,38 +1977,94 @@ export class AfloStore {
     vars: NotificationVarsMap[T],
     now: Date,
   ): void {
-    const planned = planNotification({
+    // Preferences + consent are enforced BEFORE any content is rendered:
+    // resolveDelivery decides, per default channel, whether it may send.
+    const deliveries = resolveDelivery(
       type,
-      recipientUserId: client.id,
-      vars,
-      consentRecords: this.db.consentRecords,
-    });
-    this.counter += 1;
-    const suppressed = planned.status === "suppressed";
-    this.communicationsLog.push({
-      id: `comm-${this.counter}`,
-      organizationId,
-      clientId: client.id,
-      notificationType: type,
-      channel: planned.message?.channel ?? "email",
-      status: suppressed ? "suppressed" : "sent",
-      subject: planned.message?.subject ?? null,
-      suppressionReason: planned.suppressionReason,
-      occurredAt: now.toISOString(),
-    });
+      client.id,
+      this.db.notificationPreferences,
+      this.db.consentRecords,
+    );
+    const willSend = deliveries.some((d) => d.willSend);
+    const message = willSend ? renderNotification(type, vars) : null;
+
+    for (const d of deliveries) {
+      this.counter += 1;
+      this.communicationsLog.push({
+        id: `comm-${this.counter}`,
+        organizationId,
+        clientId: client.id,
+        notificationType: type,
+        channel: d.channel,
+        status: d.willSend ? "sent" : "suppressed",
+        subject: d.willSend ? message!.subject : null,
+        suppressionReason: d.reason,
+        occurredAt: now.toISOString(),
+      });
+    }
+
+    const sent = deliveries.filter((d) => d.willSend).map((d) => d.channel);
+    const withheld = deliveries.filter((d) => !d.willSend);
     this.audit({
       organizationId,
       actorStaffId: "system",
-      action: suppressed ? "comm.suppressed" : "comm.sent",
+      action: willSend ? "comm.sent" : "comm.suppressed",
       targetType: "communication",
       targetId: client.id,
-      detail: suppressed
-        ? `${type} suppressed (${planned.suppressionReason})`
-        : `${type} sent: "${planned.message?.subject}"`,
-      reasonCode: suppressed ? planned.suppressionReason ?? "SUPPRESSED" : "SENT",
+      detail: `${type}: sent [${sent.join(", ") || "none"}]${
+        withheld.length > 0 ? `, withheld [${withheld.map((d) => `${d.channel}:${d.reason}`).join(", ")}]` : ""
+      }`,
+      reasonCode: willSend ? "SENT" : withheld[0]?.reason ?? "SUPPRESSED",
       ruleVersion: NOTIFICATION_RULES_VERSION,
       occurredAt: now.toISOString(),
     });
+  }
+
+  /** Notification preferences for one recipient, org-verified. */
+  notificationPreferencesFor(organizationId: string, clientId: string) {
+    const record = this.findRecord(organizationId, clientId);
+    if (!record) return [];
+    return this.db.notificationPreferences.filter((p) => p.userId === clientId);
+  }
+
+  /**
+   * Set a notification-channel preference for a recipient (append-only,
+   * latest-wins). Granular per (type, channel), revocable, audited, and
+   * org/actor scoped. Enforced on the next send via resolveDelivery.
+   */
+  setNotificationPreference(input: {
+    organizationId: string;
+    clientId: string;
+    notificationType: NotificationType;
+    channel: NotificationChannel;
+    enabled: boolean;
+    actorStaffId: string;
+  }): { ok: boolean; denialCode?: "CLIENT_NOT_FOUND" | "ACTOR_NOT_IN_ORG" } {
+    const now = this.clock();
+    const record = this.findRecord(input.organizationId, input.clientId);
+    if (!record) return { ok: false, denialCode: "CLIENT_NOT_FOUND" };
+    const actor = this.findActor(input.organizationId, input.actorStaffId);
+    if (!actor) return { ok: false, denialCode: "ACTOR_NOT_IN_ORG" };
+
+    this.db.notificationPreferences.push({
+      userId: record.id,
+      notificationType: input.notificationType,
+      channel: input.channel,
+      enabled: input.enabled,
+      recordedAt: now.toISOString(),
+    });
+    this.audit({
+      organizationId: input.organizationId,
+      actorStaffId: actor.id,
+      action: "notification_preference.set",
+      targetType: "notification_preference",
+      targetId: record.id,
+      detail: `${input.notificationType}/${input.channel} ${input.enabled ? "enabled" : "disabled"}`,
+      reasonCode: input.enabled ? "PREF_ENABLED" : "PREF_DISABLED",
+      ruleVersion: NOTIFICATION_RULES_VERSION,
+      occurredAt: now.toISOString(),
+    });
+    return { ok: true };
   }
 
   private audit(entry: Omit<AuditEntry, "id">): void {

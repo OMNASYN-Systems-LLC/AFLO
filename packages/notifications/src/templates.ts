@@ -1,17 +1,20 @@
 import type { ConsentType } from "./consent";
+import type { NotificationChannel } from "./channels";
 
 /**
  * Notification template registry (notification.v1.0.0).
  *
- * Each notification type binds to a channel, the consent type it requires,
- * and a deterministic renderer over typed variables. Rendering fails closed
- * on any missing/blank variable so a half-populated message is never sent.
- * Templates carry no client PII beyond what the caller passes as variables.
+ * Each notification type binds to a primary content channel, the consent type
+ * it requires, and a deterministic renderer over typed variables. Rendering
+ * fails closed on any missing/blank variable so a half-populated message is
+ * never sent. Message content is channel-agnostic (subject + body); actual
+ * delivery channels are decided by preferences.resolveDelivery. Templates
+ * carry no client PII beyond what the caller passes as variables.
  */
 
 export const NOTIFICATION_RULES_VERSION = "notification.v1.0.0";
 
-export type NotificationChannel = "email";
+export type { NotificationChannel };
 
 /**
  * Notification types, each triggered by a domain event. Client-facing

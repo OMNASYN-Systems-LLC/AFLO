@@ -1,5 +1,5 @@
 import type { AgentEnvelope } from "@aflo/ai";
-import type { ConsentRecord } from "@aflo/notifications";
+import type { ConsentRecord, NotificationPreferenceRecord } from "@aflo/notifications";
 import {
   DEFAULT_INTAKE,
   INTAKE_RULES_VERSION,
@@ -84,6 +84,8 @@ export interface SyntheticDatabase {
    * until portal user accounts land, at which point this keys on user id.
    */
   consentRecords: ConsentRecord[];
+  /** User-controlled notification-channel preferences (append-only, latest-wins). */
+  notificationPreferences: NotificationPreferenceRecord[];
   /** Round-up simulator config per client (simulation only). */
   simulationSettings: SimulationSettings[];
   /** Hypothetical transactions for the round-up simulator (never real). */
@@ -620,6 +622,21 @@ const virtualTransactions: VirtualTransaction[] = [
 ];
 
 /**
+ * Notification preferences: most clients keep the defaults (no records);
+ * Alicia Grant has opted out of appointment SMS — a demonstrable override
+ * that suppresses only her SMS channel while in-app and email still send.
+ */
+const notificationPreferences: NotificationPreferenceRecord[] = [
+  {
+    userId: "c-grant",
+    notificationType: "appointment_scheduled",
+    channel: "sms",
+    enabled: false,
+    recordedAt: daysAgo(20),
+  },
+];
+
+/**
  * Synthetic examples of the typed agent envelope (drafts only — proposals,
  * never facts). These illustrate the review workflow in the UI.
  */
@@ -720,6 +737,7 @@ export const syntheticDatabase: SyntheticDatabase = {
   reports,
   notes,
   consentRecords,
+  notificationPreferences,
   simulationSettings,
   virtualTransactions,
   aiSuggestions,
