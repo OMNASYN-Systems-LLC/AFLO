@@ -3,6 +3,20 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Email (Resend) and reminder delivery consumed by the Railway worker. Stub until the notifications slice.",
-  "exports": { ".": "./src/index.ts" }
+  "description": "Consent-gated notification kernel: typed template registry, deterministic delivery state machine, and a provider boundary. Mock delivery in dev/preview; Resend activates on founder credentials. No external send without consent.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src test",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "eslint": "^9.39.5",
+    "typescript": "^5.9.2",
+    "typescript-eslint": "^8.64.0",
+    "vitest": "^4.1.10"
+  }
 }
