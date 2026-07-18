@@ -127,6 +127,54 @@ export async function addNoteAction(clientId: string, formData: FormData): Promi
 }
 
 /**
+ * Goal workflow actions. Goals are staff-maintained; the store validates,
+ * enforces a single primary, emits GoalCreated, and audits.
+ */
+export async function createGoalAction(clientId: string, formData: FormData): Promise<void> {
+  const session = await getStaffSession();
+  store.createGoal({
+    organizationId: session.organizationId,
+    clientId,
+    title: String(formData.get("title") ?? ""),
+    category: String(formData.get("category") ?? "") as
+      | "credit"
+      | "savings"
+      | "debt"
+      | "home_purchase"
+      | "business_capital"
+      | "other",
+    targetDate: String(formData.get("targetDate") ?? ""),
+    isPrimary: formData.get("isPrimary") === "on",
+    actorStaffId: session.staffId,
+  });
+  revalidatePath(`/clients/${clientId}`);
+  revalidatePath("/clients");
+  revalidatePath("/dashboard");
+}
+
+export async function updateGoalProgressAction(clientId: string, goalId: string, formData: FormData): Promise<void> {
+  const session = await getStaffSession();
+  store.updateGoalProgress({
+    organizationId: session.organizationId,
+    goalId,
+    progressPct: Number(formData.get("progressPct") ?? "0"),
+    actorStaffId: session.staffId,
+  });
+  revalidatePath(`/clients/${clientId}`);
+}
+
+export async function setPrimaryGoalAction(clientId: string, goalId: string): Promise<void> {
+  const session = await getStaffSession();
+  store.setPrimaryGoal({
+    organizationId: session.organizationId,
+    goalId,
+    actorStaffId: session.staffId,
+  });
+  revalidatePath(`/clients/${clientId}`);
+  revalidatePath("/clients");
+}
+
+/**
  * Round-up simulator action (simulation only — never moves money). The store
  * computes round-ups via roundup.v1.0.0 and validates all input.
  */

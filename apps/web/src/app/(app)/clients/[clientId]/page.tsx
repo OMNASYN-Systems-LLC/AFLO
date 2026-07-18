@@ -30,14 +30,17 @@ import {
   addMonthlyActionAction,
   addNoteAction,
   addVirtualTransactionAction,
+  createGoalAction,
   generateReportAction,
   requestDocumentAction,
   runReadinessAssessmentAction,
   scheduleAppointmentAction,
+  setPrimaryGoalAction,
   transitionDocumentAction,
   transitionMonthlyActionAction,
   transitionReportAction,
   transitionRoadmapAction,
+  updateGoalProgressAction,
 } from "./actions";
 import { StageTrack } from "@/components/stage";
 import { EmptyState, ProgressBar, SectionCard } from "@/components/ui";
@@ -487,22 +490,38 @@ export default async function ClientDetailPage({
             )}
           </SectionCard>
 
-          <SectionCard title="Current goal">
+          <SectionCard title="Goals">
             {primaryGoal ? (
               <div>
                 <p className="text-sm font-medium text-ink">{primaryGoal.title}</p>
-                <p className="mt-1 text-xs text-ink-faint">
-                  Target {fmtDate(primaryGoal.targetDate)}
-                </p>
+                <p className="mt-1 text-xs text-ink-faint">Target {fmtDate(primaryGoal.targetDate)}</p>
                 <div className="mt-3">
                   <ProgressBar pct={primaryGoal.progressPct} />
                 </div>
+                <form
+                  action={updateGoalProgressAction.bind(null, clientId, primaryGoal.id)}
+                  className="mt-2 flex items-center gap-2"
+                >
+                  <input
+                    name="progressPct"
+                    type="number"
+                    min="0"
+                    max="100"
+                    defaultValue={primaryGoal.progressPct}
+                    className="w-16 rounded-md border border-line bg-card px-2 py-1 text-xs text-ink"
+                  />
+                  <ActionButton label="Update %" />
+                </form>
                 {otherGoals.length > 0 ? (
-                  <ul className="mt-4 space-y-1.5 border-t border-line/70 pt-3">
+                  <ul className="mt-4 space-y-2 border-t border-line/70 pt-3">
                     {otherGoals.map((g) => (
-                      <li key={g.id} className="flex items-baseline justify-between gap-2 text-xs">
-                        <span className="text-ink-soft">{g.title}</span>
-                        <span className="tabular-nums text-ink-faint">{g.progressPct}%</span>
+                      <li key={g.id} className="flex items-center justify-between gap-2 text-xs">
+                        <span className="min-w-0 truncate text-ink-soft">
+                          {g.title} · {g.progressPct}%
+                        </span>
+                        <form action={setPrimaryGoalAction.bind(null, clientId, g.id)}>
+                          <ActionButton label="Make primary" />
+                        </form>
                       </li>
                     ))}
                   </ul>
@@ -511,6 +530,46 @@ export default async function ClientDetailPage({
             ) : (
               <EmptyState message="No goal set yet." />
             )}
+            <form
+              action={createGoalAction.bind(null, clientId)}
+              className="mt-4 space-y-2 border-t border-line/70 pt-4"
+            >
+              <input
+                name="title"
+                required
+                placeholder="New goal"
+                className="w-full rounded-md border border-line bg-card px-3 py-1.5 text-sm text-ink placeholder:text-ink-faint"
+              />
+              <div className="flex flex-wrap items-center gap-2">
+                <select
+                  name="category"
+                  className="rounded-md border border-line bg-card px-2 py-1.5 text-sm text-ink"
+                  defaultValue="savings"
+                >
+                  <option value="credit">Credit</option>
+                  <option value="savings">Savings</option>
+                  <option value="debt">Debt</option>
+                  <option value="home_purchase">Home purchase</option>
+                  <option value="business_capital">Business capital</option>
+                  <option value="other">Other</option>
+                </select>
+                <input
+                  name="targetDate"
+                  type="date"
+                  required
+                  className="rounded-md border border-line bg-card px-2 py-1.5 text-sm text-ink"
+                />
+                <label className="flex items-center gap-1.5 text-xs text-ink-soft">
+                  <input name="isPrimary" type="checkbox" /> Primary
+                </label>
+                <button
+                  type="submit"
+                  className="rounded-md bg-emerald px-3 py-2 text-xs font-medium text-ivory-ink transition-colors hover:bg-emerald-deep"
+                >
+                  Add goal
+                </button>
+              </div>
+            </form>
           </SectionCard>
 
           <SectionCard title="Documents">

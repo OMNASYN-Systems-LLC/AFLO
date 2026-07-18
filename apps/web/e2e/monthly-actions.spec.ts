@@ -37,10 +37,14 @@ test("staff completes an in-progress action", async ({ page }) => {
 
 test("staff adds a manual action to this month's plan", async ({ page }) => {
   await page.goto("/clients/c-grant");
-  await page.getByPlaceholder("What should happen this month?").fill("Confirm autopay on the car loan");
-  await page.locator('select[name="category"]').selectOption("payment");
-  await page.locator('input[name="dueDate"]').fill("2026-07-30");
-  await page.getByRole("button", { name: "Add action" }).click();
+  // Scope to the action-plan form: other cards (goals) also have a category select.
+  const addForm = page.locator("form", {
+    has: page.getByPlaceholder("What should happen this month?"),
+  });
+  await addForm.getByPlaceholder("What should happen this month?").fill("Confirm autopay on the car loan");
+  await addForm.locator('select[name="category"]').selectOption("payment");
+  await addForm.locator('input[name="dueDate"]').fill("2026-07-30");
+  await addForm.getByRole("button", { name: "Add action" }).click();
   await page.waitForLoadState("networkidle");
 
   const newRow = actionRow(page, "Confirm autopay on the car loan");
