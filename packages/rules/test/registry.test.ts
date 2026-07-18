@@ -4,6 +4,7 @@ import { INTAKE_RULES_VERSION } from "../src/intake";
 import { PIPELINE_RULES_VERSION } from "../src/pipeline";
 import { READINESS_RULES_VERSION, REASON_CODE_DESCRIPTIONS } from "../src/readiness";
 import { REVIEW_REASON_DESCRIPTIONS, REVIEW_RULES_VERSION } from "../src/review";
+import { ROADMAP_RULES_VERSION } from "../src/roadmap";
 import { getRule, RULE_REGISTRY } from "../src/registry";
 
 describe("rule registry", () => {
@@ -32,6 +33,7 @@ describe("rule registry", () => {
     expect(getRule("pipeline.transition")?.version).toBe(PIPELINE_RULES_VERSION);
     expect(getRule("intake.completeness")?.version).toBe(INTAKE_RULES_VERSION);
     expect(getRule("readiness.review_gate")?.version).toBe(REVIEW_RULES_VERSION);
+    expect(getRule("roadmap.transition")?.version).toBe(ROADMAP_RULES_VERSION);
     expect(getRule("engagement.status")?.version).toBe(ENGAGEMENT_RULES_VERSION);
   });
 

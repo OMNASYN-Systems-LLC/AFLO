@@ -7,7 +7,13 @@
  * behind the same interfaces (ADR-0002).
  */
 
-import type { EngagementStatus, LifecycleStage, ReasonCode, ReviewReasonCode } from "@aflo/rules";
+import type {
+  EngagementStatus,
+  LifecycleStage,
+  ReasonCode,
+  ReviewReasonCode,
+  RoadmapStatus,
+} from "@aflo/rules";
 
 // Lifecycle stages and engagement statuses are versioned domain
 // configuration owned by the rules kernel (@aflo/rules); re-exported here
@@ -30,6 +36,28 @@ export type DocumentReviewStatus =
 export type ActionStatus = "todo" | "in_progress" | "done";
 
 export type MilestoneStatus = "upcoming" | "in_progress" | "completed";
+
+/**
+ * A client roadmap moving through the founder-required approval workflow
+ * (@aflo/rules roadmap.v1.0.0: Draft → Staff Review → Approved → Published).
+ * Status changes only via the workflow rules — never assigned free-form.
+ * AI may draft language (aiRunId provenance); humans submit, approve, and
+ * publish.
+ */
+export interface Roadmap {
+  id: string;
+  clientId: string;
+  title: string;
+  status: RoadmapStatus;
+  stageAtCreation: LifecycleStage;
+  /** ai_runs provenance when the draft language came from the roadmap-agent; null = manually authored. */
+  aiRunId: string | null;
+  createdByStaffId: string;
+  approvedByStaffId: string | null;
+  approvedAt: string | null; // ISO datetime
+  publishedAt: string | null; // ISO datetime
+  createdAt: string; // ISO datetime
+}
 
 export type ReportStatus = "draft" | "ready_for_review" | "published";
 
@@ -162,6 +190,7 @@ export interface Goal {
 export interface RoadmapMilestone {
   id: string;
   clientId: string;
+  roadmapId: string;
   order: number;
   title: string;
   description: string;

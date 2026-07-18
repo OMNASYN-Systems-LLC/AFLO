@@ -15,6 +15,7 @@ import type {
   ClientStatus,
   QuarterlyReport,
   ReadinessAssessmentRecord,
+  Roadmap,
   RoadmapMilestone,
   StaffMember,
 } from "../domain/types";
@@ -113,6 +114,9 @@ export interface ClientDetail {
   latestAssessmentRecord: ReadinessAssessmentRecord | null;
   engagement: EngagementAssessment;
   goals: Goal[];
+  /** The client's active (non-archived) roadmap; null before one is drafted. */
+  roadmap: Roadmap | null;
+  /** Milestones of the active roadmap, in order. */
   milestones: RoadmapMilestone[];
   /** Month ("YYYY-MM", derived from `now`) that monthlyActions covers. */
   actionPlanMonth: string;

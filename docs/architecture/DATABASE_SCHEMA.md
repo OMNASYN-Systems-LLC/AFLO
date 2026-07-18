@@ -58,7 +58,9 @@ CREATE TYPE client_status AS ENUM ('onboarding', 'active', 'paused', 'completed'
 CREATE TYPE goal_status AS ENUM ('draft', 'active', 'achieved', 'abandoned');
 CREATE TYPE payment_history_status AS ENUM ('on_time', 'late_30', 'late_60', 'late_90', 'missed');
 CREATE TYPE payment_history_source AS ENUM ('manual_entry', 'uploaded_report');
-CREATE TYPE roadmap_status AS ENUM ('draft', 'pending_review', 'approved', 'superseded', 'archived');
+-- Founder-required approval workflow (rules: roadmap.v1.0.0). Transitions
+-- only via the allow-list state machine; 'archived' covers superseded plans.
+CREATE TYPE roadmap_status AS ENUM ('draft', 'staff_review', 'approved', 'published', 'archived');
 CREATE TYPE task_status AS ENUM ('pending', 'in_progress', 'completed', 'skipped');
 CREATE TYPE document_review_status AS ENUM (
   'uploaded', 'pending_review', 'approved', 'rejected', 'expired'
@@ -469,6 +471,7 @@ CREATE TABLE roadmaps (
   ai_run_id        uuid,                -- FK to ai_runs added in §9; NULL for manually authored roadmaps
   approved_by      uuid REFERENCES organization_members(id) ON DELETE SET NULL,
   approved_at      timestamptz,
+  published_at     timestamptz,         -- set when the roadmap is published to the client
   created_at       timestamptz NOT NULL DEFAULT now(),
   updated_at       timestamptz NOT NULL DEFAULT now()
 );

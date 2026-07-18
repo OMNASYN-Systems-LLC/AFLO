@@ -20,3 +20,25 @@ export async function runReadinessAssessmentAction(clientId: string): Promise<vo
   revalidatePath("/clients");
   revalidatePath("/dashboard");
 }
+
+/**
+ * Roadmap approval-workflow action (roadmap.v1.0.0). The store validates
+ * the transition; the UI only offers rule-legal moves, and denials are
+ * audited server-side either way.
+ */
+export async function transitionRoadmapAction(
+  clientId: string,
+  roadmapId: string,
+  toStatus: "draft" | "staff_review" | "approved" | "published" | "archived",
+): Promise<void> {
+  const session = getStaffSession();
+  store.transitionRoadmap({
+    organizationId: session.organizationId,
+    roadmapId,
+    toStatus,
+    actorStaffId: session.staffId,
+  });
+  revalidatePath(`/clients/${clientId}`);
+  revalidatePath("/clients");
+  revalidatePath("/dashboard");
+}

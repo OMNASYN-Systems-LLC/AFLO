@@ -8,16 +8,19 @@ import {
   intakeCompleteness,
   nextRequiredStage,
   pipelineTransition,
+  roadmapTransition,
   sectionCompletion,
   type IntakeCompletenessResult,
   type PipelineTransitionResult,
   type ReviewGateResult,
+  type RoadmapStatus,
+  type RoadmapTransitionResult,
 } from "@aflo/rules";
 import { createEvent, type DomainEvent } from "../events";
 import { toOutboxRecord, type OutboxRecord } from "../outbox";
 import { syntheticDatabase, type SyntheticDatabase } from "../data/synthetic";
 import { toReadinessFacts } from "../domain/facts";
-import type { ClientRecord, IntakeRecord, ReadinessAssessmentRecord } from "../domain/types";
+import type { ClientRecord, IntakeRecord, ReadinessAssessmentRecord, Roadmap } from "../domain/types";
 
 /**
  * Mutable in-memory application store for the prototype phase (ADR-0002:
@@ -103,6 +106,23 @@ export interface IntakeSectionInput {
 export interface CompleteIntakeInput {
   organizationId: string;
   clientId: string;
+  actorStaffId: string;
+}
+
+export type RoadmapDenialCode = "ROADMAP_NOT_FOUND" | "ACTOR_NOT_IN_ORG";
+
+export interface RoadmapActionResult {
+  ok: boolean;
+  denialCode?: RoadmapDenialCode;
+  transition?: RoadmapTransitionResult;
+  roadmap?: Roadmap;
+  emittedEventIds: string[];
+}
+
+export interface TransitionRoadmapInput {
+  organizationId: string;
+  roadmapId: string;
+  toStatus: RoadmapStatus;
   actorStaffId: string;
 }
 
@@ -524,6 +544,107 @@ export class AfloStore {
     });
 
     return { ok: true, intake, transition, completeness, emittedEventIds: emitted.map((e) => e.eventId) };
+  }
+
+  /**
+   * Move a roadmap through the approval workflow (roadmap.v1.0.0). The
+   * roadmap is only reachable through its org-checked client; denials are
+   * audited and never mutate. Approval stamps the approving staff member;
+   * publication stamps the publish time; a reopen withdraws the approval.
+   */
+  transitionRoadmap(input: TransitionRoadmapInput): RoadmapActionResult {
+    const now = this.clock();
+    const roadmap = this.db.roadmaps.find((r) => r.id === input.roadmapId);
+    const client = roadmap ? this.findRecord(input.organizationId, roadmap.clientId) : undefined;
+    if (!roadmap || !client) return { ok: false, denialCode: "ROADMAP_NOT_FOUND", emittedEventIds: [] };
+    const actor = this.findActor(input.organizationId, input.actorStaffId);
+    if (!actor) return { ok: false, denialCode: "ACTOR_NOT_IN_ORG", emittedEventIds: [] };
+
+    const transition = roadmapTransition(roadmap.status, input.toStatus);
+    if (!transition.allowed) {
+      this.audit({
+        organizationId: input.organizationId,
+        actorStaffId: actor.id,
+        action: "roadmap.transition_denied",
+        targetType: "roadmap",
+        targetId: roadmap.id,
+        detail: `client ${client.id}: ${roadmap.status} → ${input.toStatus} denied`,
+        reasonCode: transition.reasonCode,
+        ruleVersion: transition.ruleVersion,
+        occurredAt: now.toISOString(),
+      });
+      return { ok: false, transition, emittedEventIds: [] };
+    }
+
+    const fromStatus = roadmap.status;
+    roadmap.status = input.toStatus;
+    if (input.toStatus === "approved") {
+      roadmap.approvedByStaffId = actor.id;
+      roadmap.approvedAt = now.toISOString();
+    }
+    if (input.toStatus === "published") {
+      roadmap.publishedAt = now.toISOString();
+    }
+    if (transition.reasonCode === "RM_REOPENED") {
+      roadmap.approvedByStaffId = null;
+      roadmap.approvedAt = null;
+    }
+
+    const emitted: DomainEvent[] = [];
+    if (input.toStatus === "approved") {
+      emitted.push(
+        createEvent({
+          eventType: "RoadmapApproved",
+          organizationId: input.organizationId,
+          aggregateId: roadmap.id,
+          actorId: actor.id,
+          occurredAt: now.toISOString(),
+          payload: {
+            clientId: client.id,
+            roadmapId: roadmap.id,
+            approvedByMemberId: actor.id,
+            publishedToClient: false,
+          },
+        }),
+      );
+    }
+    if (input.toStatus === "published") {
+      emitted.push(
+        createEvent({
+          eventType: "RoadmapPublished",
+          organizationId: input.organizationId,
+          aggregateId: roadmap.id,
+          actorId: actor.id,
+          occurredAt: now.toISOString(),
+          payload: { clientId: client.id, roadmapId: roadmap.id, publishedByMemberId: actor.id },
+        }),
+      );
+    }
+    for (const event of emitted) {
+      this.outbox.push(toOutboxRecord(event, { now }));
+    }
+
+    const ACTION_BY_CODE: Record<string, string> = {
+      RM_SUBMITTED: "roadmap.submitted",
+      RM_APPROVED: "roadmap.approved",
+      RM_RETURNED: "roadmap.returned",
+      RM_PUBLISHED: "roadmap.published",
+      RM_REOPENED: "roadmap.reopened",
+      RM_ARCHIVED: "roadmap.archived",
+    };
+    this.audit({
+      organizationId: input.organizationId,
+      actorStaffId: actor.id,
+      action: ACTION_BY_CODE[transition.reasonCode] ?? "roadmap.transitioned",
+      targetType: "roadmap",
+      targetId: roadmap.id,
+      detail: `client ${client.id}: ${fromStatus} → ${input.toStatus}`,
+      reasonCode: transition.reasonCode,
+      ruleVersion: transition.ruleVersion,
+      occurredAt: now.toISOString(),
+    });
+
+    return { ok: true, transition, roadmap, emittedEventIds: emitted.map((e) => e.eventId) };
   }
 
   /** Recorded assessment history for one client, oldest first, org-verified. */
