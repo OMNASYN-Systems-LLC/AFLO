@@ -12,6 +12,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@aflo/academy": "workspace:*",
     "@aflo/ai": "workspace:*",
     "@aflo/notifications": "workspace:*",
     "@aflo/rules": "workspace:*"

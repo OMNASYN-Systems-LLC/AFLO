@@ -140,6 +140,26 @@ export default async function PortalPage() {
         )}
       </SectionCard>
 
+      <SectionCard title="Wealth Academy" subtitle="Lessons your advisor assigned for you">
+        {view.academy.length === 0 ? (
+          <EmptyState message="No lessons assigned yet — your advisor will suggest learning as your plan progresses." />
+        ) : (
+          <ul className="divide-y divide-line/60">
+            {view.academy.map((item) => (
+              <li key={item.lessonTitle} className="flex items-center justify-between gap-3 py-2.5">
+                <div className="min-w-0">
+                  <p className="truncate text-sm text-ink">{item.lessonTitle}</p>
+                  <p className="text-[11px] capitalize text-ink-faint">{item.format}</p>
+                </div>
+                <span className="shrink-0 text-xs text-ink-faint">
+                  {item.completed ? "Completed" : "Assigned " + fmtDate(item.assigned)}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </SectionCard>
+
       <SectionCard title="Progress reports">
         {view.publishedReports.length === 0 ? (
           <EmptyState message="Your first quarterly report will appear here once published." />

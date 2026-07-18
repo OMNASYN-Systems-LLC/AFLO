@@ -175,6 +175,42 @@ export async function setPrimaryGoalAction(clientId: string, goalId: string): Pr
 }
 
 /**
+ * ΛFLO Wealth Academy actions. Assignment is deterministic (education.v1.0.0);
+ * completion is educational only and never gates a regulated product.
+ */
+export async function assignEducationAction(
+  clientId: string,
+  trigger:
+    | "high_utilization"
+    | "incomplete_intake"
+    | "missing_document"
+    | "missed_action"
+    | "appointment_preparation"
+    | "capital_readiness_preparation"
+    | "possible_commingling"
+    | "roadmap_approved",
+): Promise<void> {
+  const session = await getStaffSession();
+  store.assignEducation({
+    organizationId: session.organizationId,
+    clientId,
+    trigger,
+    actorStaffId: session.staffId,
+  });
+  revalidatePath(`/clients/${clientId}`);
+}
+
+export async function completeEducationAction(clientId: string, assignmentId: string): Promise<void> {
+  const session = await getStaffSession();
+  store.completeEducation({
+    organizationId: session.organizationId,
+    assignmentId,
+    actorStaffId: session.staffId,
+  });
+  revalidatePath(`/clients/${clientId}`);
+}
+
+/**
  * Notification-preference action. Preferences are granular per
  * (type, channel), revocable, audited, and enforced before the next send.
  */

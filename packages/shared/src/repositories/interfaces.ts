@@ -160,6 +160,8 @@ export interface PortalView {
     generatedAt: string;
   }[];
   nextAppointment: { purpose: string; scheduledAt: string; channel: string; staffName: string } | null;
+  /** ΛFLO Wealth Academy — assigned lessons, newest first. */
+  academy: { lessonTitle: string; format: string; assigned: string; completed: boolean }[];
 }
 
 export interface PortalRepository {

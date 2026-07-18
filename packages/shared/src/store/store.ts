@@ -41,6 +41,13 @@ import {
   type NotificationType,
   type NotificationVarsMap,
 } from "@aflo/notifications";
+import {
+  ACADEMY_LIBRARY,
+  getLesson,
+  scoreKnowledgeCheck,
+  selectEducation,
+  type EducationTrigger,
+} from "@aflo/academy";
 import { createEvent, type DomainEvent } from "../events";
 import { toOutboxRecord, type OutboxRecord } from "../outbox";
 import { syntheticDatabase, type SyntheticDatabase } from "../data/synthetic";
@@ -50,6 +57,7 @@ import type {
   Appointment,
   ClientDocument,
   ClientRecord,
+  EducationAssignment,
   Goal,
   IntakeRecord,
   MonthlyAction,
@@ -1693,6 +1701,152 @@ export class AfloStore {
     });
 
     return { ok: true, goal, emittedEventIds: [] };
+  }
+
+  /** ΛFLO Wealth Academy assignments for one client, newest first, org-verified. */
+  educationFor(organizationId: string, clientId: string): EducationAssignment[] {
+    const record = this.findRecord(organizationId, clientId);
+    if (!record) return [];
+    return this.db.educationAssignments
+      .filter((e) => e.clientId === clientId)
+      .sort((a, b) => b.assignedAt.localeCompare(a.assignedAt));
+  }
+
+  /**
+   * Assign a lesson from a deterministic trigger (education.v1.0.0). Records
+   * full provenance (trigger, rule version, reason code, content version) and
+   * emits EducationAssigned. Idempotent per (client, lesson, trigger) while an
+   * assignment is still open — the same trigger never stacks duplicates.
+   */
+  assignEducation(input: {
+    organizationId: string;
+    clientId: string;
+    trigger: EducationTrigger;
+    actorStaffId: string;
+  }): { ok: boolean; denialCode?: "CLIENT_NOT_FOUND" | "ACTOR_NOT_IN_ORG"; assignment?: EducationAssignment; emittedEventIds: string[] } {
+    const now = this.clock();
+    const record = this.findRecord(input.organizationId, input.clientId);
+    if (!record) return { ok: false, denialCode: "CLIENT_NOT_FOUND", emittedEventIds: [] };
+    const actor = this.findActor(input.organizationId, input.actorStaffId);
+    if (!actor) return { ok: false, denialCode: "ACTOR_NOT_IN_ORG", emittedEventIds: [] };
+
+    const selection = selectEducation(input.trigger);
+    const existing = this.db.educationAssignments.find(
+      (e) => e.clientId === record.id && e.lessonId === selection.lessonId && e.completedAt === null,
+    );
+    if (existing) {
+      // Already assigned and open — return it without a duplicate event.
+      return { ok: true, assignment: existing, emittedEventIds: [] };
+    }
+
+    const lesson = getLesson(ACADEMY_LIBRARY, selection.lessonId);
+    this.counter += 1;
+    const assignment: EducationAssignment = {
+      id: `edu-${record.id}-${this.counter}`,
+      clientId: record.id,
+      lessonId: selection.lessonId,
+      contentVersion: lesson?.contentVersion ?? "unknown",
+      trigger: selection.trigger,
+      reasonCode: selection.reasonCode,
+      ruleVersion: selection.ruleVersion,
+      assignedAt: now.toISOString(),
+      completedAt: null,
+      knowledgeCheckScore: null,
+      staffReviewStatus: "not_required",
+    };
+    this.db.educationAssignments.push(assignment);
+
+    const event = createEvent({
+      eventType: "EducationAssigned",
+      organizationId: input.organizationId,
+      aggregateId: assignment.id,
+      actorId: actor.id,
+      occurredAt: now.toISOString(),
+      payload: {
+        clientId: record.id,
+        assignmentId: assignment.id,
+        moduleId: selection.lessonId,
+        trigger: selection.trigger,
+      },
+    });
+    this.outbox.push(toOutboxRecord(event, { now }));
+
+    this.audit({
+      organizationId: input.organizationId,
+      actorStaffId: actor.id,
+      action: "education.assigned",
+      targetType: "education_assignment",
+      targetId: assignment.id,
+      detail: `client ${record.id}: "${lesson?.title ?? selection.lessonId}" (${selection.trigger})`,
+      reasonCode: selection.reasonCode,
+      ruleVersion: selection.ruleVersion,
+      occurredAt: now.toISOString(),
+    });
+
+    return { ok: true, assignment, emittedEventIds: [event.eventId] };
+  }
+
+  /**
+   * Complete an education assignment, scoring the knowledge check if the
+   * lesson has one (deterministic). Emits EducationCompleted. Academy
+   * completion is educational only — it never gates a regulated product.
+   */
+  completeEducation(input: {
+    organizationId: string;
+    assignmentId: string;
+    correct?: number;
+    total?: number;
+    actorStaffId: string;
+  }): { ok: boolean; denialCode?: "ASSIGNMENT_NOT_FOUND" | "ACTOR_NOT_IN_ORG" | "ALREADY_COMPLETED"; assignment?: EducationAssignment; emittedEventIds: string[] } {
+    const now = this.clock();
+    const assignment = this.db.educationAssignments.find((e) => e.id === input.assignmentId);
+    const client = assignment ? this.findRecord(input.organizationId, assignment.clientId) : undefined;
+    if (!assignment || !client) return { ok: false, denialCode: "ASSIGNMENT_NOT_FOUND", emittedEventIds: [] };
+    const actor = this.findActor(input.organizationId, input.actorStaffId);
+    if (!actor) return { ok: false, denialCode: "ACTOR_NOT_IN_ORG", emittedEventIds: [] };
+    if (assignment.completedAt !== null) {
+      return { ok: false, denialCode: "ALREADY_COMPLETED", assignment, emittedEventIds: [] };
+    }
+
+    const lesson = getLesson(ACADEMY_LIBRARY, assignment.lessonId);
+    let score: number | null = null;
+    if (lesson?.knowledgeCheck && typeof input.correct === "number" && typeof input.total === "number") {
+      score = scoreKnowledgeCheck(input.correct, input.total, lesson.knowledgeCheck.passThreshold).score;
+    }
+    assignment.completedAt = now.toISOString();
+    assignment.knowledgeCheckScore = score;
+    client.lastActivityAt = now.toISOString();
+
+    const event = createEvent({
+      eventType: "EducationCompleted",
+      organizationId: input.organizationId,
+      aggregateId: assignment.id,
+      actorId: actor.id,
+      occurredAt: now.toISOString(),
+      payload: {
+        clientId: client.id,
+        assignmentId: assignment.id,
+        moduleId: assignment.lessonId,
+        knowledgeCheckScore: score,
+      },
+    });
+    this.outbox.push(toOutboxRecord(event, { now }));
+
+    this.audit({
+      organizationId: input.organizationId,
+      actorStaffId: actor.id,
+      action: "education.completed",
+      targetType: "education_assignment",
+      targetId: assignment.id,
+      detail: `client ${client.id}: "${lesson?.title ?? assignment.lessonId}"${
+        score !== null ? ` (knowledge check ${Math.round(score * 100)}%)` : ""
+      }`,
+      reasonCode: "EDU_COMPLETED",
+      ruleVersion: assignment.ruleVersion,
+      occurredAt: now.toISOString(),
+    });
+
+    return { ok: true, assignment, emittedEventIds: [event.eventId] };
   }
 
   /** Round-up simulator settings for one client, org-verified. */

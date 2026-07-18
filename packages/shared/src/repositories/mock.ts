@@ -5,6 +5,7 @@ import {
   LIFECYCLE_STAGE_LABELS,
   MS_PER_DAY,
 } from "@aflo/rules";
+import { ACADEMY_LIBRARY, getLesson } from "@aflo/academy";
 import { syntheticDatabase, type SyntheticDatabase } from "../data/synthetic";
 import { toReadinessFacts } from "../domain/facts";
 import type {
@@ -282,6 +283,18 @@ export class MockPortalRepository implements PortalRepository {
             staffName: scope.staffById.get(next.staffId)?.name ?? "Your advisor",
           }
         : null,
+      academy: this.db.educationAssignments
+        .filter((e) => e.clientId === clientId)
+        .sort((a, b) => b.assignedAt.localeCompare(a.assignedAt))
+        .map((e) => {
+          const lesson = getLesson(ACADEMY_LIBRARY, e.lessonId);
+          return {
+            lessonTitle: lesson?.title ?? e.lessonId,
+            format: lesson?.format ?? "lesson",
+            assigned: e.assignedAt,
+            completed: e.completedAt !== null,
+          };
+        }),
     };
   }
 }

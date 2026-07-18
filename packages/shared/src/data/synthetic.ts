@@ -14,6 +14,7 @@ import type {
   ClientDocument,
   ClientRecord,
   CreditProfile,
+  EducationAssignment,
   FinancialProfile,
   Goal,
   IntakeRecord,
@@ -86,6 +87,8 @@ export interface SyntheticDatabase {
   consentRecords: ConsentRecord[];
   /** User-controlled notification-channel preferences (append-only, latest-wins). */
   notificationPreferences: NotificationPreferenceRecord[];
+  /** ΛFLO Wealth Academy assignments with provenance. */
+  educationAssignments: EducationAssignment[];
   /** Round-up simulator config per client (simulation only). */
   simulationSettings: SimulationSettings[];
   /** Hypothetical transactions for the round-up simulator (never real). */
@@ -622,6 +625,41 @@ const virtualTransactions: VirtualTransaction[] = [
 ];
 
 /**
+ * ΛFLO Wealth Academy assignments: James Whitaker completed a lesson (with a
+ * knowledge-check score); Renee Solomon has one assigned but not started.
+ * Provenance is fully recorded (trigger, rule version, reason code, content
+ * version).
+ */
+const educationAssignments: EducationAssignment[] = [
+  {
+    id: "edu-whitaker-1",
+    clientId: "c-whitaker",
+    lessonId: "lsn-utilization",
+    contentVersion: "1.0.0",
+    trigger: "high_utilization",
+    reasonCode: "EDU_UTILIZATION",
+    ruleVersion: "education.v1.0.0",
+    assignedAt: daysAgo(40),
+    completedAt: daysAgo(33),
+    knowledgeCheckScore: 1,
+    staffReviewStatus: "approved",
+  },
+  {
+    id: "edu-solomon-1",
+    clientId: "c-solomon",
+    lessonId: "lsn-utilization",
+    contentVersion: "1.0.0",
+    trigger: "high_utilization",
+    reasonCode: "EDU_UTILIZATION",
+    ruleVersion: "education.v1.0.0",
+    assignedAt: daysAgo(6),
+    completedAt: null,
+    knowledgeCheckScore: null,
+    staffReviewStatus: "not_required",
+  },
+];
+
+/**
  * Notification preferences: most clients keep the defaults (no records);
  * Alicia Grant has opted out of appointment SMS — a demonstrable override
  * that suppresses only her SMS channel while in-app and email still send.
@@ -738,6 +776,7 @@ export const syntheticDatabase: SyntheticDatabase = {
   notes,
   consentRecords,
   notificationPreferences,
+  educationAssignments,
   simulationSettings,
   virtualTransactions,
   aiSuggestions,

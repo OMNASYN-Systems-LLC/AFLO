@@ -130,6 +130,26 @@ export interface ReadinessAssessmentRecord {
   actorStaffId: string | null;
 }
 
+/**
+ * An education assignment from the ΛFLO Wealth Academy. Records full
+ * provenance: the source trigger, the deterministic rule version + reason
+ * code, and the exact content version the client was given. Completion is
+ * educational only — it never gates any regulated product.
+ */
+export interface EducationAssignment {
+  id: string;
+  clientId: string;
+  lessonId: string;
+  contentVersion: string;
+  trigger: string;
+  reasonCode: string;
+  ruleVersion: string;
+  assignedAt: string; // ISO datetime
+  completedAt: string | null;
+  knowledgeCheckScore: number | null; // fraction 0..1, or null if no check
+  staffReviewStatus: "not_required" | "pending_review" | "approved";
+}
+
 export type IntakeStatus = "in_progress" | "completed";
 
 /**
