@@ -1,4 +1,5 @@
 import { ENGAGEMENT_RULES_VERSION } from "./engagement";
+import { PIPELINE_RULES_VERSION } from "./pipeline";
 import { READINESS_RULES_VERSION, REASON_CODE_DESCRIPTIONS } from "./readiness";
 
 /**
@@ -99,6 +100,29 @@ export const RULE_REGISTRY: readonly RuleDefinition[] = [
     sources: [],
     changeHistory: [
       { version: "readiness.v1.0.0", date: "2026-07-17", note: "Initial calculator." },
+    ],
+  },
+  {
+    id: "pipeline.transition",
+    version: PIPELINE_RULES_VERSION,
+    effectiveDate: "2026-07-18",
+    description:
+      "Lead→client pipeline transition rules over configurable stage definitions: forward moves may never silently skip required stages; backward moves are allowed only as explicitly flagged staff corrections (PL_REVERSED); the terminal activation stage hands off to the client lifecycle.",
+    inputs: ["pipelineDefinition", "fromStageId", "toStageId", "options.reversal?"],
+    output: "PipelineTransitionResult { allowed, reasonCode, skippedRequiredStageIds }",
+    reasonCodes: [
+      "PL_OK",
+      "PL_REVERSED",
+      "PL_UNKNOWN_STAGE",
+      "PL_SAME_STAGE",
+      "PL_REQUIRED_STAGE_SKIPPED",
+      "PL_TERMINAL_STAGE",
+      "PL_REVERSAL_NOT_ALLOWED",
+      "PL_INVALID_DEFINITION",
+    ],
+    sources: [],
+    changeHistory: [
+      { version: "pipeline.v1.0.0", date: "2026-07-18", note: "Initial configurable pipeline state machine (founder workstream slice C)." },
     ],
   },
   {
