@@ -1,4 +1,4 @@
-import type { ActionStatus, AgentName, ClientStatus, LifecycleStage, StaffMember } from "@aflo/shared";
+import type { ActionStatus, AgentName, ClientStatus, StaffMember } from "@aflo/shared";
 
 /**
  * Fixed-locale, fixed-timezone formatters so server and client render
@@ -71,16 +71,9 @@ export function initials(name: string): string {
     .join("");
 }
 
-export const STAGE_LABELS: Record<LifecycleStage, string> = {
-  recovery: "Recovery",
-  stabilization: "Stabilization",
-  credit_readiness: "Credit Readiness",
-  capital_readiness: "Capital Readiness",
-  acquisition: "Acquisition",
-  maintenance: "Maintenance",
-  growth: "Growth",
-  legacy: "Legacy",
-};
+// Canonical stage labels live with the rules kernel so deterministic report
+// content and UI copy can never drift; re-exported under the existing name.
+export { LIFECYCLE_STAGE_LABELS as STAGE_LABELS } from "@aflo/shared";
 
 // Pipeline stage labels come from the organization's configurable pipeline
 // definition (ClientSummary.pipelineStageLabel) — no static map here.

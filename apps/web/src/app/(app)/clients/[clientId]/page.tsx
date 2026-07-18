@@ -2,6 +2,7 @@ import {
   fullName,
   intakeCompleteness,
   LIFECYCLE_STAGES,
+  quarterOf,
   REVIEW_REASON_DESCRIPTIONS,
   roadmapTransitionsFrom,
   type RoadmapStatus,
@@ -23,8 +24,10 @@ import {
 } from "@/components/badges";
 import {
   addMonthlyActionAction,
+  generateReportAction,
   runReadinessAssessmentAction,
   transitionMonthlyActionAction,
+  transitionReportAction,
   transitionRoadmapAction,
 } from "./actions";
 import { StageTrack } from "@/components/stage";
@@ -513,10 +516,49 @@ export default async function ClientDetailPage({
                   <span className="font-medium text-ink">Next quarter:</span>{" "}
                   {detail.latestReport.focusForNextQuarter}
                 </p>
+                {detail.latestReport.status !== "published" ? (
+                  <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-line/70 pt-3">
+                    {detail.latestReport.status === "draft" ? (
+                      <form
+                        action={transitionReportAction.bind(null, clientId, detail.latestReport.id, "ready_for_review")}
+                      >
+                        <ActionButton label="Submit for review" primary />
+                      </form>
+                    ) : (
+                      <>
+                        <form
+                          action={transitionReportAction.bind(null, clientId, detail.latestReport.id, "published")}
+                        >
+                          <ActionButton label="Publish" primary />
+                        </form>
+                        <form
+                          action={transitionReportAction.bind(null, clientId, detail.latestReport.id, "draft")}
+                        >
+                          <ActionButton label="Return to draft" />
+                        </form>
+                      </>
+                    )}
+                  </div>
+                ) : null}
               </div>
             ) : (
               <EmptyState message="No report generated yet." />
             )}
+            {record.kind === "client" &&
+            detail.latestAssessmentRecord &&
+            detail.latestReport?.quarter !== quarterOf(new Date()) ? (
+              <form action={generateReportAction.bind(null, clientId)} className="mt-4">
+                <button
+                  type="submit"
+                  className="rounded-md bg-emerald px-3.5 py-1.5 text-xs font-medium text-ivory-ink transition-colors hover:bg-emerald-deep"
+                >
+                  Generate {quarterOf(new Date())} report
+                </button>
+                <p className="mt-2 text-[11px] text-ink-faint">
+                  Drafted deterministically from recorded facts; staff review gates publication.
+                </p>
+              </form>
+            ) : null}
           </SectionCard>
 
           <SectionCard title="Notes">

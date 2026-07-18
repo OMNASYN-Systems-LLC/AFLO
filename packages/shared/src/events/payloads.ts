@@ -178,6 +178,13 @@ export interface ProgressReportGeneratedPayload {
   aiRunId: string | null;
 }
 
+export interface ProgressReportPublishedPayload {
+  clientId: string;
+  reportId: string;
+  quarter: string;
+  publishedByMemberId: string;
+}
+
 export interface EducationAssignedPayload {
   clientId: string;
   assignmentId: string;
@@ -240,6 +247,7 @@ export interface EventPayloadMap {
   AppointmentScheduled: AppointmentScheduledPayload;
   EngagementRiskDetected: EngagementRiskDetectedPayload;
   ProgressReportGenerated: ProgressReportGeneratedPayload;
+  ProgressReportPublished: ProgressReportPublishedPayload;
   EducationAssigned: EducationAssignedPayload;
   EducationCompleted: EducationCompletedPayload;
   PartnerReferralCreated: PartnerReferralCreatedPayload;

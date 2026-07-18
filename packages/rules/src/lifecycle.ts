@@ -16,4 +16,20 @@ export const LIFECYCLE_STAGES = [
 
 export type LifecycleStage = (typeof LIFECYCLE_STAGES)[number];
 
+/**
+ * Canonical human labels for the lifecycle stages — owned by the rules
+ * kernel so UI copy and deterministic report content can never drift.
+ * Exhaustive by construction.
+ */
+export const LIFECYCLE_STAGE_LABELS: Record<LifecycleStage, string> = {
+  recovery: "Recovery",
+  stabilization: "Stabilization",
+  credit_readiness: "Credit Readiness",
+  capital_readiness: "Capital Readiness",
+  acquisition: "Acquisition",
+  maintenance: "Maintenance",
+  growth: "Growth",
+  legacy: "Legacy",
+};
+
 export type EngagementStatus = "active" | "cooling" | "at_risk" | "dormant";
