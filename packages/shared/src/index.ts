@@ -1,6 +1,7 @@
 export * from "./domain/types";
 export * from "./domain/facts";
 export * from "./events";
+export * from "./outbox";
 export * from "./repositories/interfaces";
 export * from "./repositories/mock";
 export { SYNTHETIC_NOW, syntheticDatabase } from "./data/synthetic";
