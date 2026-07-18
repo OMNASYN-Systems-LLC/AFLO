@@ -12,6 +12,9 @@ _Last updated: 2026-07-18 · PRs #2, #3, #16 merged to `main`. Founder decisions
 
 ## Completed ✅
 
+- **Slice A — domain event model** (`packages/shared/src/events`): 25 versioned lifecycle event contracts with exhaustive payload map, validating fail-closed factory, correlation/causation threading, deterministic serialization (11 tests). _In PR (branch `claude/event-model`)._
+- Founder decisions applied (**merged PR #17**): ADR-0006 Accepted (Clerk), Neon provisioned status, two-level brand system doc.
+
 - Monorepo scaffold (pnpm workspaces): `apps/web`, `apps/worker`, `packages/{config,rules,ai,shared}` + six documented stub packages.
 - Deterministic rules kernel (`@aflo/rules`): lifecycle stages, readiness-stage rules (`readiness.v1.0.0`), engagement rules (`engagement.v1.0.0`), rule metadata registry (stable id, version, effective date, inputs/output, reason codes, change history) with lockstep tests.
 - AI boundary (`@aflo/ai`): 12-agent roster, charter output envelope; compliance-guard hard-stop semantics.
@@ -28,8 +31,7 @@ _Last updated: 2026-07-18 · PRs #2, #3, #16 merged to `main`. Founder decisions
 
 ## In progress 🔨
 
-- Founder-decision docs PR (ADR-0006 acceptance, Neon status, two-level brand system).
-- Client-lifecycle slice A: domain event model (versioned contracts for the 25 lifecycle events).
+- Client-lifecycle slice B next: PostgreSQL outbox typed contracts + ADR-0008.
 
 ## Next ⏭ (founder-approved build-now order)
 
