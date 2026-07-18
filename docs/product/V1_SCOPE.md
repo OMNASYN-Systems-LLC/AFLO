@@ -19,7 +19,7 @@ V1 is **not** the long-term AFLO vision (tax-cleanup wedge for 1099 solopreneurs
 | Data | Synthetic data only during development. No real PII, credit reports, SSNs, bank records, or credentials in the repository. |
 | Tenancy | Every tenant-owned table carries `organization_id`; queries are scoped by organization and role. |
 | AI boundary | AI drafts, explains, summarizes, classifies tentatively, and asks clarifying questions. AI never alters financial facts, approves loans, selects investments, makes dispute decisions, determines tax treatment, or executes transfers. |
-| Review | High-impact AI output requires staff review or explicit user approval. Every agent response carries `status`, `confidence`, `facts_used`, `rules_used`, `reason_codes`, `recommendations`, `requires_review`, `prohibited_action_detected`. |
+| Review | High-impact AI output requires staff review or explicit user approval. Every agent response carries the charter output contract: `agent_name`, `agent_version`, `organization_id`, `client_id`, `status`, `confidence`, `facts_used`, `missing_facts`, `rule_versions_used`, `reason_codes`, `proposed_actions`, `prohibited_actions_detected`, `requires_human_review`, `review_status`, `created_at`. |
 | Stages | Lifecycle stages (Recovery → Stabilization → Credit Readiness → Capital Readiness → Acquisition → Maintenance → Growth → Legacy) are determined by versioned deterministic rules, never by free-form LLM decisions. |
 | Audit | Every material state change writes an audit event. |
 
@@ -65,7 +65,7 @@ A client's structured financial facts: income sources, debts and obligations, an
 
 ### 2.6 Credit Profile (Manual Score Entry + Report Upload)
 
-Manual entry of credit scores and key credit facts, plus upload of client-provided credit report documents into secure storage with a review state. The `credit-profile-agent` may summarize verified data and flag missing inputs; the `utilization-agent` and `payment-history-agent` run deterministic calculations and neutral summaries.
+Manual entry of credit scores and key credit facts, plus upload of client-provided credit report documents into secure storage with a review state. The `credit-profile-agent` may summarize verified data and flag missing inputs; the `utilization-agent` and `payment-history-agent` run deterministic calculations and neutral summaries. (Full 12-agent roster and boundaries: `docs/architecture/AGENT_BOUNDARIES.md`.)
 **Primary roles:** Golden Key Staff, Client.
 **Out for V1:** Direct bureau pulls, tri-merge report ingestion, automated report parsing into structured tradelines, dispute generation or submission of any kind, score simulation promises.
 
@@ -77,7 +77,7 @@ Client financial goals (e.g., credit target, savings target, purchase readiness)
 
 ### 2.8 Readiness-Stage Engine
 
-Deterministic, versioned rules that place each client in one of the eight lifecycle stages and return reason codes. The `readiness-agent` evaluates versioned rules only; rule versions are recorded with every assessment so results are reproducible and auditable.
+Deterministic, versioned rules that place each client in one of the eight lifecycle stages and return reason codes. The `readiness-stage-agent` evaluates versioned rules only; rule versions are recorded with every assessment so results are reproducible and auditable.
 **Primary roles:** System (deterministic), surfaced to Golden Key Staff and Client.
 **Out for V1:** LLM-decided stage placement, per-tenant custom rule authoring UI (rules are code/config-versioned), predictive stage forecasting.
 

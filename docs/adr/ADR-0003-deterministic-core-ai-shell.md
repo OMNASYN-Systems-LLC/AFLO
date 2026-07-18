@@ -26,32 +26,38 @@ Split all client-affecting logic into two layers with a typed boundary between t
 ### AI shell (`packages/ai`, future)
 
 - LLM calls sit behind an internal provider interface (Claude or OpenAI is an implementation detail).
-- The eight credit-intelligence sub-agents (profile, utilization, payment-history, readiness, roadmap, education, engagement, report) are **logical roles behind one orchestration service**, not independently privileged services. They consume deterministic outputs and verified facts; they never compute financial figures themselves.
+- The twelve credit-intelligence sub-agents (intake-completeness, credit-profile, utilization, payment-history, debt-obligation, readiness-stage, roadmap, education, engagement, report, partner-routing, compliance-guard) are **logical roles behind one orchestration service**, not independently privileged services. They consume deterministic outputs and verified facts; they never compute financial figures themselves. The compliance-guard agent runs last over the others' proposed outputs. (Full roster and boundaries: `docs/architecture/AGENT_BOUNDARIES.md`.)
 - Every agent response is a typed envelope (canonical definition:
-  `packages/shared/src/domain/agent.ts`):
+  `packages/ai/src/envelope.ts`):
 
 ```typescript
 interface AgentEnvelope {
-  agent: AgentName;                        // one of the eight sub-agents
+  id: string;                              // ai_runs.id
+  agentName: AgentName;                    // one of the twelve sub-agents
+  agentVersion: string;                    // version of the agent implementation
+  organizationId: string;
+  clientId: string;
   status: "ok" | "needs_clarification" | "insufficient_data" | "blocked";
   confidence: number;                      // 0..1
   factsUsed: string[];                     // identifiers of verified inputs only
-  rulesUsed: string[];                     // versioned deterministic rules consulted
+  missingFacts: string[];                  // facts needed but absent → clarification
+  ruleVersionsUsed: string[];              // versioned deterministic rules consulted
   reasonCodes: string[];                   // echoed from deterministic evaluation
-  recommendations: AgentRecommendation[];  // proposals, never mutations
-  requiresReview: boolean;
-  prohibitedActionDetected: boolean;
+  proposedActions: ProposedAction[];       // proposals, never mutations
+  prohibitedActionsDetected: string[];     // non-empty → hard stop (compliance-guard)
+  requiresHumanReview: boolean;
   reviewStatus: ReviewStatus;              // pending_review | approved | rejected | auto_published
   createdAt: string;                       // ISO datetime
 }
 ```
 
-  `blocked` covers agent refusals (including prohibited-action detection).
-  Provider/transport errors are not envelope statuses — they are captured on the
-  persisted run record (`ai_runs.status` / `ai_runs.outcome`).
+  `blocked` covers agent refusals; a non-empty `prohibitedActionsDetected` forces
+  `blocked` and hard-stops the run. Provider/transport errors are not envelope
+  statuses — they are captured on the persisted run record (`ai_runs.status` /
+  `ai_runs.outcome`).
 
-- Envelopes are validated at runtime (schema parsing); malformed or `prohibitedActionDetected` output is quarantined, never surfaced.
-- **Review gates:** high-impact output (`requiresReview: true`) is held until Golden Key staff review or explicit client approval; approvals are recorded as audit events. AI output has no write path to financial facts — proposals become state only through application services that check permissions, rule versions, and review status.
+- Envelopes are validated at runtime (schema parsing); malformed output, or any run with a non-empty `prohibitedActionsDetected`, is quarantined, never surfaced.
+- **Review gates:** high-impact output (`requiresHumanReview: true`) is held until Golden Key staff review or explicit client approval; approvals are recorded as audit events. AI output has no write path to financial facts — proposals become state only through application services that check permissions, rule versions, and review status.
 
 ### Prohibited for AI in any layer
 

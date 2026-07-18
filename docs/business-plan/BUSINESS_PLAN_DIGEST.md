@@ -217,7 +217,7 @@ The reconciliation: V1 exercises the plan's **architectural spine** on a differe
 
 | Plan concept | V1 (Golden Key Wealth) expression |
 |---|---|
-| Deterministic core + AI context shell | Versioned readiness-stage rules and deterministic calculators (utilization, thresholds, completion metrics); AI limited to drafting, summarizing, tentative classification, and clarifying questions behind typed agent schemas with confidence, `facts_used`, `rules_used`, `requires_review` |
+| Deterministic core + AI context shell | Versioned readiness-stage rules and deterministic calculators (utilization, thresholds, completion metrics); AI limited to drafting, summarizing, tentative classification, and clarifying questions behind the typed agent envelope with `confidence`, `facts_used`, `missing_facts`, `rule_versions_used`, `proposed_actions`, `requires_human_review`, `prohibited_actions_detected` |
 | Multi-tenant isolation | `organization_id` on every tenant-owned table; org- and role-scoped queries; RLS or equivalent repository policy |
 | Immutable audit ledger | Audit events on every material state change, AI runs, approvals, consent records |
 | Continuous readiness metrics | Lifecycle-stage engine (Recovery → Legacy) computed by versioned rules, never free-form LLM decisions |

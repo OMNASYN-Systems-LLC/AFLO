@@ -43,7 +43,7 @@ $$ LANGUAGE plpgsql;
 -- Platform Admin is intentionally absent: it is a platform-level flag on
 -- users (users.is_platform_admin), never a membership role.
 CREATE TYPE member_role AS ENUM (
-  'organization_owner', 'staff', 'client', 'partner_viewer'
+  'organization_owner', 'organization_admin', 'staff', 'client', 'partner_viewer'
 );
 
 -- The eight lifecycle stages. Stage transitions are decided by versioned
@@ -322,6 +322,24 @@ CREATE TABLE debts (
 );
 
 CREATE INDEX idx_debts_org_client ON debts (organization_id, client_id) WHERE NOT is_closed;
+
+-- Recurring non-debt monthly obligations (rent, utilities, insurance,
+-- subscriptions). Distinct from debts; feeds the deterministic cash-flow and
+-- DTI calculators alongside debt minimum payments.
+CREATE TABLE monthly_obligations (
+  id               uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  organization_id  uuid NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  client_id        uuid NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+  category         text NOT NULL,       -- 'housing', 'utilities', 'insurance', 'transportation', 'subscription', 'other'
+  label            text NOT NULL,       -- display label only
+  amount           numeric(12,2) NOT NULL,
+  is_essential     boolean NOT NULL DEFAULT true,   -- separates essentials floor from discretionary spend
+  is_active        boolean NOT NULL DEFAULT true,
+  created_at       timestamptz NOT NULL DEFAULT now(),
+  updated_at       timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idx_obligations_org_client ON monthly_obligations (organization_id, client_id) WHERE is_active;
 
 -- Manually entered or report-derived payment history. Append-only; feeds the
 -- deterministic kernel's recency/frequency metrics consumed by the
@@ -813,6 +831,11 @@ CREATE TABLE rule_versions (
 
 -- At most one active version per rule set.
 CREATE UNIQUE INDEX idx_rules_one_active ON rule_versions (rule_set) WHERE is_active;
+-- Each `rule_set` here corresponds to an entry in the code-side rule registry
+-- (`packages/rules/src/registry.ts`), which carries the stable id, version,
+-- effective date, description, inputs/output, reason codes, and change history
+-- the charter requires. The DB row is the deployed, checksummed instance; the
+-- registry is the source-of-truth metadata asserted against code by tests.
 
 ALTER TABLE readiness_assessments
   ADD CONSTRAINT fk_assessments_rule_version
@@ -838,9 +861,12 @@ CREATE TABLE ai_runs (
   id                          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   organization_id             uuid NOT NULL REFERENCES organizations(id) ON DELETE RESTRICT,
   client_id                   uuid REFERENCES clients(id) ON DELETE RESTRICT,
-  agent_name                  text NOT NULL,   -- 'credit-profile-agent', 'utilization-agent', 'readiness-agent',
-                                               -- 'payment-history-agent', 'roadmap-agent', 'education-agent',
-                                               -- 'engagement-agent', 'report-agent'
+  agent_name                  text NOT NULL,   -- one of the twelve charter agents: 'intake-completeness-agent',
+                                               -- 'credit-profile-agent', 'utilization-agent', 'payment-history-agent',
+                                               -- 'debt-obligation-agent', 'readiness-stage-agent', 'roadmap-agent',
+                                               -- 'education-agent', 'engagement-agent', 'report-agent',
+                                               -- 'partner-routing-agent', 'compliance-guard-agent'
+  agent_version               text NOT NULL,   -- version of the agent implementation (envelope.agentVersion)
   trigger                     text,            -- actor or system event that initiated the run
   provider                    text NOT NULL,   -- 'anthropic', 'openai' (behind internal provider interface)
   model                       text NOT NULL,
@@ -849,14 +875,15 @@ CREATE TABLE ai_runs (
   inputs_hash                 text,            -- SHA-256 of the canonicalized input context
   response_envelope           jsonb,           -- the full validated typed envelope (or the validation error)
   confidence                  numeric(4,3),    -- 0.000–1.000
-  -- facts_used / rules_used / reason_codes / recommendations are extracted,
-  -- indexable copies derived from response_envelope; the envelope is canonical.
+  -- The columns below are extracted, indexable copies derived from
+  -- response_envelope; the envelope is canonical (charter output contract).
   facts_used                  jsonb NOT NULL DEFAULT '[]',   -- references to verified fact records
-  rules_used                  jsonb NOT NULL DEFAULT '[]',   -- rule_versions ids consulted
+  missing_facts               jsonb NOT NULL DEFAULT '[]',   -- facts the agent needed but did not have
+  rule_versions_used          jsonb NOT NULL DEFAULT '[]',   -- rule_versions ids consulted
   reason_codes                jsonb NOT NULL DEFAULT '[]',
-  recommendations             jsonb NOT NULL DEFAULT '[]',   -- typed proposal payloads; never auto-executed
-  requires_review             boolean NOT NULL DEFAULT true,
-  prohibited_action_detected  boolean NOT NULL DEFAULT false,
+  proposed_actions            jsonb NOT NULL DEFAULT '[]',   -- typed proposal payloads; never auto-executed
+  requires_human_review       boolean NOT NULL DEFAULT true,
+  prohibited_actions_detected jsonb NOT NULL DEFAULT '[]',   -- prohibited-action codes; non-empty hard-stops the run
   review_status               ai_review_status NOT NULL DEFAULT 'pending_review',
   reviewed_by                 uuid REFERENCES organization_members(id) ON DELETE SET NULL,
   reviewed_at                 timestamptz,
@@ -872,9 +899,9 @@ CREATE TABLE ai_runs (
 
 CREATE INDEX idx_ai_runs_org_client ON ai_runs (organization_id, client_id, created_at DESC);
 CREATE INDEX idx_ai_runs_pending_review ON ai_runs (organization_id, created_at)
-  WHERE requires_review AND review_status = 'pending_review';
+  WHERE requires_human_review AND review_status = 'pending_review';
 CREATE INDEX idx_ai_runs_prohibited ON ai_runs (organization_id, created_at)
-  WHERE prohibited_action_detected;
+  WHERE prohibited_actions_detected <> '[]'::jsonb;
 
 ALTER TABLE roadmaps
   ADD CONSTRAINT fk_roadmaps_ai_run FOREIGN KEY (ai_run_id) REFERENCES ai_runs(id) ON DELETE SET NULL;
@@ -886,8 +913,8 @@ ALTER TABLE quarterly_reports
   ADD CONSTRAINT fk_reports_ai_run FOREIGN KEY (ai_run_id) REFERENCES ai_runs(id) ON DELETE SET NULL;
 ```
 
-Recommendations remain summarized inside the run's envelope
-(`ai_runs.response_envelope` / `ai_runs.recommendations`), but the reviewable
+Proposed actions remain summarized inside the run's envelope
+(`ai_runs.response_envelope` / `ai_runs.proposed_actions`), but the reviewable
 records live in `ai_recommendations` — one row per proposal, each carrying its own
 review state. Together with `ai_runs`, this table is the AI service's entire write
 surface (`AUTHORIZATION_MATRIX.md` §5).
@@ -916,9 +943,9 @@ Invariants enforced in the application service layer (and asserted in tests):
 
 - No AI run ever writes to `financial_profiles`, `debts`, `payment_history_entries`,
   `credit_profiles`, `credit_score_entries`, or `readiness_assessments`.
-- Any artifact whose `ai_run_id` has `prohibited_action_detected = true` cannot be
-  approved.
-- `requires_review = true` blocks downstream state transitions (e.g., roadmap
+- Any artifact whose `ai_run_id` has a non-empty `prohibited_actions_detected`
+  cannot be approved (compliance-guard hard stop).
+- `requires_human_review = true` blocks downstream state transitions (e.g., roadmap
   `approved`) until `review_status = 'approved'`.
 
 ### 9.4 Outbox (event model)

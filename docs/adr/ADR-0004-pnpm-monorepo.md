@@ -25,6 +25,8 @@ packages/
 
 Planned packages, added only when a slice needs them (per the README structure): `packages/database` (Neon-backed repositories), `packages/ui` (shared Tailwind components), `packages/rules` (versioned deterministic rules engine), `packages/ai` (provider interface + agent orchestration), and later `auth`, `reports`, `notifications`, `analytics`.
 
+> **Amendment (2026-07-17, Product Charter reconciliation):** the charter mandates the full package layout up front. `packages/config` (shared ts/eslint base), `packages/rules` (dependency-free deterministic kernel + rule registry), and `packages/ai` (agent envelope) are now **real** — extracted from `shared` behind unchanged consumer imports. `database`, `auth`, `ui`, `reports`, `notifications`, and `analytics` exist as **documented thin stubs** (a manifest, an inert export, and a README naming the activating slice) so the layout is visible without speculative code. `packages/shared` re-exports `@aflo/rules`/`@aflo/ai` as a convenience facade for the single app consumer; this facade is scheduled for removal when `packages/database` activates and apps import each package directly.
+
 Conventions:
 
 - Internal packages are consumed via `workspace:*` protocol; nothing is published.
