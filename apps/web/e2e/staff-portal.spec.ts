@@ -28,7 +28,7 @@ test("staff can reach the dashboard and see synthetic KPIs and stage distributio
 
 test("dashboard links through to the client list and a client detail", async ({ page }) => {
   await page.goto("/dashboard");
-  await page.getByRole("link", { name: /Leads & Clients/i }).click();
+  await page.getByRole("link", { name: "Clients", exact: true }).click();
   await expect(page).toHaveURL(/\/clients$/);
 
   // The list renders synthetic clients; open one.

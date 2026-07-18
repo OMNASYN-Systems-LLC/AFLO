@@ -3,7 +3,7 @@ import { EngagementBadge } from "@/components/badges";
 import { StageDistribution } from "@/components/stage";
 import { EmptyState, SectionCard, StatTile } from "@/components/ui";
 import { DEMO_ORG_ID, DEMO_STAFF, dashboardRepository, demoNow } from "@/lib/data";
-import { fmtDateTime, fmtMonth, fmtPct, PIPELINE_LABELS } from "@/lib/format";
+import { fmtDateTime, fmtMonth, fmtPct } from "@/lib/format";
 
 export const metadata = { title: "Dashboard" };
 
@@ -55,11 +55,11 @@ export default async function DashboardPage() {
             <StageDistribution distribution={snapshot.stageDistribution} />
           </SectionCard>
 
-          <SectionCard title="Pipeline" subtitle="Everyone in the book, by pipeline status">
+          <SectionCard title="Pipeline" subtitle="Everyone in the book, by configured pipeline stage">
             <dl className="grid grid-cols-2 gap-x-8 gap-y-3 sm:grid-cols-3">
-              {snapshot.pipeline.map(({ status, count }) => (
-                <div key={status} className="flex items-baseline justify-between border-b border-line/60 pb-2">
-                  <dt className="text-sm text-ink-soft">{PIPELINE_LABELS[status]}</dt>
+              {snapshot.pipeline.map(({ stageId, label, count }) => (
+                <div key={stageId} className="flex items-baseline justify-between border-b border-line/60 pb-2">
+                  <dt className="text-sm text-ink-soft">{label}</dt>
                   <dd className="font-display text-xl text-ink">{count}</dd>
                 </div>
               ))}

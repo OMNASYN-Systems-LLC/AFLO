@@ -1,5 +1,5 @@
 import type { AgentEnvelope } from "@aflo/ai";
-import { MS_PER_DAY } from "@aflo/rules";
+import { MS_PER_DAY, PIPELINE_RULES_VERSION, type PipelineDefinition } from "@aflo/rules";
 import type {
   AdminNote,
   Appointment,
@@ -45,6 +45,8 @@ function cents(dollars: number): number {
 
 export interface SyntheticDatabase {
   organization: Organization;
+  /** The organization's configured pipeline (future: organizations.settings). */
+  pipeline: PipelineDefinition;
   staff: StaffMember[];
   clients: ClientRecord[];
   financialProfiles: FinancialProfile[];
@@ -61,6 +63,24 @@ export interface SyntheticDatabase {
 
 const ORG_ID = "org-golden-key";
 
+/**
+ * Golden Key's configured pipeline: the founder-required backbone plus an
+ * optional "contacted" nurture stage. Stage ids are referenced by
+ * ClientRecord.pipelineStageId; transitions only via @aflo/rules.
+ */
+export const GOLDEN_KEY_PIPELINE: PipelineDefinition = {
+  id: "golden-key-v1",
+  version: PIPELINE_RULES_VERSION,
+  stages: [
+    { id: "new_lead", label: "New lead", order: 1, required: true, terminal: false },
+    { id: "contacted", label: "Contacted", order: 2, required: false, terminal: false },
+    { id: "consultation_scheduled", label: "Consultation scheduled", order: 3, required: true, terminal: false },
+    { id: "intake_started", label: "Intake started", order: 4, required: true, terminal: false },
+    { id: "intake_completed", label: "Intake completed", order: 5, required: true, terminal: false },
+    { id: "client_activated", label: "Client activated", order: 6, required: true, terminal: true },
+  ],
+};
+
 const organization: Organization = {
   id: ORG_ID,
   name: "Golden Key Wealth",
@@ -73,10 +93,9 @@ const staff: StaffMember[] = [
   { id: "s-lin", organizationId: ORG_ID, name: "Keisha Lin", role: "staff", title: "Client Success Coordinator" },
 ];
 
-function client(
+function activatedClient(
   id: string,
-  kind: ClientRecord["kind"],
-  pipelineStatus: ClientRecord["pipelineStatus"],
+  clientStatus: NonNullable<ClientRecord["clientStatus"]>,
   firstName: string,
   lastName: string,
   assignedStaffId: string,
@@ -86,8 +105,34 @@ function client(
   return {
     id,
     organizationId: ORG_ID,
-    kind,
-    pipelineStatus,
+    kind: "client",
+    pipelineStageId: "client_activated",
+    clientStatus,
+    firstName,
+    lastName,
+    email: `${firstName.toLowerCase()}.${lastName.toLowerCase()}@example.test`,
+    phone: "555-0100",
+    assignedStaffId,
+    joinedAt: daysAgo(joinedDaysAgo),
+    lastActivityAt: daysAgo(lastActivityDaysAgo),
+  };
+}
+
+function lead(
+  id: string,
+  pipelineStageId: string,
+  firstName: string,
+  lastName: string,
+  assignedStaffId: string,
+  joinedDaysAgo: number,
+  lastActivityDaysAgo: number,
+): ClientRecord {
+  return {
+    id,
+    organizationId: ORG_ID,
+    kind: "lead",
+    pipelineStageId,
+    clientStatus: null,
     firstName,
     lastName,
     email: `${firstName.toLowerCase()}.${lastName.toLowerCase()}@example.test`,
@@ -99,18 +144,18 @@ function client(
 }
 
 const clients: ClientRecord[] = [
-  client("c-bell", "client", "active", "Marcus", "Bell", "s-boyd", 210, 5),
-  client("c-grant", "client", "active", "Alicia", "Grant", "s-mercer", 180, 2),
-  client("c-solomon", "client", "active", "Renee", "Solomon", "s-mercer", 320, 9),
-  client("c-pryor", "client", "active", "Devon", "Pryor", "s-boyd", 150, 21),
-  client("c-okafor", "client", "active", "Tanya", "Okafor", "s-mercer", 400, 3),
-  client("c-whitaker", "client", "active", "James", "Whitaker", "s-boyd", 510, 1),
-  client("c-ramirez", "client", "active", "Sofia", "Ramirez", "s-lin", 95, 12),
-  client("c-ngo", "client", "paused", "Harold", "Ngo", "s-boyd", 460, 72),
-  client("l-natarajan", "lead", "consult_scheduled", "Priya", "Natarajan", "s-mercer", 12, 4),
-  client("l-cole", "lead", "new_lead", "Terrence", "Cole", "s-lin", 2, 1),
-  client("l-lawson", "lead", "contacted", "Beatrice", "Lawson", "s-lin", 45, 38),
-  client("l-haddad", "lead", "onboarding", "Omar", "Haddad", "s-boyd", 20, 6),
+  activatedClient("c-bell", "active", "Marcus", "Bell", "s-boyd", 210, 5),
+  activatedClient("c-grant", "active", "Alicia", "Grant", "s-mercer", 180, 2),
+  activatedClient("c-solomon", "active", "Renee", "Solomon", "s-mercer", 320, 9),
+  activatedClient("c-pryor", "active", "Devon", "Pryor", "s-boyd", 150, 21),
+  activatedClient("c-okafor", "active", "Tanya", "Okafor", "s-mercer", 400, 3),
+  activatedClient("c-whitaker", "active", "James", "Whitaker", "s-boyd", 510, 1),
+  activatedClient("c-ramirez", "active", "Sofia", "Ramirez", "s-lin", 95, 12),
+  activatedClient("c-ngo", "paused", "Harold", "Ngo", "s-boyd", 460, 72),
+  lead("l-natarajan", "consultation_scheduled", "Priya", "Natarajan", "s-mercer", 12, 4),
+  lead("l-cole", "new_lead", "Terrence", "Cole", "s-lin", 2, 1),
+  lead("l-lawson", "contacted", "Beatrice", "Lawson", "s-lin", 45, 38),
+  lead("l-haddad", "intake_started", "Omar", "Haddad", "s-boyd", 20, 6),
 ];
 
 const financialProfiles: FinancialProfile[] = [
@@ -427,6 +472,7 @@ const aiSuggestions: AgentEnvelope[] = [
 
 export const syntheticDatabase: SyntheticDatabase = {
   organization,
+  pipeline: GOLDEN_KEY_PIPELINE,
   staff,
   clients,
   financialProfiles,

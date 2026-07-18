@@ -6,6 +6,7 @@ import {
   DocStatusBadge,
   EngagementBadge,
   KindBadge,
+  ClientStatusBadge,
   PipelineBadge,
   ReportStatusBadge,
   StageBadge,
@@ -45,7 +46,7 @@ export default async function ClientDetailPage({
   return (
     <div className="space-y-6">
       <Link href="/clients" className="text-xs font-medium text-ink-soft hover:text-emerald">
-        ← Leads &amp; Clients
+        ← Clients
       </Link>
 
       <div className="flex flex-wrap items-start justify-between gap-4">
@@ -53,7 +54,8 @@ export default async function ClientDetailPage({
           <h1 className="font-display text-3xl text-ink">{name}</h1>
           <div className="mt-2.5 flex flex-wrap items-center gap-2">
             <KindBadge kind={record.kind} />
-            <PipelineBadge status={record.pipelineStatus} />
+            <PipelineBadge label={detail.pipelineStageLabel} />
+            {record.clientStatus ? <ClientStatusBadge status={record.clientStatus} /> : null}
             <EngagementBadge status={engagement.status} />
             <span className="text-xs text-ink-faint">
               {engagement.daysSinceLastActivity}{" "}

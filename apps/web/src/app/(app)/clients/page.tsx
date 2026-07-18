@@ -1,9 +1,9 @@
 import Link from "next/link";
 import { EngagementBadge, KindBadge, StageBadge } from "@/components/badges";
 import { DEMO_ORG_ID, clientRepository, demoNow } from "@/lib/data";
-import { fmtDate, PIPELINE_LABELS } from "@/lib/format";
+import { fmtDate } from "@/lib/format";
 
-export const metadata = { title: "Leads & Clients" };
+export const metadata = { title: "Clients" };
 
 export default async function ClientsPage() {
   const rows = await clientRepository.list(DEMO_ORG_ID, demoNow);
@@ -13,7 +13,7 @@ export default async function ClientsPage() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="font-display text-3xl text-ink">Leads &amp; Clients</h1>
+        <h1 className="font-display text-3xl text-ink">Clients</h1>
         <p className="mt-1.5 text-sm text-ink-soft">
           {clients} clients and {leads} leads. Stage comes from versioned readiness rules;
           engagement from activity recency.
@@ -48,7 +48,12 @@ export default async function ClientsPage() {
                 <td className="px-5 py-3.5">
                   <KindBadge kind={row.kind} />
                 </td>
-                <td className="px-5 py-3.5 text-ink-soft">{PIPELINE_LABELS[row.pipelineStatus]}</td>
+                <td className="px-5 py-3.5 text-ink-soft">
+                  {row.pipelineStageLabel}
+                  {row.clientStatus === "paused" ? (
+                    <span className="ml-1.5 text-xs text-ink-faint">(paused)</span>
+                  ) : null}
+                </td>
                 <td className="px-5 py-3.5">
                   <StageBadge stage={row.stage} />
                 </td>

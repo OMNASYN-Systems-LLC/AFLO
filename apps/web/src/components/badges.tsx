@@ -1,13 +1,13 @@
 import type {
   ClientKind,
+  ClientStatus,
   DocumentReviewStatus,
   EngagementStatus,
   LifecycleStage,
-  PipelineStatus,
   ReportStatus,
   ReviewStatus,
 } from "@aflo/shared";
-import { ENGAGEMENT_LABELS, PIPELINE_LABELS, STAGE_LABELS } from "@/lib/format";
+import { CLIENT_STATUS_LABELS, ENGAGEMENT_LABELS, STAGE_LABELS } from "@/lib/format";
 
 /**
  * Status is never color alone: every badge carries its text label, and tones
@@ -64,8 +64,15 @@ export function KindBadge({ kind }: { kind: ClientKind }) {
   );
 }
 
-export function PipelineBadge({ status }: { status: PipelineStatus }) {
-  return <Badge tone="neutral" label={PIPELINE_LABELS[status]} />;
+/** Pipeline stage label comes from the org's configurable definition. */
+export function PipelineBadge({ label }: { label: string }) {
+  return <Badge tone="neutral" label={label} />;
+}
+
+export function ClientStatusBadge({ status }: { status: ClientStatus }) {
+  return (
+    <Badge tone={status === "active" ? "good" : "calm"} label={CLIENT_STATUS_LABELS[status]} />
+  );
 }
 
 const DOC_STATUS: Record<DocumentReviewStatus, { label: string; tone: Tone }> = {

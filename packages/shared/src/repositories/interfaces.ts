@@ -12,7 +12,7 @@ import type {
   LifecycleStage,
   MonthlyAction,
   Organization,
-  PipelineStatus,
+  ClientStatus,
   QuarterlyReport,
   RoadmapMilestone,
   StaffMember,
@@ -44,7 +44,9 @@ export interface StageCount {
 }
 
 export interface PipelineCount {
-  status: PipelineStatus;
+  stageId: string;
+  /** Label from the organization's pipeline definition. */
+  label: string;
   count: number;
 }
 
@@ -77,7 +79,9 @@ export interface ClientSummary {
   id: string;
   name: string;
   kind: ClientKind;
-  pipelineStatus: PipelineStatus;
+  pipelineStageId: string;
+  pipelineStageLabel: string;
+  clientStatus: ClientStatus | null;
   /** Null until intake captures enough verified facts for an assessment. */
   stage: LifecycleStage | null;
   primaryGoal: string | null;
@@ -95,6 +99,8 @@ export interface DerivedFinancialMetrics {
 
 export interface ClientDetail {
   record: ClientRecord;
+  /** Label for record.pipelineStageId from the org's pipeline definition. */
+  pipelineStageLabel: string;
   /** Null when the assignment dangles — surfaced as "Unassigned", never fabricated. */
   assignedStaff: StaffMember | null;
   financialProfile: FinancialProfile | null;

@@ -1,4 +1,4 @@
-import type { ActionStatus, AgentName, LifecycleStage, PipelineStatus, StaffMember } from "@aflo/shared";
+import type { ActionStatus, AgentName, ClientStatus, LifecycleStage, StaffMember } from "@aflo/shared";
 
 /**
  * Fixed-locale, fixed-timezone formatters so server and client render
@@ -82,11 +82,10 @@ export const STAGE_LABELS: Record<LifecycleStage, string> = {
   legacy: "Legacy",
 };
 
-export const PIPELINE_LABELS: Record<PipelineStatus, string> = {
-  new_lead: "New lead",
-  contacted: "Contacted",
-  consult_scheduled: "Consult scheduled",
-  onboarding: "Onboarding",
+// Pipeline stage labels come from the organization's configurable pipeline
+// definition (ClientSummary.pipelineStageLabel) — no static map here.
+
+export const CLIENT_STATUS_LABELS: Record<NonNullable<ClientStatus>, string> = {
   active: "Active",
   paused: "Paused",
 };
