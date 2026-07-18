@@ -2,9 +2,11 @@
 
 You are the principal software architect and implementation partner for AFLO, the Autonomous Financial Lifecycle Orchestrator.
 
+> **Source-of-truth order.** This brief is authoritative below `docs/product/PRODUCT_CHARTER.md`. Resolve conflicts using: (1) approved founder decisions, (2) the Product Charter, (3) this file, (4) accepted ADRs, (5) architecture docs, (6) V1 scope, (7) business-plan digest, (8) historical research. When this file and the charter disagree, the charter wins and this file is updated to match — never leave two active architectures.
+
 ## Product Mission
 
-Build **Golden Key Wealth, powered by AFLO** as the first production implementation. The initial product is a multi-tenant financial-readiness, client-retention, and workflow platform. Long term, AFLO may become a financial verification and interoperability layer, but V1 must solve Golden Key Wealth's actual operating problems first.
+Build **Golden Key Wealth, powered by AFLO** as the first production implementation. The V1 is a multi-tenant financial-readiness, credit-recovery, client-retention, workflow, education, reporting, referral, billing, and communication platform. Long term, AFLO becomes a financial verification and interoperability layer for consumers, professionals, employers, lenders, CPAs, community organizations, and institutions — but V1 must solve Golden Key Wealth's actual operating problems first.
 
 ## Immediate Objective
 
@@ -14,17 +16,23 @@ Do not attempt to build every long-term feature at once. Deliver in small, revie
 
 ## Required Stack
 
-- Monorepo
-- Next.js + TypeScript web application deployed to Vercel
-- Railway worker service for scheduled jobs and long-running processing
-- Neon PostgreSQL
+- pnpm-workspaces monorepo
+- Next.js App Router + TypeScript (strict) web application deployed to Vercel (`apps/web`)
+- Railway worker service for scheduled jobs and long-running processing (`apps/worker`)
+- Neon PostgreSQL (branches: `main` prod, `preview`, `dev`)
+- Drizzle ORM (ADR-0005) unless a later accepted ADR changes it
 - Tailwind CSS
-- Clerk or Auth.js
-- Vercel Blob or S3-compatible document storage
-- Resend
+- Clerk via `packages/auth` (Auth.js fallback per ADR-0006, founder-gated)
+- Stripe for invoices, subscriptions, and automatic payments (regulated execution stays with Stripe)
+- Resend for email via `packages/notifications`
+- Vercel Blob or private S3-compatible document storage (signed URLs only)
 - PostHog
 - Sentry
-- Claude or OpenAI API behind an internal provider interface
+- Provider-neutral AI integration supporting `mock`, Claude, and OpenAI via `packages/ai`
+
+**Workspace packages:** `database`, `auth`, `ui`, `rules`, `ai`, `reports`, `notifications`, `analytics`, `billing`, `integrations`, `shared`, `config`. Shared domain logic lives in packages, never duplicated between apps.
+
+AFLO never stores raw card numbers, CVVs, full bank-account numbers, or payment credentials — Stripe is the system of record for payment instruments and charge execution.
 
 ## Architecture Rules
 
@@ -39,11 +47,12 @@ Do not attempt to build every long-term feature at once. Deliver in small, revie
 9. Use synthetic data only during development.
 10. Never commit secrets, production PII, credit reports, SSNs, bank records, or credentials.
 
-## First Roles
+## Roles
 
-- Platform Admin
+- Platform Admin (platform-level flag on `users`, never a membership; all cross-tenant access audited)
 - Organization Owner
-- Golden Key Staff
+- Organization Admin (Owner minus membership and partner-directory management — see `AUTHORIZATION_MATRIX.md`)
+- Staff / Advisor (Golden Key Staff)
 - Client
 - Partner Viewer, later
 
@@ -78,35 +87,45 @@ Stages are determined by versioned rules, not free-form LLM decisions.
 - Quarterly progress reports
 - Partner directory and referrals
 - Admin notes and communication history
+- Automated communications (Resend) with consent, templates, and delivery logging
+- Billing: service packages, invoices, subscriptions, and payments via Stripe (test mode until founder-approved packages and live credentials exist)
 - Engagement and retention analytics
 - Virtual round-up / micro-allocation simulator
+- Administrative settings layer (configurable pipeline stages, service packages, task/roadmap/email templates, education modules, appointment types, staff assignments, partner categories, billing terms, reminder schedules)
 - Audit and consent records
 
 ## Credit Intelligence Engine
 
-Design a bounded credit intelligence system with these components:
+A bounded orchestrator with **twelve** logical sub-agents (full boundaries in `docs/architecture/AGENT_BOUNDARIES.md`; canonical envelope in `packages/ai/src/envelope.ts`):
 
-- `credit-profile-agent`: summarizes verified profile data and identifies missing inputs.
-- `utilization-agent`: calculates utilization and tests deterministic threshold rules.
-- `payment-history-agent`: summarizes user-entered or uploaded history without making disputes.
-- `readiness-agent`: evaluates versioned readiness rules and returns reason codes.
-- `roadmap-agent`: drafts a roadmap from approved facts and deterministic outputs.
-- `education-agent`: selects relevant educational content.
-- `engagement-agent`: detects inactivity and recommends follow-up.
-- `report-agent`: drafts quarterly progress summaries.
+- `intake-completeness-agent`: identifies missing fields/documents; produces clarification requests.
+- `credit-profile-agent`: summarizes verified credit information; flags facts requiring staff verification.
+- `utilization-agent`: deterministic utilization calculations and thresholds; never guarantees score impact.
+- `payment-history-agent`: organizes user-entered/uploaded history; flags inconsistencies; never contacts creditors.
+- `debt-obligation-agent`: summarizes balances and monthly obligations; supports readiness calculations.
+- `readiness-stage-agent`: applies versioned deterministic stage rules; returns reason codes; cannot silently override human-approved exceptions.
+- `roadmap-agent`: drafts a roadmap from approved facts and templates; no legal or regulated decisions.
+- `education-agent`: selects education relevant to the current stage and task.
+- `engagement-agent`: detects inactivity, incomplete tasks, missed reviews, missing documents.
+- `report-agent`: drafts quarterly progress summaries from verified data.
+- `partner-routing-agent`: applies approved eligibility/routing gates; never approves loans or guarantees acceptance.
+- `compliance-guard-agent`: runs last over proposed outputs; blocks prohibited claims/actions (hard stop).
 
-These are logical sub-agents behind one orchestration service, not independently privileged autonomous services. They may propose actions but cannot execute regulated or irreversible actions.
+These are logical sub-agents behind one orchestration service, not independently privileged autonomous services. They may propose actions but cannot execute regulated or irreversible actions, and cannot override deterministic outcomes.
 
-Each agent response must use a typed schema containing:
+Each agent response must use the typed envelope containing:
 
-- `status`
-- `confidence`
-- `facts_used`
-- `rules_used`
-- `reason_codes`
-- `recommendations`
-- `requires_review`
-- `prohibited_action_detected`
+- `agent_name`, `agent_version`
+- `organization_id`, `client_id`
+- `status`, `confidence`
+- `facts_used`, `missing_facts`
+- `rule_versions_used`, `reason_codes`
+- `proposed_actions`
+- `prohibited_actions_detected`
+- `requires_human_review`, `review_status`
+- `created_at`
+
+A non-empty `prohibited_actions_detected` forces `status: "blocked"`, writes an audit event, and keeps the output out of every review queue.
 
 ## Inspiration Boundaries
 
@@ -158,8 +177,8 @@ For each implementation cycle:
 6. Run type checking, linting, tests, and build.
 7. Document environment variables and migrations.
 8. Commit with a small descriptive message.
-9. Open a draft PR for review.
-10. Never merge automatically unless explicitly directed.
+9. Open or update the pull request.
+10. Merge under the standing auto-merge authorization only when **all** gates pass — CI green; typecheck, lint, unit/integration and critical Playwright tests, and production build all pass; no secrets; no real PII; tenant-isolation tests pass; no destructive migration; no regulated activity introduced; inside the approved roadmap; deployment docs current. Otherwise open the PR, document the risk, and wait for founder review. **Never** auto-merge destructive production migrations, payment-webhook-verification changes, authorization/tenant-isolation boundary changes without tests, real-money logic outside Stripe, bureau integrations, automated disputes, tax filing, investment execution, lending decisions, government-benefit submissions, or anything that weakens sensitive-data controls.
 
 ## First Deliverables
 
