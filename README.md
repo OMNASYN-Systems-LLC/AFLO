@@ -46,12 +46,18 @@ packages/
   rules/          # dependency-free deterministic kernel + rule registry
   ai/             # agent envelope; provider interface + orchestrator (later)
   shared/         # domain model, repository interfaces, mock implementations
+  billing/        # deterministic billing kernel (state machines, entitlement)
   database/       # Neon schema, Drizzle models, migrations        (stub)
   auth/           # auth provider adapter + authorization policies  (stub)
   ui/             # shared design-system components                 (stub)
   reports/        # quarterly report assembly                       (stub)
   notifications/  # email + reminder delivery                       (stub)
   analytics/      # PostHog instrumentation                         (stub)
+  academy/                   # Wealth Unlockers Academy             (stub)
+  partner-marketplace/       # partner catalog + neutrality engine  (stub)
+  credit-data/               # provider-neutral bureau adapters     (stub, gated)
+  opportunity-intelligence/  # opportunity & risk feed              (stub, phase 2)
+  embedded-finance/          # future-only partner boundary         (stub, gated)
 docs/
   business-plan/  product/  architecture/  adr/
   compliance/     research/  design/       deployment/

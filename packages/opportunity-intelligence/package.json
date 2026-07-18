@@ -1,0 +1,8 @@
+{
+  "name": "@aflo/opportunity-intelligence",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Opportunity & Risk Intelligence Feed: trusted-source ingestion, jurisdiction/effective dates, eligibility-rule matching, personalized summaries with citations, and review gates. Stub — phase 2, after the core client lifecycle works.",
+  "exports": { ".": "./src/index.ts" }
+}

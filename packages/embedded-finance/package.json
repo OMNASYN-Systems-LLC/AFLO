@@ -1,0 +1,8 @@
+{
+  "name": "@aflo/embedded-finance",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "FUTURE-ONLY boundary for credit-builder, card-program, savings, investment, and insurance partners. Isolated from the readiness engine so commercial compensation can never change a readiness result. Stub — DISABLED until commercial and compliance validation.",
+  "exports": { ".": "./src/index.ts" }
+}

@@ -72,6 +72,8 @@ importers:
         specifier: ^8.64.0
         version: 8.64.0(eslint@10.7.0(jiti@2.7.0))(typescript@5.9.3)
 
+  packages/academy: {}
+
   packages/ai:
     devDependencies:
       '@eslint/js':
@@ -122,9 +124,17 @@ importers:
         specifier: ^8.64.0
         version: 8.64.0(eslint@10.7.0(jiti@2.7.0))(typescript@5.9.3)
 
+  packages/credit-data: {}
+
   packages/database: {}
 
+  packages/embedded-finance: {}
+
   packages/notifications: {}
+
+  packages/opportunity-intelligence: {}
+
+  packages/partner-marketplace: {}
 
   packages/reports: {}
 
