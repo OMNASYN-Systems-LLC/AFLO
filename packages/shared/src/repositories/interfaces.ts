@@ -14,6 +14,7 @@ import type {
   Organization,
   ClientStatus,
   QuarterlyReport,
+  ReadinessAssessmentRecord,
   RoadmapMilestone,
   StaffMember,
 } from "../domain/types";
@@ -106,8 +107,10 @@ export interface ClientDetail {
   financialProfile: FinancialProfile | null;
   creditProfile: CreditProfile | null;
   derived: DerivedFinancialMetrics | null;
-  /** Deterministic stage assessment; null while intake is incomplete. */
+  /** Live preview computed from current verified facts; null while profiles are missing. */
   assessment: ReadinessAssessment | null;
+  /** Latest recorded assessment from the workflow; null before the first run. */
+  latestAssessmentRecord: ReadinessAssessmentRecord | null;
   engagement: EngagementAssessment;
   goals: Goal[];
   milestones: RoadmapMilestone[];

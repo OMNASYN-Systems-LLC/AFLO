@@ -435,10 +435,17 @@ CREATE TABLE readiness_assessments (
   stage            lifecycle_stage NOT NULL,
   previous_stage   lifecycle_stage,
   inputs           jsonb NOT NULL,      -- snapshot of facts evaluated
-  reason_codes     jsonb NOT NULL DEFAULT '[]',  -- e.g. ["UTILIZATION_ABOVE_30", "NO_EMERGENCY_FUND"]
+  reason_codes     jsonb NOT NULL DEFAULT '[]',  -- e.g. ["RC_UTILIZATION_ABOVE_30"]
+  -- Deterministic proposal selected by the binding blocker (first reason code).
+  proposed_next_action  text NOT NULL DEFAULT '',
+  -- Set by the deterministic review gate (review.v1.0.0), never by AI.
+  requires_human_review boolean NOT NULL DEFAULT false,
+  review_reason_codes   jsonb NOT NULL DEFAULT '[]',  -- e.g. ["RV_STAGE_REGRESSION"]
   assessed_by      uuid REFERENCES organization_members(id) ON DELETE SET NULL, -- NULL = scheduled job
   created_at       timestamptz NOT NULL DEFAULT now()
 );
+-- Attempts that cannot run (incomplete intake, missing profiles) are audit
+-- events only — a row here always means the rules actually ran.
 
 CREATE INDEX idx_assessments_org_client ON readiness_assessments (organization_id, client_id, created_at DESC);
 ```
