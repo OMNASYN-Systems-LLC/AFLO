@@ -12,7 +12,7 @@ _Last updated: 2026-07-18 · PRs #2, #3, #16 merged to `main`. Founder decisions
 
 ## Completed ✅
 
-- **Slice A — domain event model** (`packages/shared/src/events`): 25 versioned lifecycle event contracts with exhaustive payload map, validating fail-closed factory, correlation/causation threading, deterministic serialization (11 tests). _In PR (branch `claude/event-model`)._
+- **Slice A — domain event model** (`packages/shared/src/events`): 25 versioned lifecycle event contracts with exhaustive payload map, validating fail-closed factory, correlation/causation threading, deterministic serialization (11 tests). **Merged (PR #18).**
 - Founder decisions applied (**merged PR #17**): ADR-0006 Accepted (Clerk), Neon provisioned status, two-level brand system doc.
 
 - Monorepo scaffold (pnpm workspaces): `apps/web`, `apps/worker`, `packages/{config,rules,ai,shared}` + six documented stub packages.
@@ -31,7 +31,8 @@ _Last updated: 2026-07-18 · PRs #2, #3, #16 merged to `main`. Founder decisions
 
 ## In progress 🔨
 
-- Client-lifecycle slice B next: PostgreSQL outbox typed contracts + ADR-0008.
+- Client-lifecycle slice B: outbox typed contracts + deterministic claim/complete/fail rules (`outbox.v1.0.0`) + ADR-0008. _In PR (branch `claude/outbox-contracts`)._
+- Slice C next: lead→client deterministic pipeline (configurable stages) + staff conversion workflow.
 
 ## Next ⏭ (founder-approved build-now order)
 

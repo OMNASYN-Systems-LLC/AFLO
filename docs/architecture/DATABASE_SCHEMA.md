@@ -957,12 +957,15 @@ idempotently, and marks the result.
 ```sql
 CREATE TABLE outbox (
   id               uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  event_id         uuid NOT NULL UNIQUE, -- DomainEvent.eventId — producer-side idempotency anchor
+  event_version    integer NOT NULL,     -- per-type payload schema version (EVENT_VERSIONS)
   organization_id  uuid REFERENCES organizations(id) ON DELETE RESTRICT,
-  event_type       text NOT NULL,       -- 'lead.created', 'readiness.assessed', 'document.uploaded',
-                                        -- 'engagement.risk_detected', 'quarterly_report.requested', ...
+  event_type       text NOT NULL,       -- catalog name: 'LeadCreated', 'ReadinessAssessed',
+                                        -- 'DocumentUploaded', 'EngagementRiskDetected', ...
+                                        -- (packages/shared/src/events/catalog.ts, ADR-0008)
   aggregate_type   text NOT NULL,       -- 'client', 'roadmap', 'document', ...
   aggregate_id     uuid NOT NULL,
-  payload          jsonb NOT NULL,
+  payload          jsonb NOT NULL,      -- the full serialized DomainEvent envelope
   status           outbox_status NOT NULL DEFAULT 'pending',
   attempts         integer NOT NULL DEFAULT 0,
   max_attempts     integer NOT NULL DEFAULT 5,
@@ -982,7 +985,10 @@ CREATE INDEX idx_outbox_aggregate ON outbox (aggregate_type, aggregate_id);
 
 Worker contract: `SELECT ... FOR UPDATE SKIP LOCKED`, exponential backoff via
 `next_attempt_at`, transition to `dead_letter` when `attempts >= max_attempts`, and
-idempotency keyed on `outbox.id` in every handler.
+idempotency keyed on `outbox.id` in every handler. The claim/complete/fail
+transition rules are the deterministic `outbox.v1.0.0` functions in
+`packages/shared/src/outbox` (ADR-0008) — the worker applies their output, it
+never improvises state changes.
 
 ---
 
