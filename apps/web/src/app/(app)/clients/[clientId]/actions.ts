@@ -175,6 +175,33 @@ export async function setPrimaryGoalAction(clientId: string, goalId: string): Pr
 }
 
 /**
+ * Notification-preference action. Preferences are granular per
+ * (type, channel), revocable, audited, and enforced before the next send.
+ */
+export async function setNotificationPreferenceAction(
+  clientId: string,
+  notificationType:
+    | "appointment_scheduled"
+    | "roadmap_published"
+    | "report_published"
+    | "document_requested"
+    | "task_assigned",
+  channel: "in_app" | "email" | "sms",
+  enabled: boolean,
+): Promise<void> {
+  const session = await getStaffSession();
+  store.setNotificationPreference({
+    organizationId: session.organizationId,
+    clientId,
+    notificationType,
+    channel,
+    enabled,
+    actorStaffId: session.staffId,
+  });
+  revalidatePath(`/clients/${clientId}`);
+}
+
+/**
  * Round-up simulator action (simulation only — never moves money). The store
  * computes round-ups via roundup.v1.0.0 and validates all input.
  */

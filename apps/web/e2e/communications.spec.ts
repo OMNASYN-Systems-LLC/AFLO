@@ -24,7 +24,8 @@ test("a consented client's document request is recorded as sent", async ({ page 
   await page.waitForLoadState("networkidle");
 
   const card = commsCard(page);
-  await expect(card.getByText("Sent", { exact: true })).toBeVisible();
+  // Consented request now sends on in-app + email — two "Sent" entries.
+  await expect(card.getByText("Sent", { exact: true }).first()).toBeVisible();
   await expect(card.getByText(/document/i).first()).toBeVisible();
 });
 
