@@ -102,6 +102,12 @@ export interface RoadmapApprovedPayload {
   publishedToClient: boolean;
 }
 
+export interface RoadmapPublishedPayload {
+  clientId: string;
+  roadmapId: string;
+  publishedByMemberId: string;
+}
+
 export interface MilestoneActivatedPayload {
   clientId: string;
   roadmapId: string;
@@ -224,6 +230,7 @@ export interface EventPayloadMap {
   ReadinessAssessed: ReadinessAssessedPayload;
   RoadmapDrafted: RoadmapDraftedPayload;
   RoadmapApproved: RoadmapApprovedPayload;
+  RoadmapPublished: RoadmapPublishedPayload;
   MilestoneActivated: MilestoneActivatedPayload;
   TaskAssigned: TaskAssignedPayload;
   TaskCompleted: TaskCompletedPayload;

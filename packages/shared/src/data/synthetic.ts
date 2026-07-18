@@ -20,6 +20,7 @@ import type {
   Organization,
   QuarterlyReport,
   ReadinessAssessmentRecord,
+  Roadmap,
   RoadmapMilestone,
   StaffMember,
 } from "../domain/types";
@@ -66,6 +67,7 @@ export interface SyntheticDatabase {
   financialProfiles: FinancialProfile[];
   creditProfiles: CreditProfile[];
   goals: Goal[];
+  roadmaps: Roadmap[];
   milestones: RoadmapMilestone[];
   monthlyActions: MonthlyAction[];
   documents: ClientDocument[];
@@ -294,6 +296,46 @@ const goals: Goal[] = [
   { id: "g-ngo-1", clientId: "c-ngo", title: "Save a rental-property down payment", category: "home_purchase", targetDate: inDays(330), progressPct: 40, isPrimary: true },
 ];
 
+/**
+ * One roadmap per client in V1. Published roadmaps are the standing plans;
+ * Sofia Ramirez's is back in staff review (being revised) and Devon Pryor's
+ * is a fresh draft — the approval workflow exercises those.
+ */
+function roadmap(
+  clientId: string,
+  title: string,
+  status: Roadmap["status"],
+  stageAtCreation: Roadmap["stageAtCreation"],
+  createdByStaffId: string,
+  createdDaysAgo: number,
+): Roadmap {
+  const approved = status === "approved" || status === "published";
+  return {
+    id: `r-${clientId}`,
+    clientId,
+    title,
+    status,
+    stageAtCreation,
+    aiRunId: null,
+    createdByStaffId,
+    approvedByStaffId: approved ? "s-mercer" : null,
+    approvedAt: approved ? daysAgo(createdDaysAgo - 4) : null,
+    publishedAt: status === "published" ? daysAgo(createdDaysAgo - 5) : null,
+    createdAt: daysAgo(createdDaysAgo),
+  };
+}
+
+const roadmaps: Roadmap[] = [
+  roadmap("c-bell", "Recovery: collections resolved, payments current", "published", "recovery", "s-boyd", 180),
+  roadmap("c-grant", "Stabilization: reserves and refinance", "published", "stabilization", "s-mercer", 160),
+  roadmap("c-solomon", "Credit readiness: 640+ for the auto refinance", "published", "credit_readiness", "s-mercer", 300),
+  roadmap("c-pryor", "Utilization under 30% and holding", "draft", "credit_readiness", "s-boyd", 12),
+  roadmap("c-okafor", "Capital readiness: working-capital application", "published", "capital_readiness", "s-mercer", 380),
+  roadmap("c-whitaker", "Acquisition: first home purchase", "published", "acquisition", "s-boyd", 480),
+  roadmap("c-ramirez", "Stabilization: cash-flow floor and reserves", "staff_review", "stabilization", "s-lin", 80),
+  roadmap("c-ngo", "Capital readiness: rental down payment", "published", "capital_readiness", "s-boyd", 430),
+];
+
 function m(
   id: string,
   clientId: string,
@@ -303,7 +345,7 @@ function m(
   status: RoadmapMilestone["status"],
   targetMonth: string,
 ): RoadmapMilestone {
-  return { id, clientId, order, title, description, status, targetMonth };
+  return { id, clientId, roadmapId: `r-${clientId}`, order, title, description, status, targetMonth };
 }
 
 const milestones: RoadmapMilestone[] = [
@@ -581,6 +623,7 @@ export const syntheticDatabase: SyntheticDatabase = {
   financialProfiles,
   creditProfiles,
   goals,
+  roadmaps,
   milestones,
   monthlyActions,
   documents,

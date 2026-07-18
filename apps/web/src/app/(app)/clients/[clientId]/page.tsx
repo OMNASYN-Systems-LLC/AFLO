@@ -1,4 +1,11 @@
-import { fullName, intakeCompleteness, LIFECYCLE_STAGES, REVIEW_REASON_DESCRIPTIONS } from "@aflo/shared";
+import {
+  fullName,
+  intakeCompleteness,
+  LIFECYCLE_STAGES,
+  REVIEW_REASON_DESCRIPTIONS,
+  roadmapTransitionsFrom,
+  type RoadmapStatus,
+} from "@aflo/shared";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { AgentSuggestionCard } from "@/components/agent-card";
@@ -11,9 +18,10 @@ import {
   ClientStatusBadge,
   PipelineBadge,
   ReportStatusBadge,
+  RoadmapStatusBadge,
   StageBadge,
 } from "@/components/badges";
-import { runReadinessAssessmentAction } from "./actions";
+import { runReadinessAssessmentAction, transitionRoadmapAction } from "./actions";
 import { StageTrack } from "@/components/stage";
 import { EmptyState, ProgressBar, SectionCard } from "@/components/ui";
 import { DEMO_ORG_ID, clientRepository, demoNow, store } from "@/lib/data";
@@ -230,7 +238,46 @@ export default async function ClientDetailPage({
           <SectionCard
             title="Roadmap"
             subtitle={`${milestonesDone} of ${detail.milestones.length} milestones complete`}
+            action={detail.roadmap ? <RoadmapStatusBadge status={detail.roadmap.status} /> : undefined}
           >
+            {detail.roadmap ? (
+              <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-md border border-line/70 bg-ivory px-4 py-3">
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-medium text-ink" title={detail.roadmap.title}>
+                    {detail.roadmap.title}
+                  </p>
+                  <p className="mt-0.5 text-xs text-ink-faint">
+                    {detail.roadmap.aiRunId ? "AI-drafted language" : "Manually authored"} · created by{" "}
+                    {staffName(detail.roadmap.createdByStaffId)}
+                    {detail.roadmap.approvedByStaffId
+                      ? ` · approved by ${staffName(detail.roadmap.approvedByStaffId)}`
+                      : ""}
+                    {detail.roadmap.publishedAt
+                      ? ` · published ${fmtDate(detail.roadmap.publishedAt)}`
+                      : ""}
+                  </p>
+                </div>
+                <div className="flex shrink-0 flex-wrap items-center gap-2">
+                  {roadmapActions(detail.roadmap.status).map(({ toStatus, label, primary }) => (
+                    <form
+                      key={toStatus}
+                      action={transitionRoadmapAction.bind(null, clientId, detail.roadmap!.id, toStatus)}
+                    >
+                      <button
+                        type="submit"
+                        className={
+                          primary
+                            ? "rounded-md bg-emerald px-3 py-1.5 text-xs font-medium text-ivory-ink transition-colors hover:bg-emerald-deep"
+                            : "rounded-md border border-line px-3 py-1.5 text-xs text-ink-soft transition-colors hover:border-gold/60 hover:text-gold-deep"
+                        }
+                      >
+                        {label}
+                      </button>
+                    </form>
+                  ))}
+                </div>
+              </div>
+            ) : null}
             {detail.milestones.length === 0 ? (
               <EmptyState message="No roadmap yet — drafted after onboarding and staff approval." />
             ) : (
@@ -435,6 +482,35 @@ export default async function ClientDetailPage({
       </div>
     </div>
   );
+}
+
+function staffName(staffId: string): string {
+  return (
+    store.database().staff.find((s) => s.id === staffId && s.organizationId === DEMO_ORG_ID)?.name ??
+    "Unknown"
+  );
+}
+
+/** Rule-legal roadmap moves surfaced as staff actions (archival stays out of the UI for now). */
+function roadmapActions(
+  status: RoadmapStatus,
+): { toStatus: RoadmapStatus; label: string; primary: boolean }[] {
+  return roadmapTransitionsFrom(status)
+    .filter((to) => to !== "archived")
+    .map((to) => ({
+      toStatus: to,
+      label:
+        to === "staff_review"
+          ? "Submit for review"
+          : to === "approved"
+            ? "Approve"
+            : to === "published"
+              ? "Publish to client"
+              : status === "approved"
+                ? "Reopen draft"
+                : "Return to draft",
+      primary: to !== "draft",
+    }));
 }
 
 function MiniStat({ label, value, hint }: { label: string; value: string; hint?: string }) {

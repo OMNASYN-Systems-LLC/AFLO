@@ -2,6 +2,7 @@ import { ENGAGEMENT_RULES_VERSION } from "./engagement";
 import { INTAKE_RULES_VERSION } from "./intake";
 import { PIPELINE_RULES_VERSION } from "./pipeline";
 import { REVIEW_REASON_DESCRIPTIONS, REVIEW_RULES_VERSION } from "./review";
+import { ROADMAP_RULES_VERSION } from "./roadmap";
 import { READINESS_RULES_VERSION, REASON_CODE_DESCRIPTIONS } from "./readiness";
 
 /**
@@ -161,6 +162,30 @@ export const RULE_REGISTRY: readonly RuleDefinition[] = [
     sources: [],
     changeHistory: [
       { version: "intake.v1.0.0", date: "2026-07-18", note: "Initial founder-required section set (founder workstream slice D)." },
+    ],
+  },
+  {
+    id: "roadmap.transition",
+    version: ROADMAP_RULES_VERSION,
+    effectiveDate: "2026-07-18",
+    description:
+      "Roadmap approval workflow over an allow-list state machine: Draft → Staff Review → Approved → Published, with explicit returns (review → draft), reopens (approved → draft), and archival. Anything unlisted is denied. Submission, approval, and publication are human staff actions — AI may draft language but can never move a roadmap through this workflow.",
+    inputs: ["fromStatus", "toStatus"],
+    output: "RoadmapTransitionResult { allowed, reasonCode }",
+    reasonCodes: [
+      "RM_SUBMITTED",
+      "RM_APPROVED",
+      "RM_RETURNED",
+      "RM_PUBLISHED",
+      "RM_REOPENED",
+      "RM_ARCHIVED",
+      "RM_SAME_STATUS",
+      "RM_UNKNOWN_STATUS",
+      "RM_ILLEGAL_TRANSITION",
+    ],
+    sources: [],
+    changeHistory: [
+      { version: "roadmap.v1.0.0", date: "2026-07-18", note: "Initial founder-required approval path (founder workstream slice F)." },
     ],
   },
   {

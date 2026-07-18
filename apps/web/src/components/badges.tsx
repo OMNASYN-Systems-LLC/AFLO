@@ -7,6 +7,7 @@ import type {
   LifecycleStage,
   ReportStatus,
   ReviewStatus,
+  RoadmapStatus,
 } from "@aflo/shared";
 import { CLIENT_STATUS_LABELS, ENGAGEMENT_LABELS, STAGE_LABELS } from "@/lib/format";
 
@@ -96,6 +97,19 @@ const DOC_STATUS: Record<DocumentReviewStatus, { label: string; tone: Tone }> = 
 
 export function DocStatusBadge({ status }: { status: DocumentReviewStatus }) {
   const s = DOC_STATUS[status];
+  return <Badge tone={s.tone} label={s.label} />;
+}
+
+const ROADMAP_STATUS: Record<RoadmapStatus, { label: string; tone: Tone }> = {
+  draft: { label: "Draft", tone: "neutral" },
+  staff_review: { label: "Staff review", tone: "warn" },
+  approved: { label: "Approved", tone: "calm" },
+  published: { label: "Published", tone: "good" },
+  archived: { label: "Archived", tone: "neutral" },
+};
+
+export function RoadmapStatusBadge({ status }: { status: RoadmapStatus }) {
+  const s = ROADMAP_STATUS[status];
   return <Badge tone={s.tone} label={s.label} />;
 }
 
