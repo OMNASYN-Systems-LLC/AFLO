@@ -2,6 +2,7 @@ import { ACTION_RULES_VERSION } from "./action";
 import { ENGAGEMENT_RULES_VERSION } from "./engagement";
 import { INTAKE_RULES_VERSION } from "./intake";
 import { PIPELINE_RULES_VERSION } from "./pipeline";
+import { REPORT_RULES_VERSION } from "./report";
 import { REVIEW_REASON_DESCRIPTIONS, REVIEW_RULES_VERSION } from "./review";
 import { ROADMAP_RULES_VERSION } from "./roadmap";
 import { READINESS_RULES_VERSION, REASON_CODE_DESCRIPTIONS } from "./readiness";
@@ -209,6 +210,27 @@ export const RULE_REGISTRY: readonly RuleDefinition[] = [
     sources: [],
     changeHistory: [
       { version: "roadmap.v1.0.0", date: "2026-07-18", note: "Initial founder-required approval path (founder workstream slice F)." },
+    ],
+  },
+  {
+    id: "report.transition",
+    version: REPORT_RULES_VERSION,
+    effectiveDate: "2026-07-18",
+    description:
+      "Quarterly-report workflow over an allow-list: Draft → Ready for review → Published, with explicit returns to draft. Published is terminal — a delivered report is never edited in place. Reports generate from verified, recorded facts; AI may later draft narrative language but can never move a report through this workflow.",
+    inputs: ["fromStatus", "toStatus"],
+    output: "ReportTransitionResult { allowed, reasonCode }",
+    reasonCodes: [
+      "RP_SUBMITTED",
+      "RP_RETURNED",
+      "RP_PUBLISHED",
+      "RP_SAME_STATUS",
+      "RP_UNKNOWN_STATUS",
+      "RP_ILLEGAL_TRANSITION",
+    ],
+    sources: [],
+    changeHistory: [
+      { version: "report.v1.0.0", date: "2026-07-18", note: "Initial workflow (founder workstream slice H)." },
     ],
   },
   {

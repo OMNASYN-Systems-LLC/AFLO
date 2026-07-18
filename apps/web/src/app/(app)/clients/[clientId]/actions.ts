@@ -63,6 +63,40 @@ export async function addMonthlyActionAction(clientId: string, formData: FormDat
 }
 
 /**
+ * Quarterly-report workflow actions (report.v1.0.0). Generation draws only
+ * on recorded facts; the store enforces eligibility, one report per
+ * quarter, and the review workflow — denials are audited server-side.
+ */
+export async function generateReportAction(clientId: string): Promise<void> {
+  const session = getStaffSession();
+  store.generateQuarterlyReport({
+    organizationId: session.organizationId,
+    clientId,
+    actorStaffId: session.staffId,
+  });
+  revalidatePath(`/clients/${clientId}`);
+  revalidatePath("/clients");
+  revalidatePath("/dashboard");
+}
+
+export async function transitionReportAction(
+  clientId: string,
+  reportId: string,
+  toStatus: "draft" | "ready_for_review" | "published",
+): Promise<void> {
+  const session = getStaffSession();
+  store.transitionReport({
+    organizationId: session.organizationId,
+    reportId,
+    toStatus,
+    actorStaffId: session.staffId,
+  });
+  revalidatePath(`/clients/${clientId}`);
+  revalidatePath("/clients");
+  revalidatePath("/dashboard");
+}
+
+/**
  * Roadmap approval-workflow action (roadmap.v1.0.0). The store validates
  * the transition; the UI only offers rule-legal moves, and denials are
  * audited server-side either way.

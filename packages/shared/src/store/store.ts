@@ -1,21 +1,28 @@
 import {
   ACTION_RULES_VERSION,
   INTAKE_RULES_VERSION,
+  LIFECYCLE_STAGE_LABELS,
   PIPELINE_BACKBONE,
   READINESS_RULES_VERSION,
   REASON_CODE_NEXT_ACTIONS,
+  REPORT_RULES_VERSION,
   actionTransition,
   assessReadiness,
   assessmentReviewGate,
   intakeCompleteness,
   nextRequiredStage,
   pipelineTransition,
+  quarterMonths,
+  quarterOf,
+  reportTransition,
   roadmapTransition,
   sectionCompletion,
   type ActionStatusId,
   type ActionTransitionResult,
   type IntakeCompletenessResult,
   type PipelineTransitionResult,
+  type ReportStatusId,
+  type ReportTransitionResult,
   type ReviewGateResult,
   type RoadmapStatus,
   type RoadmapTransitionResult,
@@ -28,6 +35,7 @@ import type {
   ClientRecord,
   IntakeRecord,
   MonthlyAction,
+  QuarterlyReport,
   ReadinessAssessmentRecord,
   Roadmap,
 } from "../domain/types";
@@ -167,6 +175,35 @@ export interface TransitionMonthlyActionInput {
   organizationId: string;
   actionId: string;
   toStatus: ActionStatusId;
+  actorStaffId: string;
+}
+
+export type ReportDenialCode =
+  | "CLIENT_NOT_FOUND"
+  | "REPORT_NOT_FOUND"
+  | "ACTOR_NOT_IN_ORG"
+  | "NOT_A_CLIENT"
+  | "NO_RECORDED_ASSESSMENT"
+  | "REPORT_EXISTS_FOR_QUARTER";
+
+export interface ReportActionResult {
+  ok: boolean;
+  denialCode?: ReportDenialCode;
+  transition?: ReportTransitionResult;
+  report?: QuarterlyReport;
+  emittedEventIds: string[];
+}
+
+export interface GenerateReportInput {
+  organizationId: string;
+  clientId: string;
+  actorStaffId: string;
+}
+
+export interface TransitionReportInput {
+  organizationId: string;
+  reportId: string;
+  toStatus: ReportStatusId;
   actorStaffId: string;
 }
 
@@ -842,6 +879,204 @@ export class AfloStore {
     });
 
     return { ok: true, transition, action, emittedEventIds: emitted.map((e) => e.eventId) };
+  }
+
+  /**
+   * Generate the current quarter's progress report from verified, recorded
+   * facts — the latest recorded readiness assessment (required), the
+   * quarter's action-plan statistics, approved documents, and the roadmap.
+   * Purely deterministic content; the report-agent may later add narrative
+   * language behind review. Always starts as a draft; one report per
+   * client-quarter.
+   */
+  generateQuarterlyReport(input: GenerateReportInput): ReportActionResult {
+    const now = this.clock();
+    const record = this.findRecord(input.organizationId, input.clientId);
+    if (!record) return { ok: false, denialCode: "CLIENT_NOT_FOUND", emittedEventIds: [] };
+    const actor = this.findActor(input.organizationId, input.actorStaffId);
+    if (!actor) return { ok: false, denialCode: "ACTOR_NOT_IN_ORG", emittedEventIds: [] };
+    if (record.kind !== "client") {
+      return { ok: false, denialCode: "NOT_A_CLIENT", emittedEventIds: [] };
+    }
+
+    const assessment = this.db.assessments.filter((a) => a.clientId === record.id).at(-1);
+    if (!assessment) {
+      this.audit({
+        organizationId: input.organizationId,
+        actorStaffId: actor.id,
+        action: "report.generate_denied",
+        targetType: "report",
+        targetId: record.id,
+        detail: "no recorded readiness assessment — reports draw only on recorded facts",
+        reasonCode: "NO_RECORDED_ASSESSMENT",
+        ruleVersion: REPORT_RULES_VERSION,
+        occurredAt: now.toISOString(),
+      });
+      return { ok: false, denialCode: "NO_RECORDED_ASSESSMENT", emittedEventIds: [] };
+    }
+
+    const quarter = quarterOf(now);
+    if (this.db.reports.some((r) => r.clientId === record.id && r.quarter === quarter)) {
+      this.audit({
+        organizationId: input.organizationId,
+        actorStaffId: actor.id,
+        action: "report.generate_denied",
+        targetType: "report",
+        targetId: record.id,
+        detail: `a ${quarter} report already exists`,
+        reasonCode: "REPORT_EXISTS_FOR_QUARTER",
+        ruleVersion: REPORT_RULES_VERSION,
+        occurredAt: now.toISOString(),
+      });
+      return { ok: false, denialCode: "REPORT_EXISTS_FOR_QUARTER", emittedEventIds: [] };
+    }
+
+    // Deterministic content from recorded/verified facts only.
+    const highlights: string[] = [
+      `Readiness stage: ${LIFECYCLE_STAGE_LABELS[assessment.stage]} (rule ${assessment.ruleVersion})`,
+    ];
+    if (assessment.previousStage && assessment.previousStage !== assessment.stage) {
+      highlights.push(
+        `Stage moved from ${LIFECYCLE_STAGE_LABELS[assessment.previousStage]} to ${LIFECYCLE_STAGE_LABELS[assessment.stage]} this period`,
+      );
+    }
+    const months = quarterMonths(quarter);
+    const quarterActions = this.db.monthlyActions.filter(
+      (a) => a.clientId === record.id && months.includes(a.month),
+    );
+    if (quarterActions.length > 0) {
+      const done = quarterActions.filter((a) => a.status === "done").length;
+      highlights.push(`Action plan: ${done} of ${quarterActions.length} actions completed this quarter`);
+    }
+    const approvedDocs = this.db.documents.filter(
+      (d) => d.clientId === record.id && d.reviewStatus === "approved",
+    ).length;
+    if (approvedDocs > 0) {
+      highlights.push(`Verified documents on file: ${approvedDocs}`);
+    }
+    const roadmap = this.db.roadmaps.filter((r) => r.clientId === record.id && r.status !== "archived").at(-1);
+    if (roadmap?.status === "published") {
+      const done = this.db.milestones.filter((m) => m.roadmapId === roadmap.id && m.status === "completed").length;
+      const total = this.db.milestones.filter((m) => m.roadmapId === roadmap.id).length;
+      highlights.push(`Roadmap "${roadmap.title}": ${done} of ${total} milestones complete`);
+    }
+
+    this.counter += 1;
+    const report: QuarterlyReport = {
+      id: `qr-${record.id}-${quarter.toLowerCase()}-${this.counter}`,
+      clientId: record.id,
+      quarter,
+      status: "draft",
+      stageAtGeneration: assessment.stage,
+      highlights,
+      focusForNextQuarter: assessment.proposedNextAction,
+      generatedAt: now.toISOString(),
+    };
+    this.db.reports.push(report);
+
+    const event = createEvent({
+      eventType: "ProgressReportGenerated",
+      organizationId: input.organizationId,
+      aggregateId: report.id,
+      actorId: actor.id,
+      occurredAt: now.toISOString(),
+      payload: {
+        clientId: record.id,
+        reportId: report.id,
+        quarter,
+        reviewStatus: "pending_review",
+        aiRunId: null,
+      },
+    });
+    this.outbox.push(toOutboxRecord(event, { now }));
+
+    this.audit({
+      organizationId: input.organizationId,
+      actorStaffId: actor.id,
+      action: "report.generated",
+      targetType: "report",
+      targetId: report.id,
+      detail: `client ${record.id}: ${quarter} draft from recorded facts (${highlights.length} highlights)`,
+      reasonCode: "RP_GENERATED",
+      ruleVersion: REPORT_RULES_VERSION,
+      occurredAt: now.toISOString(),
+    });
+
+    return { ok: true, report, emittedEventIds: [event.eventId] };
+  }
+
+  /**
+   * Move a report through review (report.v1.0.0). Publication emits
+   * ProgressReportPublished; published reports are terminal. Denials are
+   * audited and never mutate.
+   */
+  transitionReport(input: TransitionReportInput): ReportActionResult {
+    const now = this.clock();
+    const report = this.db.reports.find((r) => r.id === input.reportId);
+    const client = report ? this.findRecord(input.organizationId, report.clientId) : undefined;
+    if (!report || !client) return { ok: false, denialCode: "REPORT_NOT_FOUND", emittedEventIds: [] };
+    const actor = this.findActor(input.organizationId, input.actorStaffId);
+    if (!actor) return { ok: false, denialCode: "ACTOR_NOT_IN_ORG", emittedEventIds: [] };
+
+    const transition = reportTransition(report.status, input.toStatus);
+    if (!transition.allowed) {
+      this.audit({
+        organizationId: input.organizationId,
+        actorStaffId: actor.id,
+        action: "report.transition_denied",
+        targetType: "report",
+        targetId: report.id,
+        detail: `client ${client.id}: ${report.status} → ${input.toStatus} denied`,
+        reasonCode: transition.reasonCode,
+        ruleVersion: transition.ruleVersion,
+        occurredAt: now.toISOString(),
+      });
+      return { ok: false, transition, emittedEventIds: [] };
+    }
+
+    const fromStatus = report.status;
+    report.status = input.toStatus;
+
+    const emitted: DomainEvent[] = [];
+    if (input.toStatus === "published") {
+      emitted.push(
+        createEvent({
+          eventType: "ProgressReportPublished",
+          organizationId: input.organizationId,
+          aggregateId: report.id,
+          actorId: actor.id,
+          occurredAt: now.toISOString(),
+          payload: {
+            clientId: client.id,
+            reportId: report.id,
+            quarter: report.quarter,
+            publishedByMemberId: actor.id,
+          },
+        }),
+      );
+    }
+    for (const event of emitted) {
+      this.outbox.push(toOutboxRecord(event, { now }));
+    }
+
+    const ACTION_BY_CODE: Record<string, string> = {
+      RP_SUBMITTED: "report.submitted",
+      RP_RETURNED: "report.returned",
+      RP_PUBLISHED: "report.published",
+    };
+    this.audit({
+      organizationId: input.organizationId,
+      actorStaffId: actor.id,
+      action: ACTION_BY_CODE[transition.reasonCode] ?? "report.transitioned",
+      targetType: "report",
+      targetId: report.id,
+      detail: `client ${client.id}: ${fromStatus} → ${input.toStatus} (${report.quarter})`,
+      reasonCode: transition.reasonCode,
+      ruleVersion: transition.ruleVersion,
+      occurredAt: now.toISOString(),
+    });
+
+    return { ok: true, transition, report, emittedEventIds: emitted.map((e) => e.eventId) };
   }
 
   /** Recorded assessment history for one client, oldest first, org-verified. */

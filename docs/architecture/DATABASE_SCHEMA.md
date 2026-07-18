@@ -68,7 +68,9 @@ CREATE TYPE document_review_status AS ENUM (
 CREATE TYPE appointment_status AS ENUM ('scheduled', 'completed', 'cancelled', 'no_show');
 CREATE TYPE referral_status AS ENUM ('draft', 'sent', 'accepted', 'declined', 'completed');
 CREATE TYPE engagement_risk_level AS ENUM ('low', 'medium', 'high');
-CREATE TYPE report_status AS ENUM ('requested', 'draft', 'pending_review', 'approved', 'delivered');
+-- Founder-required review workflow (rules: report.v1.0.0). Published is
+-- terminal — a delivered report is never edited in place.
+CREATE TYPE report_status AS ENUM ('draft', 'ready_for_review', 'published');
 CREATE TYPE ai_run_status AS ENUM ('queued', 'running', 'succeeded', 'failed', 'cancelled');
 CREATE TYPE ai_run_outcome AS ENUM (
   'ok', 'needs_clarification', 'insufficient_data',
@@ -640,7 +642,7 @@ CREATE TABLE quarterly_reports (
   client_id        uuid NOT NULL REFERENCES clients(id) ON DELETE RESTRICT,
   period_start     date NOT NULL,
   period_end       date NOT NULL,
-  status           report_status NOT NULL DEFAULT 'requested',
+  status           report_status NOT NULL DEFAULT 'draft',
   content          jsonb,               -- structured report body (sections, metrics, narrative)
   ai_run_id        uuid,                -- report-agent draft provenance
   approved_by      uuid REFERENCES organization_members(id) ON DELETE SET NULL,
