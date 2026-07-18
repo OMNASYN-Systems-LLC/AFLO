@@ -23,7 +23,7 @@ export async function completeIntakeSectionAction(
   clientId: string,
   sectionId: string,
 ): Promise<void> {
-  const session = getStaffSession();
+  const session = await getStaffSession();
   store.completeIntakeSection({
     organizationId: session.organizationId,
     clientId,
@@ -34,7 +34,7 @@ export async function completeIntakeSectionAction(
 }
 
 export async function completeIntakeAction(clientId: string): Promise<void> {
-  const session = getStaffSession();
+  const session = await getStaffSession();
   store.completeIntake({
     organizationId: session.organizationId,
     clientId,

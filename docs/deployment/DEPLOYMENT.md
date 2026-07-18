@@ -2,7 +2,7 @@
 
 Operational reference for deploying AFLO (Golden Key Wealth V1) across Vercel, Railway, Neon, and object storage.
 
-> **Current status (2026-07-18):** **Neon is provisioned** (founder-confirmed) with branches `main` (production), `preview` (preview deployments), and `dev` (development) — **do not recreate the Neon project**; connection strings enter via provider dashboards only, never the repo, and nothing connects to Neon until the first Drizzle-backed slice lands. Vercel projects, Railway services, storage buckets, and DNS records are still not provisioned (founder account authorization required). **Clerk is approved for V1** (ADR-0006 Accepted) but credentials are not yet issued. The current app still runs entirely on mock repositories and requires **zero environment variables** (see below).
+> **Current status (2026-07-18):** **Neon is provisioned** (founder-confirmed) with branches `main` (production), `preview` (preview deployments), and `dev` (development) — **do not recreate the Neon project**; connection strings enter via provider dashboards only, never the repo, and nothing connects to Neon until the first Drizzle-backed slice lands. **Vercel is connected** (founder-confirmed via the Vercel GitHub integration): project `aflo-web`, root directory `apps/web`, per-PR preview deployments and `main`-branch production deployments are building successfully. Railway services, storage buckets, and DNS records are still not provisioned (founder account authorization required). **Clerk is approved for V1** (ADR-0006 Accepted) but credentials are not yet issued — the app runs on the `@aflo/auth` demo providers over synthetic data and requires **zero environment variables** (see below).
 
 ---
 
@@ -41,7 +41,7 @@ Config-as-code lives in **`apps/web/vercel.json`** (framework, install, and buil
 | Node.js version | 22.x (matches `engines.node >=22` in root `package.json`) |
 | Production branch | `main` |
 
-> **Blocked on founder account authorization (charter stop condition #7).** The Vercel project import, the Root-Directory / include-outside-root toggles, and all environment variables must be configured in the founder's Vercel account. The in-repo `vercel.json` makes the build reproducible once the project exists; it does not create the project. No Vercel deployment exists yet.
+> **Status: imported and deploying (2026-07-18).** The founder connected the Vercel GitHub integration; project `aflo-web` builds with root directory `apps/web` and the settings above. PR previews and `main` production deployments are green. Environment variables remain unset (none required yet) and enter only via the Vercel dashboard when Clerk/Neon slices activate.
 
 pnpm version pinning:
 

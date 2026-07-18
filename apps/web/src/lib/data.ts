@@ -1,4 +1,12 @@
 import {
+  DemoAuthProvider,
+  requireClientSession,
+  requireStaffSession,
+  type AuthProvider,
+  type ClientSession,
+  type StaffSession,
+} from "@aflo/auth";
+import {
   AfloStore,
   MockClientRepository,
   MockDashboardRepository,
@@ -41,24 +49,31 @@ export const DEMO_STAFF: StaffMember = (() => {
   return owner;
 })();
 
-/**
- * Server-side session resolution — the ONLY source of organization and
- * actor identity for mutations. Never accept organization_id or staff_id
- * from the browser. Replaced by the Clerk adapter (packages/auth, ADR-0006)
- * with the same shape.
- */
-export function getStaffSession(): { organizationId: string; staffId: string } {
-  return { organizationId: DEMO_ORG_ID, staffId: DEMO_STAFF.id };
-}
-
 /** The demo client persona the portal shell impersonates until Clerk lands. */
 export const DEMO_CLIENT_ID = "c-bell";
 
 /**
- * Server-side client-portal session — the ONLY source of organization and
- * client identity for portal reads. Never accept ids from the browser.
- * Replaced by the Clerk adapter (packages/auth, ADR-0006) with the same shape.
+ * Session resolution flows through the @aflo/auth boundary (ADR-0006) — the
+ * ONLY source of organization and actor identity for reads and mutations.
+ * Never accept ids from the browser. The two demo providers are a
+ * prototype-only split; the Clerk-backed provider replaces both, and the
+ * guards plus every call site stay unchanged.
  */
-export function getClientSession(): { organizationId: string; clientId: string } {
-  return { organizationId: DEMO_ORG_ID, clientId: DEMO_CLIENT_ID };
+const staffAuth: AuthProvider = new DemoAuthProvider({
+  kind: "staff",
+  organizationId: DEMO_ORG_ID,
+  staffId: DEMO_STAFF.id,
+});
+const clientAuth: AuthProvider = new DemoAuthProvider({
+  kind: "client",
+  organizationId: DEMO_ORG_ID,
+  clientId: DEMO_CLIENT_ID,
+});
+
+export async function getStaffSession(): Promise<StaffSession> {
+  return requireStaffSession(staffAuth);
+}
+
+export async function getClientSession(): Promise<ClientSession> {
+  return requireClientSession(clientAuth);
 }
