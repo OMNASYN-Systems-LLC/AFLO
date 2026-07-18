@@ -10,7 +10,9 @@ import { expect, test } from "@playwright/test";
 test("sign-in shell presents the Golden Key brand and staff entry", async ({ page }) => {
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "Golden Key Wealth" })).toBeVisible();
-  await expect(page.getByText("Powered by AFLO")).toBeVisible();
+  // Display brand renders "ΛFLO" but keeps "AFLO" as the accessible name.
+  await expect(page.getByText(/Powered by/)).toBeVisible();
+  await expect(page.getByText("ΛFLO").first()).toBeVisible();
   await expect(page.getByRole("link", { name: /Continue as Golden Key Staff/i })).toBeVisible();
 });
 

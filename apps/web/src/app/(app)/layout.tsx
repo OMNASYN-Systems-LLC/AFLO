@@ -1,9 +1,13 @@
 import Link from "next/link";
+import { PoweredByAflo } from "@/components/brand";
 import { NavLink } from "@/components/nav-link";
 import { DEMO_STAFF, demoNow } from "@/lib/data";
 import { fmtDate, initials, STAFF_ROLE_LABELS } from "@/lib/format";
 
-const COMING_SOON = ["Documents", "Reports", "Partners", "Settings"];
+// Founder staff navigation: Dashboard, Leads, Clients, Tasks, Reports,
+// Partners, Billing, Settings. The first three are live; the rest surface
+// as their slices land.
+const COMING_SOON = ["Tasks", "Reports", "Partners", "Billing", "Settings"];
 
 export default function AppShellLayout({ children }: { children: React.ReactNode }) {
   return (
@@ -17,9 +21,7 @@ export default function AppShellLayout({ children }: { children: React.ReactNode
             <span className="block font-display text-base leading-tight text-ivory-ink">
               Golden Key Wealth
             </span>
-            <span className="block text-[10px] font-medium uppercase tracking-[0.22em] text-gold-soft">
-              Powered by AFLO
-            </span>
+            <PoweredByAflo className="block text-[10px] font-medium uppercase tracking-[0.22em] text-gold-soft" />
           </span>
         </Link>
 

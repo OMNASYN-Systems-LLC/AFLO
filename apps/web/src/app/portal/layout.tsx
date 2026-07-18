@@ -1,5 +1,6 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
+import { PoweredByAflo } from "@/components/brand";
 
 export const metadata = { title: "Client Portal — Golden Key Wealth" };
 
@@ -30,7 +31,7 @@ export default function PortalLayout({ children }: { children: ReactNode }) {
       </header>
       <main className="mx-auto max-w-3xl px-6 py-8">{children}</main>
       <footer className="mx-auto max-w-3xl px-6 pb-8 text-center text-[11px] text-ink-faint">
-        Prototype · Synthetic data only · Powered by AFLO
+        Prototype · Synthetic data only · <PoweredByAflo />
       </footer>
     </div>
   );

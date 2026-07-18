@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { PoweredByAflo } from "@/components/brand";
 
 /**
  * Staff sign-in shell — visual only. Real authentication (Clerk or Auth.js)
@@ -14,9 +15,8 @@ export default function SignInPage() {
               GK
             </div>
             <h1 className="mt-5 font-display text-3xl text-ink">Golden Key Wealth</h1>
-            <p className="mt-2 text-[11px] font-medium uppercase tracking-[0.28em] text-gold-deep">
-              Powered by AFLO
-            </p>
+            <PoweredByAflo className="mt-2 text-[11px] font-medium uppercase tracking-[0.28em] text-gold-deep" />
+
             <p className="mt-4 text-sm leading-relaxed text-ink-soft">
               Financial readiness, retention, and trusted progress — one workspace for
               your team and your clients.
