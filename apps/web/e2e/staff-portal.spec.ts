@@ -47,7 +47,7 @@ test("client detail shows stage, goal, next action, roadmap, documents, and repo
   await expect(page.getByText(/rule readiness\.v1\.0\.0/i)).toBeVisible();
   await expect(page.getByText("Acquisition").first()).toBeVisible();
   // Primary goal, roadmap, monthly actions, documents, quarterly report, appointment.
-  await expect(page.getByRole("heading", { name: "Current goal" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Goals", exact: true })).toBeVisible();
   await expect(page.getByText("Purchase a first home").first()).toBeVisible();
   await expect(page.getByRole("heading", { name: "Roadmap" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Monthly action plan" })).toBeVisible();

@@ -48,6 +48,7 @@ import type {
   Appointment,
   ClientDocument,
   ClientRecord,
+  Goal,
   IntakeRecord,
   MonthlyAction,
   QuarterlyReport,
@@ -221,6 +222,39 @@ export interface TransitionReportInput {
   organizationId: string;
   reportId: string;
   toStatus: ReportStatusId;
+  actorStaffId: string;
+}
+
+export type GoalDenialCode = "CLIENT_NOT_FOUND" | "GOAL_NOT_FOUND" | "ACTOR_NOT_IN_ORG" | "INVALID_INPUT";
+
+export interface GoalResult {
+  ok: boolean;
+  denialCode?: GoalDenialCode;
+  inputErrors?: string[];
+  goal?: Goal;
+  emittedEventIds: string[];
+}
+
+export interface CreateGoalInput {
+  organizationId: string;
+  clientId: string;
+  title: string;
+  category: Goal["category"];
+  targetDate: string; // ISO date
+  isPrimary: boolean;
+  actorStaffId: string;
+}
+
+export interface UpdateGoalProgressInput {
+  organizationId: string;
+  goalId: string;
+  progressPct: number;
+  actorStaffId: string;
+}
+
+export interface SetPrimaryGoalInput {
+  organizationId: string;
+  goalId: string;
   actorStaffId: string;
 }
 
@@ -1525,6 +1559,138 @@ export class AfloStore {
     });
 
     return { ok: true, note };
+  }
+
+  /** Goals for one client, primary first, org-verified. */
+  goalsFor(organizationId: string, clientId: string): Goal[] {
+    const record = this.findRecord(organizationId, clientId);
+    if (!record) return [];
+    return this.db.goals
+      .filter((g) => g.clientId === clientId)
+      .sort((a, b) => (a.isPrimary === b.isPrimary ? 0 : a.isPrimary ? -1 : 1));
+  }
+
+  /**
+   * Create a goal for a client. Goals are staff-maintained facts (no rule
+   * engine); creation is validated, audited, and emits GoalCreated. A goal
+   * created as primary demotes any existing primary — exactly one primary.
+   */
+  createGoal(input: CreateGoalInput): GoalResult {
+    const now = this.clock();
+    const record = this.findRecord(input.organizationId, input.clientId);
+    if (!record) return { ok: false, denialCode: "CLIENT_NOT_FOUND", emittedEventIds: [] };
+    const actor = this.findActor(input.organizationId, input.actorStaffId);
+    if (!actor) return { ok: false, denialCode: "ACTOR_NOT_IN_ORG", emittedEventIds: [] };
+
+    const CATEGORIES: Goal["category"][] = ["credit", "savings", "debt", "home_purchase", "business_capital", "other"];
+    const title = input.title.trim();
+    const inputErrors: string[] = [];
+    if (title.length === 0) inputErrors.push("title is required");
+    if (!CATEGORIES.includes(input.category)) inputErrors.push(`unknown category: ${String(input.category)}`);
+    if (Number.isNaN(Date.parse(input.targetDate))) inputErrors.push(`target date is not valid: ${input.targetDate}`);
+    if (inputErrors.length > 0) {
+      return { ok: false, denialCode: "INVALID_INPUT", inputErrors, emittedEventIds: [] };
+    }
+
+    if (input.isPrimary) {
+      for (const g of this.db.goals) if (g.clientId === record.id) g.isPrimary = false;
+    }
+
+    this.counter += 1;
+    const goal: Goal = {
+      id: `g-${record.id}-${this.counter}`,
+      clientId: record.id,
+      title,
+      category: input.category,
+      targetDate: new Date(input.targetDate).toISOString().slice(0, 10),
+      progressPct: 0,
+      isPrimary: input.isPrimary,
+    };
+    this.db.goals.push(goal);
+    record.lastActivityAt = now.toISOString();
+
+    const event = createEvent({
+      eventType: "GoalCreated",
+      organizationId: input.organizationId,
+      aggregateId: goal.id,
+      actorId: actor.id,
+      occurredAt: now.toISOString(),
+      payload: { clientId: record.id, goalId: goal.id, category: goal.category, isPrimary: goal.isPrimary },
+    });
+    this.outbox.push(toOutboxRecord(event, { now }));
+
+    this.audit({
+      organizationId: input.organizationId,
+      actorStaffId: actor.id,
+      action: "goal.created",
+      targetType: "goal",
+      targetId: goal.id,
+      detail: `client ${record.id}: "${title}" (${goal.category})${goal.isPrimary ? " — primary" : ""}`,
+      reasonCode: "GOAL_CREATED",
+      ruleVersion: "goal.v1.0.0",
+      occurredAt: now.toISOString(),
+    });
+
+    return { ok: true, goal, emittedEventIds: [event.eventId] };
+  }
+
+  /** Update a goal's staff-maintained progress (0–100). Audited. */
+  updateGoalProgress(input: UpdateGoalProgressInput): GoalResult {
+    const now = this.clock();
+    const goal = this.db.goals.find((g) => g.id === input.goalId);
+    const client = goal ? this.findRecord(input.organizationId, goal.clientId) : undefined;
+    if (!goal || !client) return { ok: false, denialCode: "GOAL_NOT_FOUND", emittedEventIds: [] };
+    const actor = this.findActor(input.organizationId, input.actorStaffId);
+    if (!actor) return { ok: false, denialCode: "ACTOR_NOT_IN_ORG", emittedEventIds: [] };
+
+    if (!Number.isFinite(input.progressPct) || input.progressPct < 0 || input.progressPct > 100) {
+      return { ok: false, denialCode: "INVALID_INPUT", inputErrors: ["progress must be between 0 and 100"], emittedEventIds: [] };
+    }
+
+    const from = goal.progressPct;
+    goal.progressPct = Math.round(input.progressPct);
+    client.lastActivityAt = now.toISOString();
+
+    this.audit({
+      organizationId: input.organizationId,
+      actorStaffId: actor.id,
+      action: "goal.progress_updated",
+      targetType: "goal",
+      targetId: goal.id,
+      detail: `client ${client.id}: ${from}% → ${goal.progressPct}%`,
+      reasonCode: "GOAL_PROGRESS",
+      ruleVersion: "goal.v1.0.0",
+      occurredAt: now.toISOString(),
+    });
+
+    return { ok: true, goal, emittedEventIds: [] };
+  }
+
+  /** Make a goal the client's primary, demoting the others. Audited. */
+  setPrimaryGoal(input: SetPrimaryGoalInput): GoalResult {
+    const now = this.clock();
+    const goal = this.db.goals.find((g) => g.id === input.goalId);
+    const client = goal ? this.findRecord(input.organizationId, goal.clientId) : undefined;
+    if (!goal || !client) return { ok: false, denialCode: "GOAL_NOT_FOUND", emittedEventIds: [] };
+    const actor = this.findActor(input.organizationId, input.actorStaffId);
+    if (!actor) return { ok: false, denialCode: "ACTOR_NOT_IN_ORG", emittedEventIds: [] };
+
+    for (const g of this.db.goals) if (g.clientId === client.id) g.isPrimary = g.id === goal.id;
+    client.lastActivityAt = now.toISOString();
+
+    this.audit({
+      organizationId: input.organizationId,
+      actorStaffId: actor.id,
+      action: "goal.set_primary",
+      targetType: "goal",
+      targetId: goal.id,
+      detail: `client ${client.id}: "${goal.title}" is now primary`,
+      reasonCode: "GOAL_PRIMARY",
+      ruleVersion: "goal.v1.0.0",
+      occurredAt: now.toISOString(),
+    });
+
+    return { ok: true, goal, emittedEventIds: [] };
   }
 
   /** Round-up simulator settings for one client, org-verified. */
