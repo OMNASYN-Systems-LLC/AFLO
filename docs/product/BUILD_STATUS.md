@@ -2,7 +2,7 @@
 
 Living status of the AFLO V1 build. Updated every implementation cycle. Newest state at top of each list.
 
-_Last updated: 2026-07-18 · branch `claude/new-session-dv6ka5` → merging to `main`._
+_Last updated: 2026-07-18 · PR #2 merged to `main`; branch `claude/billing-state-machine` in flight._
 
 ## Legend
 
@@ -19,18 +19,22 @@ _Last updated: 2026-07-18 · branch `claude/new-session-dv6ka5` → merging to `
 - Staff portal visual slice: sign-in shell, dashboard (KPIs, stage distribution, pipeline, needs-attention, appointments), lead/client list, client detail (stage + reason codes + rule version, roadmap, monthly actions, documents, appointment, engagement, quarterly report preview, AI drafts with confidence + review status).
 - Documentation set reconciled to the Product Charter: charter, V1 scope, database schema proposal, authorization matrix (incl. Organization Admin), agent boundaries, ADR-0001…0006, compliance baseline, Golden Key workflow discovery questions, design system, deployment notes.
 - CLAUDE.md reconciled to the 12-agent contract, expanded stack, Organization Admin role, and auto-merge policy.
-- CI (GitHub Actions): typecheck, lint, unit tests (42), build, **critical Playwright e2e (5)**, report-only dependency audit.
+- CI (GitHub Actions): typecheck, lint, unit tests, build, **critical Playwright e2e (5)**, informational dependency audit.
 - Env examples (`apps/web`, `apps/worker`) — placeholders only.
 - Deployment config-as-code: `apps/web/vercel.json`, `apps/worker/railway.json`; `DEPLOYMENT.md` updated with the account-authorization blockers.
+- **PR #2 merged to `main`** — `main` contains the deployable monorepo (merge commit `1d76772`).
+- Deterministic billing kernel (`@aflo/billing`, `billing.v1.0.0`): invoice/subscription/payment allow-list state machines with reason codes, `isInvoicePastDue`, the grace-aware subscription-access entitlement gate, and a billing rule registry — pure, Stripe-free, readiness-free (20 tests). _In PR (branch `claude/billing-state-machine`)._
 
 ## In progress 🔨
 
-- Merge PR #2 into `main` under the auto-merge gates.
+- Billing kernel PR review + merge (`claude/billing-state-machine`).
 
 ## Next ⏭
 
-- Deterministic billing state-machine rules (`packages/billing`) — invoice/subscription/payment state transitions as pure, versioned, tested logic (no Stripe credentials required).
+- Event model / outbox typed contracts (`packages/shared`) — the charter event catalog and envelope.
+- Notifications templates + mock delivery (`packages/notifications`) — Resend behind the interface, mock in dev/preview.
 - Administrative settings layer (typed configuration: pipeline stages, service packages, templates, education modules, appointment types, staff assignments, partner categories, billing terms, reminder schedules).
+- Billing entities DDL (`service_packages`, `subscriptions`, `invoices`, …) added to `DATABASE_SCHEMA.md` with the persistence slice; the `@aflo/billing` kernel already defines their state semantics.
 - Event model / outbox typed contracts (`packages/shared`).
 - Notifications templates + mock delivery (`packages/notifications`).
 
