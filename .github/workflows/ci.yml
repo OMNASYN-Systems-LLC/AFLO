@@ -33,3 +33,7 @@ jobs:
 
       - name: Build
         run: pnpm -r build
+
+      - name: Audit dependencies (report-only)
+        run: pnpm audit --prod
+        continue-on-error: true
