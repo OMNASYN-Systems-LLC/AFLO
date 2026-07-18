@@ -99,16 +99,21 @@ export const ACTION_STATUS_LABELS: Record<ActionStatus, string> = {
 
 export const STAFF_ROLE_LABELS: Record<StaffMember["role"], string> = {
   organization_owner: "Organization Owner",
-  staff: "Staff",
+  organization_admin: "Organization Admin",
+  staff: "Advisor/Staff",
 };
 
 export const AGENT_LABELS: Record<AgentName, string> = {
+  "intake-completeness-agent": "Intake Completeness Agent",
   "credit-profile-agent": "Credit Profile Agent",
   "utilization-agent": "Utilization Agent",
   "payment-history-agent": "Payment History Agent",
-  "readiness-agent": "Readiness Agent",
+  "debt-obligation-agent": "Debt & Obligation Agent",
+  "readiness-stage-agent": "Readiness Stage Agent",
   "roadmap-agent": "Roadmap Agent",
   "education-agent": "Education Agent",
   "engagement-agent": "Engagement Agent",
   "report-agent": "Report Agent",
+  "partner-routing-agent": "Partner Routing Agent",
+  "compliance-guard-agent": "Compliance Guard Agent",
 };

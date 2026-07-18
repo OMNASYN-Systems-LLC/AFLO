@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { assessEngagement, ENGAGEMENT_RULES_VERSION } from "../src/rules/engagement";
+import { assessEngagement, ENGAGEMENT_RULES_VERSION } from "../src/engagement";
 
 const NOW = new Date("2026-07-17T15:00:00Z");
 

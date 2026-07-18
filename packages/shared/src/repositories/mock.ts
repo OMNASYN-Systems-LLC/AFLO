@@ -1,7 +1,11 @@
+import {
+  assessEngagement,
+  assessReadiness,
+  ENGAGEMENT_STATUS_LABELS,
+  MS_PER_DAY,
+} from "@aflo/rules";
 import { syntheticDatabase, type SyntheticDatabase } from "../data/synthetic";
-import { MS_PER_DAY } from "../domain/time";
-import { assessEngagement, ENGAGEMENT_STATUS_LABELS } from "../rules/engagement";
-import { assessReadiness, toReadinessFacts } from "../rules/readiness";
+import { toReadinessFacts } from "../domain/facts";
 import type {
   AttentionItem,
   ClientDetail,

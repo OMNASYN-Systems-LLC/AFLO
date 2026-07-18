@@ -1,4 +1,4 @@
-import type { CreditProfile, FinancialProfile, LifecycleStage } from "../domain/types";
+import type { LifecycleStage } from "./lifecycle";
 
 /**
  * Versioned deterministic readiness-stage engine.
@@ -108,18 +108,6 @@ export function dtiPct(monthlyDebtPaymentsCents: number, monthlyIncomeCents: num
 export function reserveMonths(liquidSavingsCents: number, monthlyEssentialExpensesCents: number): number {
   if (monthlyEssentialExpensesCents <= 0) return 0;
   return round1(liquidSavingsCents / monthlyEssentialExpensesCents);
-}
-
-export function toReadinessFacts(financial: FinancialProfile, credit: CreditProfile): ReadinessFacts {
-  return {
-    creditScore: credit.score,
-    utilizationPct: utilizationPct(credit.revolvingBalanceCents, credit.revolvingLimitCents),
-    dtiPct: dtiPct(financial.monthlyDebtPaymentsCents, financial.monthlyIncomeCents),
-    reserveMonths: reserveMonths(financial.liquidSavingsCents, financial.monthlyEssentialExpensesCents),
-    derogatoryMarks: credit.derogatoryMarks,
-    onTimePaymentRate: credit.onTimePaymentRate,
-    incomeStability: financial.incomeStability,
-  };
 }
 
 /**

@@ -1,0 +1,8 @@
+{
+  "name": "@aflo/database",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Neon PostgreSQL schema, Drizzle ORM models, and SQL migrations. Stub until Sprint 3 (first Neon-backed slice).",
+  "exports": { ".": "./src/index.ts" }
+}

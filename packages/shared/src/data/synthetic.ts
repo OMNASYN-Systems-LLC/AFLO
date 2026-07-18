@@ -1,5 +1,5 @@
-import type { AgentEnvelope } from "../domain/agent";
-import { MS_PER_DAY } from "../domain/time";
+import type { AgentEnvelope } from "@aflo/ai";
+import { MS_PER_DAY } from "@aflo/rules";
 import type {
   AdminNote,
   Appointment,
@@ -43,10 +43,6 @@ function cents(dollars: number): number {
   return Math.round(dollars * 100);
 }
 
-export interface SyntheticAgentSuggestion extends AgentEnvelope {
-  clientId: string;
-}
-
 export interface SyntheticDatabase {
   organization: Organization;
   staff: StaffMember[];
@@ -60,7 +56,7 @@ export interface SyntheticDatabase {
   appointments: Appointment[];
   reports: QuarterlyReport[];
   notes: AdminNote[];
-  aiSuggestions: SyntheticAgentSuggestion[];
+  aiSuggestions: AgentEnvelope[];
 }
 
 const ORG_ID = "org-golden-key";
@@ -351,17 +347,20 @@ const notes: AdminNote[] = [
  * Synthetic examples of the typed agent envelope (drafts only — proposals,
  * never facts). These illustrate the review workflow in the UI.
  */
-const aiSuggestions: SyntheticAgentSuggestion[] = [
+const aiSuggestions: AgentEnvelope[] = [
   {
     id: "ai-solomon-1",
+    agentName: "readiness-stage-agent",
+    agentVersion: "1.0.0",
+    organizationId: ORG_ID,
     clientId: "c-solomon",
-    agent: "readiness-agent",
     status: "ok",
     confidence: 0.93,
-    factsUsed: ["credit_profile.score", "credit_profile.utilization", "financial_profile.dti", "financial_profile.reserves"],
-    rulesUsed: ["readiness.v1.0.0"],
+    factsUsed: ["credit_profiles.score", "credit_profiles.utilization", "financial_profiles.dti", "financial_profiles.reserves"],
+    missingFacts: [],
+    ruleVersionsUsed: ["readiness.v1.0.0"],
     reasonCodes: ["RC_SCORE_BELOW_CREDIT_FLOOR", "RC_UTILIZATION_ABOVE_30"],
-    recommendations: [
+    proposedActions: [
       {
         id: "rec-solomon-1",
         summary: "Explain the two blockers keeping Renee in Credit Readiness",
@@ -369,21 +368,24 @@ const aiSuggestions: SyntheticAgentSuggestion[] = [
         impact: "low",
       },
     ],
-    requiresReview: false,
-    prohibitedActionDetected: false,
+    prohibitedActionsDetected: [],
+    requiresHumanReview: false,
     reviewStatus: "approved",
     createdAt: daysAgo(5),
   },
   {
     id: "ai-whitaker-1",
+    agentName: "roadmap-agent",
+    agentVersion: "1.0.0",
+    organizationId: ORG_ID,
     clientId: "c-whitaker",
-    agent: "roadmap-agent",
     status: "ok",
     confidence: 0.81,
-    factsUsed: ["credit_profile.score", "credit_profile.utilization", "goal.home_purchase", "documents.asset_statements"],
-    rulesUsed: ["readiness.v1.0.0"],
+    factsUsed: ["credit_profiles.score", "credit_profiles.utilization", "goals.home_purchase", "documents.asset_statements"],
+    missingFacts: [],
+    ruleVersionsUsed: ["readiness.v1.0.0"],
     reasonCodes: ["RC_ALL_ACQUISITION_GATES_MET"],
-    recommendations: [
+    proposedActions: [
       {
         id: "rec-whitaker-1",
         summary: "Add a 'clear-to-close protection' milestone before closing",
@@ -391,21 +393,24 @@ const aiSuggestions: SyntheticAgentSuggestion[] = [
         impact: "high",
       },
     ],
-    requiresReview: true,
-    prohibitedActionDetected: false,
+    prohibitedActionsDetected: [],
+    requiresHumanReview: true,
     reviewStatus: "pending_review",
     createdAt: daysAgo(1),
   },
   {
     id: "ai-ngo-1",
+    agentName: "engagement-agent",
+    agentVersion: "1.0.0",
+    organizationId: ORG_ID,
     clientId: "c-ngo",
-    agent: "engagement-agent",
     status: "ok",
     confidence: 0.88,
-    factsUsed: ["client.last_activity_at", "appointments.history"],
-    rulesUsed: ["engagement.v1.0.0"],
+    factsUsed: ["clients.last_activity_at", "appointments.history"],
+    missingFacts: [],
+    ruleVersionsUsed: ["engagement.v1.0.0"],
     reasonCodes: [],
-    recommendations: [
+    proposedActions: [
       {
         id: "rec-ngo-1",
         summary: "Draft a re-engagement sequence for Harold",
@@ -413,8 +418,8 @@ const aiSuggestions: SyntheticAgentSuggestion[] = [
         impact: "medium",
       },
     ],
-    requiresReview: true,
-    prohibitedActionDetected: false,
+    prohibitedActionsDetected: [],
+    requiresHumanReview: true,
     reviewStatus: "pending_review",
     createdAt: daysAgo(2),
   },

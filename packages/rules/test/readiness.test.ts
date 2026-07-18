@@ -6,7 +6,7 @@ import {
   reserveMonths,
   utilizationPct,
   type ReadinessFacts,
-} from "../src/rules/readiness";
+} from "../src/readiness";
 
 function facts(overrides: Partial<ReadinessFacts> = {}): ReadinessFacts {
   // Baseline: every acquisition gate passes.

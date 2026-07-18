@@ -11,20 +11,20 @@ export function AgentSuggestionCard({ envelope }: { envelope: AgentEnvelope }) {
     <article className="rounded-md border border-line bg-ivory p-4">
       <header className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-2.5">
-          <span className="text-sm font-semibold text-ink">{AGENT_LABELS[envelope.agent]}</span>
+          <span className="text-sm font-semibold text-ink">{AGENT_LABELS[envelope.agentName]}</span>
           <Confidence value={envelope.confidence} />
         </div>
         <ReviewStatusBadge status={envelope.reviewStatus} />
       </header>
 
-      {envelope.prohibitedActionDetected ? (
+      {envelope.prohibitedActionsDetected.length > 0 ? (
         <p className="mt-3 rounded border border-status-risk/40 bg-status-risk-tint px-3 py-2 text-xs font-medium text-status-risk">
-          Prohibited action detected — run halted and audited.
+          Prohibited action detected ({envelope.prohibitedActionsDetected.join(", ")}) — run halted and audited.
         </p>
       ) : null}
 
       <div className="mt-3 space-y-3">
-        {envelope.recommendations.map((rec) => (
+        {envelope.proposedActions.map((rec) => (
           <div key={rec.id}>
             <div className="flex items-center gap-2">
               <p className="text-sm font-medium text-ink">{rec.summary}</p>
@@ -58,7 +58,7 @@ export function AgentSuggestionCard({ envelope }: { envelope: AgentEnvelope }) {
           Facts: <span className="font-mono">{envelope.factsUsed.join(", ")}</span>
         </span>
         <span>
-          Rules: <span className="font-mono">{envelope.rulesUsed.join(", ")}</span>
+          Rules: <span className="font-mono">{envelope.ruleVersionsUsed.join(", ")}</span>
         </span>
         <span>{fmtDate(envelope.createdAt)}</span>
       </footer>

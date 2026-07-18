@@ -1,0 +1,8 @@
+{
+  "name": "@aflo/analytics",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "PostHog product analytics and engagement instrumentation. Stub until the analytics slice.",
+  "exports": { ".": "./src/index.ts" }
+}

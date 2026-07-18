@@ -1,8 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { SYNTHETIC_NOW, syntheticDatabase, type SyntheticDatabase } from "../src/data/synthetic";
 import { MockClientRepository, MockDashboardRepository } from "../src/repositories/mock";
-import { LIFECYCLE_STAGES } from "../src/domain/types";
-import { MS_PER_DAY } from "../src/domain/time";
+import { LIFECYCLE_STAGES, MS_PER_DAY } from "@aflo/rules";
 
 const ORG = syntheticDatabase.organization.id;
 const clients = new MockClientRepository();

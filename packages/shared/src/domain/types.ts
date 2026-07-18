@@ -7,20 +7,13 @@
  * behind the same interfaces (ADR-0002).
  */
 
-/** The eight AFLO financial lifecycle stages, in order. Stage selection is
- * always the output of versioned deterministic rules — never an LLM. */
-export const LIFECYCLE_STAGES = [
-  "recovery",
-  "stabilization",
-  "credit_readiness",
-  "capital_readiness",
-  "acquisition",
-  "maintenance",
-  "growth",
-  "legacy",
-] as const;
+import type { EngagementStatus, LifecycleStage } from "@aflo/rules";
 
-export type LifecycleStage = (typeof LIFECYCLE_STAGES)[number];
+// Lifecycle stages and engagement statuses are versioned domain
+// configuration owned by the rules kernel (@aflo/rules); re-exported here
+// so the domain model presents one import surface.
+export { LIFECYCLE_STAGES } from "@aflo/rules";
+export type { EngagementStatus, LifecycleStage };
 
 export type ClientKind = "lead" | "client";
 
@@ -31,8 +24,6 @@ export type PipelineStatus =
   | "onboarding"
   | "active"
   | "paused";
-
-export type EngagementStatus = "active" | "cooling" | "at_risk" | "dormant";
 
 export type DocumentReviewStatus =
   | "requested"
@@ -53,11 +44,16 @@ export interface Organization {
   slug: string;
 }
 
+/** Organization member roles (charter: Owner, Admin, Advisor/Staff). Platform
+ * Admin is a platform-level flag, never a membership; Client and Partner
+ * Viewer principals are modeled separately when their slices land. */
+export type MemberRole = "organization_owner" | "organization_admin" | "staff";
+
 export interface StaffMember {
   id: string;
   organizationId: string;
   name: string;
-  role: "organization_owner" | "staff";
+  role: MemberRole;
   title: string;
 }
 

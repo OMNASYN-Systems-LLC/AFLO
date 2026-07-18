@@ -1,0 +1,8 @@
+{
+  "name": "@aflo/notifications",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Email (Resend) and reminder delivery consumed by the Railway worker. Stub until the notifications slice.",
+  "exports": { ".": "./src/index.ts" }
+}

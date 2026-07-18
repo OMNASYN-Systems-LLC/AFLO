@@ -1,4 +1,4 @@
-import type { AgentEnvelope } from "../domain/agent";
+import type { AgentEnvelope } from "@aflo/ai";
 import type {
   Appointment,
   AdminNote,
@@ -17,8 +17,7 @@ import type {
   RoadmapMilestone,
   StaffMember,
 } from "../domain/types";
-import type { ReadinessAssessment } from "../rules/readiness";
-import type { EngagementAssessment } from "../rules/engagement";
+import type { EngagementAssessment, ReadinessAssessment } from "@aflo/rules";
 
 /**
  * Repository contracts for the first vertical slice.

@@ -1,8 +1,9 @@
 {
-  "name": "@aflo/shared",
+  "name": "@aflo/rules",
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "description": "AFLO deterministic rules kernel: versioned lifecycle, readiness, and engagement rules with a metadata registry. Zero runtime dependencies; no probabilistic input.",
   "exports": {
     ".": "./src/index.ts"
   },
@@ -10,10 +11,6 @@
     "typecheck": "tsc --noEmit",
     "lint": "eslint src test",
     "test": "vitest run"
-  },
-  "dependencies": {
-    "@aflo/ai": "workspace:*",
-    "@aflo/rules": "workspace:*"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

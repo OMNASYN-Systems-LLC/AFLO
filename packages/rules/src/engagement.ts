@@ -1,5 +1,5 @@
-import { MS_PER_DAY } from "../domain/time";
-import type { EngagementStatus } from "../domain/types";
+import { MS_PER_DAY } from "./time";
+import type { EngagementStatus } from "./lifecycle";
 
 /**
  * Versioned deterministic engagement/retention rules.

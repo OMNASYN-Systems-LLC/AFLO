@@ -1,0 +1,8 @@
+{
+  "name": "@aflo/reports",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Quarterly progress report assembly and rendering. Stub until the report slice (report-agent drafts, staff review).",
+  "exports": { ".": "./src/index.ts" }
+}
