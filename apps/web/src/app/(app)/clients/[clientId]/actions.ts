@@ -10,7 +10,7 @@ import { getStaffSession, store } from "@/lib/data";
  * applies the review gate, records the result, and audits denials/blocks.
  */
 export async function runReadinessAssessmentAction(clientId: string): Promise<void> {
-  const session = getStaffSession();
+  const session = await getStaffSession();
   store.runReadinessAssessment({
     organizationId: session.organizationId,
     clientId,
@@ -30,7 +30,7 @@ export async function transitionMonthlyActionAction(
   actionId: string,
   toStatus: "todo" | "in_progress" | "done",
 ): Promise<void> {
-  const session = getStaffSession();
+  const session = await getStaffSession();
   store.transitionMonthlyAction({
     organizationId: session.organizationId,
     actionId,
@@ -43,7 +43,7 @@ export async function transitionMonthlyActionAction(
 }
 
 export async function addMonthlyActionAction(clientId: string, formData: FormData): Promise<void> {
-  const session = getStaffSession();
+  const session = await getStaffSession();
   store.addMonthlyAction({
     organizationId: session.organizationId,
     clientId,
@@ -68,7 +68,7 @@ export async function addMonthlyActionAction(clientId: string, formData: FormDat
  * only offers rule-legal moves.
  */
 export async function requestDocumentAction(clientId: string, formData: FormData): Promise<void> {
-  const session = getStaffSession();
+  const session = await getStaffSession();
   store.requestDocument({
     organizationId: session.organizationId,
     clientId,
@@ -90,7 +90,7 @@ export async function transitionDocumentAction(
   documentId: string,
   toStatus: "requested" | "uploaded" | "in_review" | "approved" | "needs_attention",
 ): Promise<void> {
-  const session = getStaffSession();
+  const session = await getStaffSession();
   store.transitionDocument({
     organizationId: session.organizationId,
     documentId,
@@ -102,7 +102,7 @@ export async function transitionDocumentAction(
 }
 
 export async function scheduleAppointmentAction(clientId: string, formData: FormData): Promise<void> {
-  const session = getStaffSession();
+  const session = await getStaffSession();
   store.scheduleAppointment({
     organizationId: session.organizationId,
     clientId,
@@ -116,7 +116,7 @@ export async function scheduleAppointmentAction(clientId: string, formData: Form
 }
 
 export async function addNoteAction(clientId: string, formData: FormData): Promise<void> {
-  const session = getStaffSession();
+  const session = await getStaffSession();
   store.addNote({
     organizationId: session.organizationId,
     clientId,
@@ -132,7 +132,7 @@ export async function addNoteAction(clientId: string, formData: FormData): Promi
  * quarter, and the review workflow — denials are audited server-side.
  */
 export async function generateReportAction(clientId: string): Promise<void> {
-  const session = getStaffSession();
+  const session = await getStaffSession();
   store.generateQuarterlyReport({
     organizationId: session.organizationId,
     clientId,
@@ -148,7 +148,7 @@ export async function transitionReportAction(
   reportId: string,
   toStatus: "draft" | "ready_for_review" | "published",
 ): Promise<void> {
-  const session = getStaffSession();
+  const session = await getStaffSession();
   store.transitionReport({
     organizationId: session.organizationId,
     reportId,
@@ -170,7 +170,7 @@ export async function transitionRoadmapAction(
   roadmapId: string,
   toStatus: "draft" | "staff_review" | "approved" | "published" | "archived",
 ): Promise<void> {
-  const session = getStaffSession();
+  const session = await getStaffSession();
   store.transitionRoadmap({
     organizationId: session.organizationId,
     roadmapId,

@@ -12,7 +12,7 @@ export const dynamic = "force-dynamic";
  * Identity comes from the server-side session, never the browser.
  */
 export default async function PortalPage() {
-  const session = getClientSession();
+  const session = await getClientSession();
   const view = await portalRepository.getPortalView(session.organizationId, session.clientId, demoNow);
   if (!view) notFound();
 

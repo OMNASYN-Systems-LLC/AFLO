@@ -13,7 +13,7 @@ export async function advanceLeadAction(
   toStageId: string,
   reversal: boolean,
 ): Promise<void> {
-  const session = getStaffSession();
+  const session = await getStaffSession();
   store.advanceLead({
     organizationId: session.organizationId,
     leadId,
