@@ -310,3 +310,75 @@ export async function transitionRoadmapAction(
   revalidatePath("/clients");
   revalidatePath("/dashboard");
 }
+
+/**
+ * Partner-referral actions (partner.v1.0.0). Tenant/actor identity come only
+ * from the session. The neutrality record combines staff-authored fields (why
+ * shown, alternatives, review acknowledgment) with the selected partner's own
+ * disclosures; the store refuses a referral without a complete record and
+ * audits every denial. Partner compensation never touches readiness.
+ */
+export async function createReferralAction(clientId: string, formData: FormData): Promise<void> {
+  const session = await getStaffSession();
+  const partnerId = String(formData.get("partnerId") ?? "");
+  const partner = store.partnersFor(session.organizationId).find((p) => p.id === partnerId);
+  const alternatives = String(formData.get("eligibleAlternatives") ?? "")
+    .split(/[\n,]/)
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+  const nonCommercialOptionExists = store
+    .partnersFor(session.organizationId)
+    .some((p) => p.nonCommercial);
+
+  store.createReferral({
+    organizationId: session.organizationId,
+    clientId,
+    partnerId,
+    neutrality: {
+      whyShown: String(formData.get("whyShown") ?? "").trim(),
+      eligibleAlternatives: alternatives,
+      compensationDisclosure: partner?.compensationDisclosure ?? "",
+      nonCommercialOptionExists,
+      estimatedUserCost: partner?.estimatedUserCost ?? "",
+      keyRisks: partner?.keyRisks ?? "",
+      eligibilityCriteria: partner?.eligibilityCriteria ?? "",
+      staffReviewed: formData.get("staffReviewed") === "on",
+    },
+    actorStaffId: session.staffId,
+  });
+  revalidatePath(`/clients/${clientId}`);
+}
+
+export async function transitionReferralAction(
+  clientId: string,
+  referralId: string,
+  toStatus: "shared_with_client" | "client_engaged" | "declined",
+): Promise<void> {
+  const session = await getStaffSession();
+  store.transitionReferral({
+    organizationId: session.organizationId,
+    referralId,
+    toStatus,
+    actorStaffId: session.staffId,
+  });
+  revalidatePath(`/clients/${clientId}`);
+}
+
+export async function recordReferralOutcomeAction(
+  clientId: string,
+  referralId: string,
+  formData: FormData,
+): Promise<void> {
+  const session = await getStaffSession();
+  store.recordReferralOutcome({
+    organizationId: session.organizationId,
+    referralId,
+    outcome: String(formData.get("outcome") ?? "") as
+      | "engaged_supported_readiness"
+      | "engaged_no_change"
+      | "not_pursued",
+    note: String(formData.get("note") ?? ""),
+    actorStaffId: session.staffId,
+  });
+  revalidatePath(`/clients/${clientId}`);
+}

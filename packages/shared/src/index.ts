@@ -15,3 +15,4 @@ export * from "@aflo/rules";
 export * from "@aflo/ai";
 export * from "@aflo/notifications";
 export * from "@aflo/academy";
+export * from "@aflo/partner-marketplace";

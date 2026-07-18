@@ -1,5 +1,6 @@
 import type { AgentEnvelope } from "@aflo/ai";
 import type { ConsentRecord, NotificationPreferenceRecord } from "@aflo/notifications";
+import type { NeutralityRecord, Partner } from "@aflo/partner-marketplace";
 import {
   DEFAULT_INTAKE,
   INTAKE_RULES_VERSION,
@@ -20,6 +21,7 @@ import type {
   IntakeRecord,
   MonthlyAction,
   Organization,
+  PartnerReferral,
   QuarterlyReport,
   ReadinessAssessmentRecord,
   Roadmap,
@@ -94,6 +96,10 @@ export interface SyntheticDatabase {
   /** Hypothetical transactions for the round-up simulator (never real). */
   virtualTransactions: VirtualTransaction[];
   aiSuggestions: AgentEnvelope[];
+  /** Synthetic partner directory — no real names/compensation in code (ADR-0007). */
+  partners: Partner[];
+  /** Tracked partner referrals, each carrying a complete neutrality record. */
+  partnerReferrals: PartnerReferral[];
 }
 
 const ORG_ID = "org-golden-key";
@@ -625,6 +631,169 @@ const virtualTransactions: VirtualTransaction[] = [
 ];
 
 /**
+ * Synthetic partner directory. Every name is invented (Architecture Rule 9)
+ * and NO real compensation figures appear — commercial disclosures are
+ * plain-language, dollar-free (ADR-0007). Non-commercial options are marked so
+ * the neutrality engine can surface them first.
+ */
+const partners: Partner[] = [
+  {
+    id: "pt-cedarline-cu",
+    organizationId: ORG_ID,
+    name: "Cedarline Community Credit Union",
+    category: "credit_union",
+    licensingNote: "NCUA-insured credit union (synthetic).",
+    nonCommercial: true,
+    compensationDisclosure: "AFLO receives no compensation for this referral.",
+    eligibilityCriteria: "Membership eligibility; score 640+ for auto refinance products.",
+    estimatedUserCost: "No cost to apply; a small membership share deposit opens the account.",
+    keyRisks: "A hard inquiry may temporarily lower the score by a few points.",
+    active: true,
+  },
+  {
+    id: "pt-solidground-ncc",
+    organizationId: ORG_ID,
+    name: "Solid Ground Nonprofit Credit Counseling",
+    category: "nonprofit_credit_counseling",
+    licensingNote: "Nonprofit counseling agency (synthetic).",
+    nonCommercial: true,
+    compensationDisclosure: "AFLO receives no compensation for this referral.",
+    eligibilityCriteria: "Open to any client seeking budgeting or debt-management guidance.",
+    estimatedUserCost: "Free initial session; low-cost debt-management plans if enrolled.",
+    keyRisks: "A debt-management plan may require closing enrolled credit accounts.",
+    active: true,
+  },
+  {
+    id: "pt-harborlight-housing",
+    organizationId: ORG_ID,
+    name: "Harborlight HUD-Approved Housing Counseling",
+    category: "housing_counselor",
+    licensingNote: "HUD-approved housing counseling agency (synthetic).",
+    nonCommercial: true,
+    compensationDisclosure: "AFLO receives no compensation for this referral.",
+    eligibilityCriteria: "First-time buyers preparing for a mortgage application.",
+    estimatedUserCost: "No cost — HUD-funded counseling.",
+    keyRisks: "Counseling is educational and does not pre-approve any mortgage.",
+    active: true,
+  },
+  {
+    id: "pt-brightpath-cpa",
+    organizationId: ORG_ID,
+    name: "Brightpath Tax & Accounting",
+    category: "cpa_tax",
+    licensingNote: "Licensed CPA practice (synthetic).",
+    nonCommercial: false,
+    compensationDisclosure:
+      "AFLO may receive a flat referral fee if you engage this firm; the fee is disclosed in your agreement and never changes your price.",
+    eligibilityCriteria: "Clients with self-employment or small-business tax questions.",
+    estimatedUserCost: "Paid engagement quoted by the firm before any work begins.",
+    keyRisks: "Fees vary by scope; request a written quote before engaging.",
+    active: true,
+  },
+  {
+    id: "pt-northstar-capital",
+    organizationId: ORG_ID,
+    name: "Northstar Small-Business Capital",
+    category: "small_business_lender",
+    licensingNote: "Licensed commercial lender (synthetic).",
+    nonCommercial: false,
+    compensationDisclosure:
+      "AFLO may receive a referral fee if a loan closes; the fee is disclosed in your agreement and never affects your rate or your readiness result.",
+    eligibilityCriteria: "Operating business with 12+ months of revenue and reserves.",
+    estimatedUserCost: "Interest and fees set by the lender; compare against other offers.",
+    keyRisks: "Taking on debt increases obligations; a hard inquiry may lower the score.",
+    active: true,
+  },
+  {
+    id: "pt-oldbridge-lender",
+    organizationId: ORG_ID,
+    name: "Oldbridge Lending (deactivated)",
+    category: "small_business_lender",
+    licensingNote: "Former partner, deactivated pending agreement renewal (synthetic).",
+    nonCommercial: false,
+    compensationDisclosure: "Not referable while deactivated.",
+    eligibilityCriteria: "n/a",
+    estimatedUserCost: "n/a",
+    keyRisks: "n/a",
+    active: false,
+  },
+];
+
+function neutrality(
+  whyShown: string,
+  eligibleAlternatives: string[],
+  compensationDisclosure: string,
+  nonCommercialOptionExists: boolean,
+  estimatedUserCost: string,
+  keyRisks: string,
+  eligibilityCriteria: string,
+): NeutralityRecord {
+  return {
+    whyShown,
+    eligibleAlternatives,
+    compensationDisclosure,
+    nonCommercialOptionExists,
+    estimatedUserCost,
+    keyRisks,
+    eligibilityCriteria,
+    staffReviewed: true,
+  };
+}
+
+/**
+ * Two seeded referrals: James Whitaker engaged a non-commercial credit union
+ * and it supported his readiness (terminal, positive outcome); Renee Solomon
+ * has a fresh credit-union referral shared for her auto-refinance goal. Both
+ * carry complete neutrality records.
+ */
+const partnerReferrals: PartnerReferral[] = [
+  {
+    id: "pr-whitaker-seed",
+    organizationId: ORG_ID,
+    clientId: "c-whitaker",
+    partnerId: "pt-cedarline-cu",
+    status: "outcome_recorded",
+    neutrality: neutrality(
+      "Matches James's acquisition stage and first-home goal; a member credit union offered competitive pre-approval.",
+      ["Harborlight HUD-Approved Housing Counseling", "Brightpath Tax & Accounting"],
+      "AFLO receives no compensation for this referral.",
+      true,
+      "No cost to apply; membership share deposit opens the account.",
+      "A hard inquiry may temporarily lower the score by a few points.",
+      "Membership eligibility; score 640+ for the mortgage pre-approval.",
+    ),
+    outcome: "engaged_supported_readiness",
+    outcomeNote: "Pre-approval refreshed; kept utilization low through the process.",
+    createdByStaffId: "s-boyd",
+    createdAt: daysAgo(48),
+    sharedAt: daysAgo(47),
+    updatedAt: daysAgo(20),
+  },
+  {
+    id: "pr-solomon-seed",
+    organizationId: ORG_ID,
+    clientId: "c-solomon",
+    partnerId: "pt-cedarline-cu",
+    status: "shared_with_client",
+    neutrality: neutrality(
+      "Renee's auto-refinance goal fits a credit union once she clears the 640 score line.",
+      ["Solid Ground Nonprofit Credit Counseling"],
+      "AFLO receives no compensation for this referral.",
+      true,
+      "No cost to apply; membership share deposit opens the account.",
+      "Refinancing extends the loan term unless she keeps the same payoff date.",
+      "Membership eligibility; score 640+ for auto refinance.",
+    ),
+    outcome: null,
+    outcomeNote: null,
+    createdByStaffId: "s-mercer",
+    createdAt: daysAgo(6),
+    sharedAt: daysAgo(5),
+    updatedAt: daysAgo(5),
+  },
+];
+
+/**
  * ΛFLO Wealth Academy assignments: James Whitaker completed a lesson (with a
  * knowledge-check score); Renee Solomon has one assigned but not started.
  * Provenance is fully recorded (trigger, rule version, reason code, content
@@ -780,4 +949,6 @@ export const syntheticDatabase: SyntheticDatabase = {
   simulationSettings,
   virtualTransactions,
   aiSuggestions,
+  partners,
+  partnerReferrals,
 };

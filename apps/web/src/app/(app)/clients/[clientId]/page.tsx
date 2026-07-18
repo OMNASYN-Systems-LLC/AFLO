@@ -6,14 +6,18 @@ import {
   LIFECYCLE_STAGES,
   NOTIFICATION_DEFAULT_CHANNELS,
   NOTIFICATION_TYPES,
+  PARTNER_CATEGORY_LABELS,
+  PARTNER_REFERRAL_STATUS_LABELS,
   projectedMonthlySavingsCents,
   quarterOf,
+  REFERRAL_OUTCOME_LABELS,
   REVIEW_REASON_DESCRIPTIONS,
   roadmapTransitionsFrom,
   totalRoundUpCents,
   type DocumentReviewStatusId,
   type NotificationChannel,
   type NotificationType,
+  type PartnerReferralStatus,
   type RoadmapStatus,
 } from "@aflo/shared";
 import Link from "next/link";
@@ -38,7 +42,9 @@ import {
   assignEducationAction,
   completeEducationAction,
   createGoalAction,
+  createReferralAction,
   generateReportAction,
+  recordReferralOutcomeAction,
   requestDocumentAction,
   runReadinessAssessmentAction,
   scheduleAppointmentAction,
@@ -46,6 +52,7 @@ import {
   setPrimaryGoalAction,
   transitionDocumentAction,
   transitionMonthlyActionAction,
+  transitionReferralAction,
   transitionReportAction,
   transitionRoadmapAction,
   updateGoalProgressAction,
@@ -66,6 +73,15 @@ import {
 } from "@/lib/format";
 
 export const metadata = { title: "Client detail" };
+
+/** Referral status → badge tone. */
+const REFERRAL_TONE = {
+  suggested: "neutral",
+  shared_with_client: "calm",
+  client_engaged: "gold",
+  outcome_recorded: "good",
+  declined: "neutral",
+} as const satisfies Record<PartnerReferralStatus, string>;
 
 export default async function ClientDetailPage({
   params,
@@ -90,6 +106,9 @@ export default async function ClientDetailPage({
     .sort((x, y) => x.scheduledAt.localeCompare(y.scheduledAt));
   const communications = store.communicationsFor(DEMO_ORG_ID, clientId).slice(-6).reverse();
   const notificationPrefs = store.notificationPreferencesFor(DEMO_ORG_ID, clientId);
+  const partners = store.partnersFor(DEMO_ORG_ID);
+  const partnerById = new Map(partners.map((p) => [p.id, p]));
+  const referrals = store.referralsFor(DEMO_ORG_ID, clientId);
   const education = store.educationFor(DEMO_ORG_ID, clientId);
   const simulation = store.simulationFor(DEMO_ORG_ID, clientId);
   const virtualTransactions = store.virtualTransactionsFor(DEMO_ORG_ID, clientId);
@@ -938,6 +957,159 @@ export default async function ClientDetailPage({
                 </li>
               ))}
             </ul>
+          </SectionCard>
+
+          <SectionCard
+            title="Partner referrals"
+            subtitle="Routing to licensed partners — neutrality recorded, never an approval"
+          >
+            {referrals.length > 0 ? (
+              <ul className="space-y-3">
+                {referrals.map((r) => {
+                  const partner = partnerById.get(r.partnerId);
+                  return (
+                    <li key={r.id} className="rounded-md border border-line bg-card px-3.5 py-3">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div>
+                          <p className="text-sm font-medium text-ink">{partner?.name ?? r.partnerId}</p>
+                          <p className="text-[11px] text-ink-faint">
+                            {partner ? PARTNER_CATEGORY_LABELS[partner.category] : "Partner"}
+                            {partner?.nonCommercial ? " · non-commercial" : ""}
+                          </p>
+                        </div>
+                        <Badge tone={REFERRAL_TONE[r.status]} label={PARTNER_REFERRAL_STATUS_LABELS[r.status]} />
+                      </div>
+                      <dl className="mt-2.5 space-y-1 text-xs text-ink-soft">
+                        <div>
+                          <dt className="inline font-medium text-ink">Why shown: </dt>
+                          <dd className="inline">{r.neutrality.whyShown}</dd>
+                        </div>
+                        <div>
+                          <dt className="inline font-medium text-ink">Compensation: </dt>
+                          <dd className="inline">{r.neutrality.compensationDisclosure}</dd>
+                        </div>
+                        <div>
+                          <dt className="inline font-medium text-ink">Est. cost: </dt>
+                          <dd className="inline">{r.neutrality.estimatedUserCost}</dd>
+                        </div>
+                        <div>
+                          <dt className="inline font-medium text-ink">Key risks: </dt>
+                          <dd className="inline">{r.neutrality.keyRisks}</dd>
+                        </div>
+                        <div>
+                          <dt className="inline font-medium text-ink">Alternatives: </dt>
+                          <dd className="inline">
+                            {r.neutrality.eligibleAlternatives.length > 0
+                              ? r.neutrality.eligibleAlternatives.join("; ")
+                              : "none eligible"}
+                          </dd>
+                        </div>
+                        <div className="flex flex-wrap gap-2 pt-0.5 text-[11px] text-ink-faint">
+                          <span>
+                            Non-commercial option {r.neutrality.nonCommercialOptionExists ? "available" : "none"}
+                          </span>
+                          <span>· Staff reviewed: {r.neutrality.staffReviewed ? "yes" : "no"}</span>
+                        </div>
+                      </dl>
+                      {r.outcome ? (
+                        <p className="mt-2.5 rounded-md bg-status-good-tint px-3 py-2 text-xs text-emerald-deep">
+                          Outcome: {REFERRAL_OUTCOME_LABELS[r.outcome]}
+                          {r.outcomeNote ? ` — ${r.outcomeNote}` : ""}
+                        </p>
+                      ) : null}
+                      {r.status !== "outcome_recorded" && r.status !== "declined" ? (
+                        <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-line/70 pt-3">
+                          {r.status === "suggested" ? (
+                            <form action={transitionReferralAction.bind(null, clientId, r.id, "shared_with_client")}>
+                              <ActionButton label="Share with client" primary />
+                            </form>
+                          ) : null}
+                          {r.status === "shared_with_client" ? (
+                            <form action={transitionReferralAction.bind(null, clientId, r.id, "client_engaged")}>
+                              <ActionButton label="Mark engaged" primary />
+                            </form>
+                          ) : null}
+                          {r.status === "client_engaged" ? (
+                            <form
+                              action={recordReferralOutcomeAction.bind(null, clientId, r.id)}
+                              className="flex flex-wrap items-center gap-2"
+                            >
+                              <select
+                                name="outcome"
+                                className="rounded-md border border-line bg-card px-2 py-1.5 text-xs text-ink"
+                              >
+                                <option value="engaged_supported_readiness">Engaged — supported readiness</option>
+                                <option value="engaged_no_change">Engaged — no readiness change</option>
+                                <option value="not_pursued">Not pursued</option>
+                              </select>
+                              <input
+                                name="note"
+                                placeholder="Outcome note (optional)"
+                                className="min-w-0 flex-1 rounded-md border border-line bg-card px-2 py-1.5 text-xs text-ink placeholder:text-ink-faint"
+                              />
+                              <ActionButton label="Record outcome" primary />
+                            </form>
+                          ) : null}
+                          <form action={transitionReferralAction.bind(null, clientId, r.id, "declined")}>
+                            <ActionButton label="Decline" />
+                          </form>
+                        </div>
+                      ) : null}
+                    </li>
+                  );
+                })}
+              </ul>
+            ) : (
+              <EmptyState message="No partner referrals yet." />
+            )}
+            <p className="mt-3 text-[11px] leading-relaxed text-ink-faint">
+              Every referral records the eight-field neutrality disclosure. Partner compensation never affects
+              a client&rsquo;s readiness, and AFLO never approves a loan or guarantees acceptance.
+            </p>
+            {record.kind === "client" && partners.length > 0 ? (
+              <form
+                action={createReferralAction.bind(null, clientId)}
+                className="mt-3 space-y-2 border-t border-line/70 pt-4"
+              >
+                <select
+                  name="partnerId"
+                  required
+                  defaultValue=""
+                  className="w-full rounded-md border border-line bg-card px-3 py-1.5 text-sm text-ink"
+                >
+                  <option value="" disabled>
+                    Select a partner…
+                  </option>
+                  {partners.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name} — {PARTNER_CATEGORY_LABELS[p.category]}
+                      {p.nonCommercial ? " (non-commercial)" : ""}
+                    </option>
+                  ))}
+                </select>
+                <input
+                  name="whyShown"
+                  required
+                  placeholder="Why this option is being shown"
+                  className="w-full rounded-md border border-line bg-card px-3 py-1.5 text-sm text-ink placeholder:text-ink-faint"
+                />
+                <input
+                  name="eligibleAlternatives"
+                  placeholder="Eligible alternatives (comma-separated)"
+                  className="w-full rounded-md border border-line bg-card px-3 py-1.5 text-sm text-ink placeholder:text-ink-faint"
+                />
+                <label className="flex items-center gap-2 text-xs text-ink-soft">
+                  <input type="checkbox" name="staffReviewed" defaultChecked className="rounded border-line" />
+                  I have reviewed this recommendation for neutrality
+                </label>
+                <button
+                  type="submit"
+                  className="rounded-md bg-emerald px-3.5 py-2 text-xs font-medium text-ivory-ink transition-colors hover:bg-emerald-deep"
+                >
+                  Create referral
+                </button>
+              </form>
+            ) : null}
           </SectionCard>
 
           <SectionCard title="Notes" subtitle="Internal — never visible in the client portal">
