@@ -1,0 +1,61 @@
+@import "tailwindcss";
+
+/*
+ * Golden Key Wealth design tokens — restrained, editorial, unhurried.
+ * Obsidian + warm ivory + muted gold + deep emerald + slate (CLAUDE.md,
+ * "Initial Visual Direction"). Chart-mark and status colors below were
+ * validated with the dataviz palette checks against the ivory surface.
+ */
+@theme {
+  --font-sans:
+    ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+  --font-display:
+    "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Palatino,
+    Georgia, "Times New Roman", serif;
+
+  /* Surfaces */
+  --color-ivory: #f7f4ec;
+  --color-card: #fdfbf5;
+  --color-parchment: #efe9dc;
+  --color-sand: #e6dfcd;
+  --color-line: #ddd5c2;
+  --color-obsidian: #191b16;
+  --color-charcoal: #242720;
+  --color-charcoal-soft: #31352c;
+
+  /* Ink */
+  --color-ink: #21241d;
+  --color-ink-soft: #5b6157;
+  --color-ink-faint: #878d80;
+  --color-ivory-ink: #f2efe6;
+  --color-ivory-ink-soft: #b9b7a9;
+
+  /* Brand accents */
+  --color-gold: #a2803f;
+  --color-gold-deep: #7d6127;
+  --color-gold-soft: #c9b078;
+  --color-emerald: #1c5b48;
+  --color-emerald-deep: #14453a;
+
+  /* Data marks (validated) */
+  --color-mark-emerald: #0f8560;
+
+  /* Status (validated set — always shown with a text label, never color alone) */
+  --color-status-good: #1e8259;
+  --color-status-warn: #b3891f;
+  --color-status-risk: #a03a14;
+  --color-status-calm: #4d68b0;
+
+  /* Status tints for badge backgrounds on ivory */
+  --color-status-good-tint: #e0eee5;
+  --color-status-warn-tint: #f2ead1;
+  --color-status-risk-tint: #f5e2d8;
+  --color-status-calm-tint: #e2e7f3;
+  --color-neutral-tint: #e9e4d6;
+}
+
+body {
+  @apply bg-ivory font-sans text-ink antialiased;
+  font-feature-settings: "kern", "liga";
+}

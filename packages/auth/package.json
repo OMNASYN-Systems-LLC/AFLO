@@ -1,0 +1,8 @@
+{
+  "name": "@aflo/auth",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Auth provider adapter (Clerk recommended, ADR-0006) and server-side authorization policies. Stub until Sprint 3.",
+  "exports": { ".": "./src/index.ts" }
+}

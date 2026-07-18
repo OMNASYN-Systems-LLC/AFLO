@@ -1,0 +1,8 @@
+{
+  "name": "@aflo/ui",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Shared design-system components. Stub — components live in apps/web until a second surface needs them.",
+  "exports": { ".": "./src/index.ts" }
+}
