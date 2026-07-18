@@ -290,6 +290,34 @@ export async function transitionReportAction(
 }
 
 /**
+ * Signed verification handoff actions (security.v1.0.0). The store enforces a
+ * server-verified actor, active partner-data-sharing consent, and a recorded
+ * readiness assessment before assembling and signing a package; denials are
+ * audited. Revocation is one-way. Recipient identity comes from the form; org
+ * and actor identity come only from the server session.
+ */
+export async function generateHandoffAction(clientId: string, formData: FormData): Promise<void> {
+  const session = await getStaffSession();
+  store.generateHandoffPackage({
+    organizationId: session.organizationId,
+    clientId,
+    recipientScope: String(formData.get("recipientScope") ?? "").trim(),
+    actorStaffId: session.staffId,
+  });
+  revalidatePath(`/clients/${clientId}`);
+}
+
+export async function revokeHandoffAction(clientId: string, packageId: string): Promise<void> {
+  const session = await getStaffSession();
+  store.revokeHandoffPackage({
+    organizationId: session.organizationId,
+    packageId,
+    actorStaffId: session.staffId,
+  });
+  revalidatePath(`/clients/${clientId}`);
+}
+
+/**
  * Roadmap approval-workflow action (roadmap.v1.0.0). The store validates
  * the transition; the UI only offers rule-legal moves, and denials are
  * audited server-side either way.
