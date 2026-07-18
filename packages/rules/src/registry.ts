@@ -1,3 +1,4 @@
+import { ACTION_RULES_VERSION } from "./action";
 import { ENGAGEMENT_RULES_VERSION } from "./engagement";
 import { INTAKE_RULES_VERSION } from "./intake";
 import { PIPELINE_RULES_VERSION } from "./pipeline";
@@ -162,6 +163,28 @@ export const RULE_REGISTRY: readonly RuleDefinition[] = [
     sources: [],
     changeHistory: [
       { version: "intake.v1.0.0", date: "2026-07-18", note: "Initial founder-required section set (founder workstream slice D)." },
+    ],
+  },
+  {
+    id: "action.transition",
+    version: ACTION_RULES_VERSION,
+    effectiveDate: "2026-07-18",
+    description:
+      "Monthly-action status workflow over an allow-list: todo → in_progress → done, direct completion allowed, pauses explicit, and reopening a completed action is a distinct flagged move (AC_REOPENED) so completion history is never silently rewritten.",
+    inputs: ["fromStatus", "toStatus"],
+    output: "ActionTransitionResult { allowed, reasonCode }",
+    reasonCodes: [
+      "AC_STARTED",
+      "AC_COMPLETED",
+      "AC_PAUSED",
+      "AC_REOPENED",
+      "AC_SAME_STATUS",
+      "AC_UNKNOWN_STATUS",
+      "AC_ILLEGAL_TRANSITION",
+    ],
+    sources: [],
+    changeHistory: [
+      { version: "action.v1.0.0", date: "2026-07-18", note: "Initial status workflow (founder workstream slice G)." },
     ],
   },
   {

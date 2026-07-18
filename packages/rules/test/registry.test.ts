@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { ACTION_RULES_VERSION } from "../src/action";
 import { ENGAGEMENT_RULES_VERSION } from "../src/engagement";
 import { INTAKE_RULES_VERSION } from "../src/intake";
 import { PIPELINE_RULES_VERSION } from "../src/pipeline";
@@ -34,6 +35,7 @@ describe("rule registry", () => {
     expect(getRule("intake.completeness")?.version).toBe(INTAKE_RULES_VERSION);
     expect(getRule("readiness.review_gate")?.version).toBe(REVIEW_RULES_VERSION);
     expect(getRule("roadmap.transition")?.version).toBe(ROADMAP_RULES_VERSION);
+    expect(getRule("action.transition")?.version).toBe(ACTION_RULES_VERSION);
     expect(getRule("engagement.status")?.version).toBe(ENGAGEMENT_RULES_VERSION);
   });
 

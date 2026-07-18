@@ -1,8 +1,10 @@
 import {
+  ACTION_RULES_VERSION,
   INTAKE_RULES_VERSION,
   PIPELINE_BACKBONE,
   READINESS_RULES_VERSION,
   REASON_CODE_NEXT_ACTIONS,
+  actionTransition,
   assessReadiness,
   assessmentReviewGate,
   intakeCompleteness,
@@ -10,6 +12,8 @@ import {
   pipelineTransition,
   roadmapTransition,
   sectionCompletion,
+  type ActionStatusId,
+  type ActionTransitionResult,
   type IntakeCompletenessResult,
   type PipelineTransitionResult,
   type ReviewGateResult,
@@ -20,7 +24,13 @@ import { createEvent, type DomainEvent } from "../events";
 import { toOutboxRecord, type OutboxRecord } from "../outbox";
 import { syntheticDatabase, type SyntheticDatabase } from "../data/synthetic";
 import { toReadinessFacts } from "../domain/facts";
-import type { ClientRecord, IntakeRecord, ReadinessAssessmentRecord, Roadmap } from "../domain/types";
+import type {
+  ClientRecord,
+  IntakeRecord,
+  MonthlyAction,
+  ReadinessAssessmentRecord,
+  Roadmap,
+} from "../domain/types";
 
 /**
  * Mutable in-memory application store for the prototype phase (ADR-0002:
@@ -123,6 +133,40 @@ export interface TransitionRoadmapInput {
   organizationId: string;
   roadmapId: string;
   toStatus: RoadmapStatus;
+  actorStaffId: string;
+}
+
+export type MonthlyActionDenialCode =
+  | "CLIENT_NOT_FOUND"
+  | "ACTION_NOT_FOUND"
+  | "ACTOR_NOT_IN_ORG"
+  | "INVALID_INPUT";
+
+export interface MonthlyActionResult {
+  ok: boolean;
+  denialCode?: MonthlyActionDenialCode;
+  /** Rule outcome when the transition rules were consulted. */
+  transition?: ActionTransitionResult;
+  action?: MonthlyAction;
+  /** Human-readable validation failures for INVALID_INPUT. */
+  inputErrors?: string[];
+  emittedEventIds: string[];
+}
+
+export interface AddMonthlyActionInput {
+  organizationId: string;
+  clientId: string;
+  title: string;
+  category: MonthlyAction["category"];
+  /** ISO date; the action belongs to the month it is due. */
+  dueDate: string;
+  actorStaffId: string;
+}
+
+export interface TransitionMonthlyActionInput {
+  organizationId: string;
+  actionId: string;
+  toStatus: ActionStatusId;
   actorStaffId: string;
 }
 
@@ -645,6 +689,159 @@ export class AfloStore {
     });
 
     return { ok: true, transition, roadmap, emittedEventIds: emitted.map((e) => e.eventId) };
+  }
+
+  /**
+   * Add a manual monthly action to a client's plan. The action belongs to
+   * the month it is due — deterministic from input, independent of the
+   * server clock. Emits TaskAssigned; invalid input is audited and denied.
+   */
+  addMonthlyAction(input: AddMonthlyActionInput): MonthlyActionResult {
+    const now = this.clock();
+    const record = this.findRecord(input.organizationId, input.clientId);
+    if (!record) return { ok: false, denialCode: "CLIENT_NOT_FOUND", emittedEventIds: [] };
+    const actor = this.findActor(input.organizationId, input.actorStaffId);
+    if (!actor) return { ok: false, denialCode: "ACTOR_NOT_IN_ORG", emittedEventIds: [] };
+
+    const CATEGORIES: MonthlyAction["category"][] = ["payment", "savings", "documentation", "education", "habit"];
+    const title = input.title.trim();
+    const inputErrors: string[] = [];
+    if (title.length === 0) inputErrors.push("title is required");
+    if (!CATEGORIES.includes(input.category)) inputErrors.push(`unknown category: ${String(input.category)}`);
+    if (Number.isNaN(Date.parse(input.dueDate))) inputErrors.push(`due date is not a valid date: ${input.dueDate}`);
+    if (inputErrors.length > 0) {
+      this.audit({
+        organizationId: input.organizationId,
+        actorStaffId: actor.id,
+        action: "action.create_denied",
+        targetType: "monthly_action",
+        targetId: record.id,
+        detail: inputErrors.join("; "),
+        reasonCode: "AC_INVALID_INPUT",
+        ruleVersion: ACTION_RULES_VERSION,
+        occurredAt: now.toISOString(),
+      });
+      return { ok: false, denialCode: "INVALID_INPUT", inputErrors, emittedEventIds: [] };
+    }
+
+    this.counter += 1;
+    const action: MonthlyAction = {
+      id: `ma-${record.id}-${this.counter}`,
+      clientId: record.id,
+      month: new Date(input.dueDate).toISOString().slice(0, 7),
+      title,
+      category: input.category,
+      status: "todo",
+      dueDate: new Date(input.dueDate).toISOString(),
+    };
+    this.db.monthlyActions.push(action);
+
+    const event = createEvent({
+      eventType: "TaskAssigned",
+      organizationId: input.organizationId,
+      aggregateId: action.id,
+      actorId: actor.id,
+      occurredAt: now.toISOString(),
+      payload: {
+        clientId: record.id,
+        taskId: action.id,
+        milestoneId: null,
+        templateId: null,
+        dueDate: action.dueDate,
+      },
+    });
+    this.outbox.push(toOutboxRecord(event, { now }));
+
+    this.audit({
+      organizationId: input.organizationId,
+      actorStaffId: actor.id,
+      action: "action.assigned",
+      targetType: "monthly_action",
+      targetId: action.id,
+      detail: `client ${record.id}: "${title}" (${input.category}) due ${action.dueDate.slice(0, 10)}`,
+      reasonCode: "AC_ASSIGNED",
+      ruleVersion: ACTION_RULES_VERSION,
+      occurredAt: now.toISOString(),
+    });
+
+    return { ok: true, action, emittedEventIds: [event.eventId] };
+  }
+
+  /**
+   * Move a monthly action through its status workflow (action.v1.0.0).
+   * Completion emits TaskCompleted with the verifying staff member; reopens
+   * are flagged distinctly by the rules. Denials are audited, never mutate.
+   */
+  transitionMonthlyAction(input: TransitionMonthlyActionInput): MonthlyActionResult {
+    const now = this.clock();
+    const action = this.db.monthlyActions.find((a) => a.id === input.actionId);
+    const client = action ? this.findRecord(input.organizationId, action.clientId) : undefined;
+    if (!action || !client) return { ok: false, denialCode: "ACTION_NOT_FOUND", emittedEventIds: [] };
+    const actor = this.findActor(input.organizationId, input.actorStaffId);
+    if (!actor) return { ok: false, denialCode: "ACTOR_NOT_IN_ORG", emittedEventIds: [] };
+
+    const transition = actionTransition(action.status, input.toStatus);
+    if (!transition.allowed) {
+      this.audit({
+        organizationId: input.organizationId,
+        actorStaffId: actor.id,
+        action: "action.transition_denied",
+        targetType: "monthly_action",
+        targetId: action.id,
+        detail: `client ${client.id}: ${action.status} → ${input.toStatus} denied`,
+        reasonCode: transition.reasonCode,
+        ruleVersion: transition.ruleVersion,
+        occurredAt: now.toISOString(),
+      });
+      return { ok: false, transition, emittedEventIds: [] };
+    }
+
+    const fromStatus = action.status;
+    action.status = input.toStatus;
+    client.lastActivityAt = now.toISOString();
+
+    const emitted: DomainEvent[] = [];
+    if (input.toStatus === "done") {
+      emitted.push(
+        createEvent({
+          eventType: "TaskCompleted",
+          organizationId: input.organizationId,
+          aggregateId: action.id,
+          actorId: actor.id,
+          occurredAt: now.toISOString(),
+          payload: {
+            clientId: client.id,
+            taskId: action.id,
+            completedBy: "staff",
+            verifiedByMemberId: actor.id,
+            evidenceDocumentId: null,
+          },
+        }),
+      );
+    }
+    for (const event of emitted) {
+      this.outbox.push(toOutboxRecord(event, { now }));
+    }
+
+    const ACTION_BY_CODE: Record<string, string> = {
+      AC_STARTED: "action.started",
+      AC_COMPLETED: "action.completed",
+      AC_PAUSED: "action.paused",
+      AC_REOPENED: "action.reopened",
+    };
+    this.audit({
+      organizationId: input.organizationId,
+      actorStaffId: actor.id,
+      action: ACTION_BY_CODE[transition.reasonCode] ?? "action.transitioned",
+      targetType: "monthly_action",
+      targetId: action.id,
+      detail: `client ${client.id}: ${fromStatus} → ${input.toStatus}`,
+      reasonCode: transition.reasonCode,
+      ruleVersion: transition.ruleVersion,
+      occurredAt: now.toISOString(),
+    });
+
+    return { ok: true, transition, action, emittedEventIds: emitted.map((e) => e.eventId) };
   }
 
   /** Recorded assessment history for one client, oldest first, org-verified. */
