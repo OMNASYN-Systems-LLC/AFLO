@@ -1,6 +1,7 @@
 import type { AgentEnvelope } from "@aflo/ai";
 import type { ConsentRecord, NotificationPreferenceRecord } from "@aflo/notifications";
 import type { NeutralityRecord, Partner } from "@aflo/partner-marketplace";
+import type { HandoffPackage } from "@aflo/security";
 import {
   DEFAULT_INTAKE,
   INTAKE_RULES_VERSION,
@@ -100,6 +101,12 @@ export interface SyntheticDatabase {
   partners: Partner[];
   /** Tracked partner referrals, each carrying a complete neutrality record. */
   partnerReferrals: PartnerReferral[];
+  /**
+   * Signed verification handoff packages (security.v1.0.0). Generated at
+   * runtime from verified facts; the seed is empty because a package must be
+   * signed by the running store's key to verify.
+   */
+  handoffPackages: HandoffPackage[];
 }
 
 const ORG_ID = "org-golden-key";
@@ -587,6 +594,12 @@ const consentRecords: ConsentRecord[] = [
     })),
   { userId: "c-ngo", consentType: "communication", granted: true, recordedAt: daysAgo(460) },
   { userId: "c-ngo", consentType: "communication", granted: false, recordedAt: daysAgo(70) },
+  // Partner-data-sharing consent gates verification handoff packages. James
+  // Whitaker and Renee Solomon have granted it (their files can be shared with a
+  // consented professional); every other client has not, so a handoff attempt
+  // for them fails closed on the consent gate.
+  { userId: "c-whitaker", consentType: "partner_data_sharing", granted: true, recordedAt: daysAgo(20) },
+  { userId: "c-solomon", consentType: "partner_data_sharing", granted: true, recordedAt: daysAgo(15) },
 ];
 
 /**
@@ -951,4 +964,5 @@ export const syntheticDatabase: SyntheticDatabase = {
   aiSuggestions,
   partners,
   partnerReferrals,
+  handoffPackages: [],
 };

@@ -35,6 +35,7 @@ import {
 } from "@aflo/rules";
 import {
   NOTIFICATION_RULES_VERSION,
+  hasActiveConsent,
   renderNotification,
   resolveDelivery,
   type NotificationChannel,
@@ -57,6 +58,15 @@ import {
   type PartnerReferralTransitionResult,
   type ReferralOutcome,
 } from "@aflo/partner-marketplace";
+import {
+  assembleHandoffPackage,
+  generateSigningKey,
+  verifyHandoffPackage,
+  type HandoffFacts,
+  type HandoffPackage,
+  type HandoffVerification,
+  type SigningKeyPair,
+} from "@aflo/security";
 import { createEvent, type DomainEvent } from "../events";
 import { toOutboxRecord, type OutboxRecord } from "../outbox";
 import { syntheticDatabase, type SyntheticDatabase } from "../data/synthetic";
@@ -448,11 +458,49 @@ export interface RecordReferralOutcomeInput {
   actorStaffId: string;
 }
 
+export type HandoffDenialCode =
+  | "CLIENT_NOT_FOUND"
+  | "ACTOR_NOT_IN_ORG"
+  | "NO_PARTNER_CONSENT"
+  | "NO_VERIFIED_ASSESSMENT"
+  | "PACKAGE_NOT_FOUND"
+  | "ALREADY_REVOKED";
+
+export interface HandoffResult {
+  ok: boolean;
+  denialCode?: HandoffDenialCode;
+  package?: HandoffPackage;
+}
+
+export interface GenerateHandoffInput {
+  organizationId: string;
+  clientId: string;
+  /** Who may consume the package (e.g. "partner-cpa:acme-tax"). */
+  recipientScope: string;
+  actorStaffId: string;
+}
+
+export interface RevokeHandoffInput {
+  organizationId: string;
+  packageId: string;
+  actorStaffId: string;
+}
+
+/** How long an issued handoff package stays valid (days) before it expires. */
+const HANDOFF_VALIDITY_DAYS = 30;
+
 export class AfloStore {
   private readonly db: SyntheticDatabase;
   readonly outbox: OutboxRecord[] = [];
   readonly auditLog: AuditEntry[] = [];
   readonly communicationsLog: CommunicationLogEntry[] = [];
+  /**
+   * Dev-only signing key for verification handoff packages. Generated per
+   * process; packages verify within the same running store. In production the
+   * private key lives in a managed KMS/HSM and never in the process memory
+   * this way (charter; ADR-0009). Never serialized, logged, or exposed.
+   */
+  private readonly signingKey: SigningKeyPair = generateSigningKey();
   private counter = 0;
 
   constructor(
@@ -2356,6 +2404,173 @@ export class AfloStore {
     });
 
     return { ok: true, transition, referral, emittedEventIds: [] };
+  }
+
+  /** Signed handoff packages issued for one client, org-verified, newest last. */
+  handoffPackagesFor(organizationId: string, clientId: string): HandoffPackage[] {
+    const record = this.findRecord(organizationId, clientId);
+    if (!record) return [];
+    return this.db.handoffPackages.filter(
+      (p) => p.organizationId === organizationId && p.clientId === clientId,
+    );
+  }
+
+  /**
+   * Assemble and sign a verification handoff package (security.v1.0.0) from a
+   * client's VERIFIED facts. Fails closed on three gates: a server-verified
+   * actor, active `partner_data_sharing` consent, and at least one recorded
+   * readiness assessment. The payload carries the ΛFLO readiness stage (never a
+   * bureau score), the primary goal, the count of staff-approved documents, and
+   * the latest published report quarter — no raw SSN, bank, or credit-report
+   * data. The signature binds that payload to the store's key; a recipient can
+   * detect any later tampering. Denials are audited and never mutate.
+   */
+  generateHandoffPackage(input: GenerateHandoffInput): HandoffResult {
+    const now = this.clock();
+    const record = this.findRecord(input.organizationId, input.clientId);
+    if (!record) return { ok: false, denialCode: "CLIENT_NOT_FOUND" };
+    const actor = this.findActor(input.organizationId, input.actorStaffId);
+    if (!actor) return { ok: false, denialCode: "ACTOR_NOT_IN_ORG" };
+
+    // Consent gate: an external share requires active partner-data-sharing
+    // consent. Absent or revoked consent fails closed (audited, no package).
+    if (!hasActiveConsent(this.db.consentRecords, record.id, "partner_data_sharing")) {
+      this.audit({
+        organizationId: input.organizationId,
+        actorStaffId: actor.id,
+        action: "handoff.generate_denied",
+        targetType: "handoff_package",
+        targetId: record.id,
+        detail: `no active partner_data_sharing consent for ${record.id}`,
+        reasonCode: "NO_PARTNER_CONSENT",
+        ruleVersion: NOTIFICATION_RULES_VERSION,
+        occurredAt: now.toISOString(),
+      });
+      return { ok: false, denialCode: "NO_PARTNER_CONSENT" };
+    }
+
+    // A handoff asserts a verified readiness position; there must be one to assert.
+    const assessment = this.db.assessments.filter((a) => a.clientId === record.id).at(-1);
+    if (!assessment) {
+      this.audit({
+        organizationId: input.organizationId,
+        actorStaffId: actor.id,
+        action: "handoff.generate_denied",
+        targetType: "handoff_package",
+        targetId: record.id,
+        detail: `no recorded readiness assessment for ${record.id}`,
+        reasonCode: "NO_VERIFIED_ASSESSMENT",
+        ruleVersion: READINESS_RULES_VERSION,
+        occurredAt: now.toISOString(),
+      });
+      return { ok: false, denialCode: "NO_VERIFIED_ASSESSMENT" };
+    }
+
+    const primaryGoal = this.db.goals.find((g) => g.clientId === record.id && g.isPrimary) ?? null;
+    const approvedDocumentCount = this.db.documents.filter(
+      (d) => d.clientId === record.id && d.reviewStatus === "approved",
+    ).length;
+    const latestPublishedReport = this.db.reports
+      .filter((r) => r.clientId === record.id && r.status === "published")
+      .at(-1);
+    const latestConsent = this.db.consentRecords
+      .filter((c) => c.userId === record.id && c.consentType === "partner_data_sharing")
+      .at(-1);
+
+    // The signed content: verified facts only. The readiness stage is the ΛFLO
+    // deterministic lifecycle stage — explicitly NOT a credit-bureau score.
+    const payload: HandoffFacts = {
+      subjectName: `${record.firstName} ${record.lastName}`,
+      issuingOrganization: this.db.organization.name,
+      afloReadinessStage: assessment.stage,
+      afloReadinessStageLabel: LIFECYCLE_STAGE_LABELS[assessment.stage],
+      readinessIsBureauScore: false,
+      readinessRuleVersion: assessment.ruleVersion,
+      readinessAssessedAt: assessment.assessedAt,
+      primaryGoal: primaryGoal ? { title: primaryGoal.title, category: primaryGoal.category } : null,
+      verifiedDocumentCount: approvedDocumentCount,
+      latestPublishedReportQuarter: latestPublishedReport?.quarter ?? null,
+    };
+
+    this.counter += 1;
+    const expiresAt = new Date(now.getTime() + HANDOFF_VALIDITY_DAYS * 24 * 60 * 60 * 1000);
+    const pkg = assembleHandoffPackage({
+      id: `hp-${record.id}-${this.counter}`,
+      organizationId: input.organizationId,
+      clientId: record.id,
+      recipientScope: input.recipientScope,
+      consentScope: `partner_data_sharing@${latestConsent?.recordedAt ?? now.toISOString()}`,
+      payload,
+      issuedAt: now.toISOString(),
+      expiresAt: expiresAt.toISOString(),
+      keyId: this.signingKey.keyId,
+      privateKeyPem: this.signingKey.privateKeyPem,
+    });
+    this.db.handoffPackages.push(pkg);
+
+    this.audit({
+      organizationId: input.organizationId,
+      actorStaffId: actor.id,
+      action: "handoff.generated",
+      targetType: "handoff_package",
+      targetId: pkg.id,
+      detail: `client ${record.id} → ${input.recipientScope}; digest ${pkg.payloadDigest.slice(0, 16)}…; key ${pkg.keyId}; expires ${pkg.expiresAt}`,
+      reasonCode: "HANDOFF_ISSUED",
+      ruleVersion: pkg.ruleVersion,
+      occurredAt: now.toISOString(),
+    });
+
+    return { ok: true, package: pkg };
+  }
+
+  /**
+   * Verify a stored handoff package by id (security.v1.0.0). Pure read: checks
+   * revocation, digest, key, signature, and expiry against the store's key and
+   * clock, returning a specific verdict. Fails closed; never mutates or audits.
+   */
+  verifyHandoffPackageById(
+    organizationId: string,
+    packageId: string,
+  ): HandoffVerification | { ok: false; verdict: "PACKAGE_NOT_FOUND" } {
+    const pkg = this.db.handoffPackages.find(
+      (p) => p.id === packageId && p.organizationId === organizationId,
+    );
+    if (!pkg) return { ok: false, verdict: "PACKAGE_NOT_FOUND" };
+    return verifyHandoffPackage(
+      pkg,
+      (keyId) => (keyId === this.signingKey.keyId ? this.signingKey.publicKeyPem : null),
+      this.clock(),
+    );
+  }
+
+  /**
+   * Revoke a handoff package (security.v1.0.0). Revocation is a one-way state
+   * change — a revoked package verifies as REVOKED before any other check. Re-
+   * revoking is denied. Audited; org/actor scoped.
+   */
+  revokeHandoffPackage(input: RevokeHandoffInput): HandoffResult {
+    const now = this.clock();
+    const actor = this.findActor(input.organizationId, input.actorStaffId);
+    if (!actor) return { ok: false, denialCode: "ACTOR_NOT_IN_ORG" };
+    const pkg = this.db.handoffPackages.find(
+      (p) => p.id === input.packageId && p.organizationId === input.organizationId,
+    );
+    if (!pkg) return { ok: false, denialCode: "PACKAGE_NOT_FOUND" };
+    if (pkg.revokedAt !== null) return { ok: false, denialCode: "ALREADY_REVOKED", package: pkg };
+
+    pkg.revokedAt = now.toISOString();
+    this.audit({
+      organizationId: input.organizationId,
+      actorStaffId: actor.id,
+      action: "handoff.revoked",
+      targetType: "handoff_package",
+      targetId: pkg.id,
+      detail: `client ${pkg.clientId}; digest ${pkg.payloadDigest.slice(0, 16)}… revoked`,
+      reasonCode: "HANDOFF_REVOKED",
+      ruleVersion: pkg.ruleVersion,
+      occurredAt: now.toISOString(),
+    });
+    return { ok: true, package: pkg };
   }
 
   private findRecord(organizationId: string, id: string): ClientRecord | undefined {

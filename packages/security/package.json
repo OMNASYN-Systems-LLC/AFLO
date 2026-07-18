@@ -1,8 +1,9 @@
 {
-  "name": "@aflo/shared",
+  "name": "@aflo/security",
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "description": "Security primitives: canonical JSON serialization, SHA-256 digests, Ed25519 asymmetric signing/verification, and cryptographically verifiable handoff packages (tamper-evident, scoped, expiring, revocable). No production key material lives in the repo.",
   "exports": {
     ".": "./src/index.ts"
   },
@@ -10,14 +11,6 @@
     "typecheck": "tsc --noEmit",
     "lint": "eslint src test",
     "test": "vitest run"
-  },
-  "dependencies": {
-    "@aflo/academy": "workspace:*",
-    "@aflo/ai": "workspace:*",
-    "@aflo/notifications": "workspace:*",
-    "@aflo/partner-marketplace": "workspace:*",
-    "@aflo/rules": "workspace:*",
-    "@aflo/security": "workspace:*"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

@@ -1,6 +1,7 @@
 import {
   documentTransitionsFrom,
   fullName,
+  hasActiveConsent,
   intakeCompleteness,
   isChannelEnabled,
   LIFECYCLE_STAGES,
@@ -15,6 +16,8 @@ import {
   roadmapTransitionsFrom,
   totalRoundUpCents,
   type DocumentReviewStatusId,
+  type HandoffFacts,
+  type HandoffVerdict,
   type NotificationChannel,
   type NotificationType,
   type PartnerReferralStatus,
@@ -43,9 +46,11 @@ import {
   completeEducationAction,
   createGoalAction,
   createReferralAction,
+  generateHandoffAction,
   generateReportAction,
   recordReferralOutcomeAction,
   requestDocumentAction,
+  revokeHandoffAction,
   runReadinessAssessmentAction,
   scheduleAppointmentAction,
   setNotificationPreferenceAction,
@@ -83,6 +88,17 @@ const REFERRAL_TONE = {
   declined: "neutral",
 } as const satisfies Record<PartnerReferralStatus, string>;
 
+/** Verdict → badge tone/label for a verified handoff package. */
+const HANDOFF_VERDICT = {
+  VALID: { tone: "good", label: "Valid signature" },
+  REVOKED: { tone: "neutral", label: "Revoked" },
+  EXPIRED: { tone: "warn", label: "Expired" },
+  DIGEST_MISMATCH: { tone: "risk", label: "Tampered — digest mismatch" },
+  SIGNATURE_INVALID: { tone: "risk", label: "Invalid signature" },
+  UNKNOWN_KEY: { tone: "risk", label: "Unknown key" },
+  PACKAGE_NOT_FOUND: { tone: "risk", label: "Not found" },
+} as const satisfies Record<HandoffVerdict | "PACKAGE_NOT_FOUND", { tone: string; label: string }>;
+
 export default async function ClientDetailPage({
   params,
 }: {
@@ -109,6 +125,17 @@ export default async function ClientDetailPage({
   const partners = store.partnersFor(DEMO_ORG_ID);
   const partnerById = new Map(partners.map((p) => [p.id, p]));
   const referrals = store.referralsFor(DEMO_ORG_ID, clientId);
+  const handoffPackages = store
+    .handoffPackagesFor(DEMO_ORG_ID, clientId)
+    .map((pkg) => ({ pkg, verdict: store.verifyHandoffPackageById(DEMO_ORG_ID, pkg.id).verdict }))
+    .reverse();
+  const handoffConsent = hasActiveConsent(
+    store.database().consentRecords,
+    clientId,
+    "partner_data_sharing",
+  );
+  const canGenerateHandoff =
+    record.kind === "client" && handoffConsent && detail.latestAssessmentRecord != null;
   const education = store.educationFor(DEMO_ORG_ID, clientId);
   const simulation = store.simulationFor(DEMO_ORG_ID, clientId);
   const virtualTransactions = store.virtualTransactionsFor(DEMO_ORG_ID, clientId);
@@ -776,6 +803,84 @@ export default async function ClientDetailPage({
                 </p>
               </form>
             ) : null}
+          </SectionCard>
+
+          <SectionCard
+            title="Verification handoff"
+            subtitle="Signed, tamper-evident package of verified facts — not a bureau report"
+          >
+            {handoffPackages.length > 0 ? (
+              <ul className="space-y-3">
+                {handoffPackages.map(({ pkg, verdict }) => {
+                  const facts = pkg.payload as HandoffFacts;
+                  const v = HANDOFF_VERDICT[verdict];
+                  return (
+                    <li key={pkg.id} className="rounded-md border border-line bg-card px-3.5 py-3">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <p className="text-sm font-medium text-ink">{pkg.recipientScope}</p>
+                        <Badge tone={v.tone} label={v.label} />
+                      </div>
+                      <dl className="mt-2.5 grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-ink-soft">
+                        <dt className="text-ink-faint">Readiness stage</dt>
+                        <dd className="text-right text-ink">{facts.afloReadinessStageLabel}</dd>
+                        <dt className="text-ink-faint">Primary goal</dt>
+                        <dd className="text-right text-ink">{facts.primaryGoal?.title ?? "—"}</dd>
+                        <dt className="text-ink-faint">Verified documents</dt>
+                        <dd className="text-right text-ink">{facts.verifiedDocumentCount}</dd>
+                        <dt className="text-ink-faint">Latest report</dt>
+                        <dd className="text-right text-ink">{facts.latestPublishedReportQuarter ?? "—"}</dd>
+                      </dl>
+                      <p className="mt-2.5 break-all border-t border-line/70 pt-2 font-mono text-[11px] leading-relaxed text-ink-faint">
+                        digest {pkg.payloadDigest.slice(0, 24)}… · {pkg.algorithm} · {pkg.keyId}
+                      </p>
+                      <p className="mt-1 text-[11px] text-ink-faint">
+                        Issued {fmtDate(pkg.issuedAt)} · expires {fmtDate(pkg.expiresAt)}
+                        {pkg.revokedAt ? ` · revoked ${fmtDate(pkg.revokedAt)}` : ""}
+                      </p>
+                      {verdict !== "REVOKED" ? (
+                        <form action={revokeHandoffAction.bind(null, clientId, pkg.id)} className="mt-2.5">
+                          <ActionButton label="Revoke" />
+                        </form>
+                      ) : null}
+                    </li>
+                  );
+                })}
+              </ul>
+            ) : (
+              <EmptyState message="No handoff package issued yet." />
+            )}
+            <p className="mt-3 text-[11px] leading-relaxed text-ink-faint">
+              A handoff carries the ΛFLO readiness stage (never a credit-bureau score) and verified-fact
+              counts — no SSN, bank, or raw credit-report data. It is tamper-evident, not audit-proof or
+              legally verified.
+            </p>
+            {canGenerateHandoff ? (
+              <form
+                action={generateHandoffAction.bind(null, clientId)}
+                className="mt-3 flex flex-wrap items-end gap-2 border-t border-line/70 pt-4"
+              >
+                <input
+                  name="recipientScope"
+                  required
+                  placeholder="Recipient (e.g. partner-cpa:acme-tax)"
+                  className="min-w-0 flex-1 rounded-md border border-line bg-card px-3 py-1.5 text-sm text-ink placeholder:text-ink-faint"
+                />
+                <button
+                  type="submit"
+                  className="rounded-md bg-emerald px-3.5 py-2 text-xs font-medium text-ivory-ink transition-colors hover:bg-emerald-deep"
+                >
+                  Generate &amp; sign
+                </button>
+              </form>
+            ) : (
+              <p className="mt-3 rounded-md border border-line bg-neutral-tint px-3 py-2 text-xs text-ink-soft">
+                {record.kind !== "client"
+                  ? "Available once the lead is an activated client."
+                  : !handoffConsent
+                    ? "Blocked: the client has not granted partner-data-sharing consent."
+                    : "Blocked: run a readiness assessment first — a handoff must assert a verified stage."}
+              </p>
+            )}
           </SectionCard>
 
           <SectionCard
