@@ -31,8 +31,9 @@ _Last updated: 2026-07-18 · PRs #2, #3, #16 merged to `main`. Founder decisions
 
 ## In progress 🔨
 
-- Client-lifecycle slice B: outbox typed contracts + deterministic claim/complete/fail rules (`outbox.v1.0.0`) + ADR-0008. _In PR (branch `claude/outbox-contracts`)._
-- Slice C next: lead→client deterministic pipeline (configurable stages) + staff conversion workflow.
+- Client-lifecycle slice B: outbox typed contracts + deterministic claim/complete/fail rules (`outbox.v1.0.0`) + ADR-0008. **Merged (PR #19).**
+- Slice C1: deterministic pipeline rules (`pipeline.v1.0.0`, configurable stages, no silent skips, flagged reversals). _In PR (branch `claude/pipeline-rules`)._
+- Slice C2 next: staff lead-conversion workflow + synthetic data + Playwright coverage over the pipeline rules.
 
 ## Next ⏭ (founder-approved build-now order)
 
