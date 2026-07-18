@@ -2,7 +2,7 @@
 
 Operational reference for deploying AFLO (Golden Key Wealth V1) across Vercel, Railway, Neon, and object storage.
 
-> **Current status (2026-07):** Nothing in this document has been provisioned. There are no Vercel projects, Railway services, Neon databases, storage buckets, or DNS records yet. This file records the intended topology so provisioning is deliberate and reviewable when it happens. The first visual slice runs entirely on mock repositories and requires **zero environment variables** (see below).
+> **Current status (2026-07-18):** **Neon is provisioned** (founder-confirmed) with branches `main` (production), `preview` (preview deployments), and `dev` (development) — **do not recreate the Neon project**; connection strings enter via provider dashboards only, never the repo, and nothing connects to Neon until the first Drizzle-backed slice lands. Vercel projects, Railway services, storage buckets, and DNS records are still not provisioned (founder account authorization required). **Clerk is approved for V1** (ADR-0006 Accepted) but credentials are not yet issued. The current app still runs entirely on mock repositories and requires **zero environment variables** (see below).
 
 ---
 

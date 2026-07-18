@@ -2,7 +2,7 @@
 
 Living status of the AFLO V1 build. Updated every implementation cycle. Newest state at top of each list.
 
-_Last updated: 2026-07-18 · PRs #2 and #3 merged to `main`; branch `claude/partner-orchestration-roadmap` in flight. Backlog reprioritized per the founder's partner-orchestration decision (`PARTNER_ORCHESTRATION_ROADMAP.md`)._
+_Last updated: 2026-07-18 · PRs #2, #3, #16 merged to `main`. Founder decisions applied: Clerk accepted (ADR-0006), Neon provisioned, Control Plane Delta brand. Client-lifecycle workstream (slices A–J) underway._
 
 ## Legend
 
@@ -24,11 +24,12 @@ _Last updated: 2026-07-18 · PRs #2 and #3 merged to `main`; branch `claude/part
 - Deployment config-as-code: `apps/web/vercel.json`, `apps/worker/railway.json`; `DEPLOYMENT.md` updated with the account-authorization blockers.
 - **PR #2 merged to `main`** — `main` contains the deployable monorepo (merge commit `1d76772`).
 - Deterministic billing kernel (`@aflo/billing`, `billing.v1.0.0`): invoice/subscription/payment allow-list state machines with reason codes, `isInvoicePastDue`, the grace-aware subscription-access entitlement gate, and a billing rule registry — pure, Stripe-free, readiness-free (20 tests). **Merged (PR #3).**
-- Partner-orchestration roadmap captured as an authoritative founder decision (`PARTNER_ORCHESTRATION_ROADMAP.md`), with ADR-0007, compliance/scope reconciliation, and five gated stub packages (`academy`, `partner-marketplace`, `credit-data`, `opportunity-intelligence`, `embedded-finance`). _In PR (branch `claude/partner-orchestration-roadmap`)._
+- Partner-orchestration roadmap captured as an authoritative founder decision (`PARTNER_ORCHESTRATION_ROADMAP.md`), with ADR-0007, compliance/scope reconciliation, and five gated stub packages (`academy`, `partner-marketplace`, `credit-data`, `opportunity-intelligence`, `embedded-finance`) + `integrations` stub. **Merged (PR #16).**
 
 ## In progress 🔨
 
-- Partner-orchestration roadmap PR (docs + stubs + milestone issues).
+- Founder-decision docs PR (ADR-0006 acceptance, Neon status, two-level brand system).
+- Client-lifecycle slice A: domain event model (versioned contracts for the 25 lifecycle events).
 
 ## Next ⏭ (founder-approved build-now order)
 
@@ -46,8 +47,8 @@ _Last updated: 2026-07-18 · PRs #2 and #3 merged to `main`; branch `claude/part
 
 ## Blocked ⛔ / Founder decision required 👤
 
-- **Vercel / Railway / Neon / Stripe / Clerk activation** — requires founder account authorization and environment secrets (charter stop conditions #3, #7). Configuration is prepared in-repo; activation waits on the founder connecting accounts and providing secrets via the platform dashboards (never in the repo).
-- **Auth provider (ADR-0006)** 👤 — Clerk recommended, Auth.js fallback; awaiting founder decision. Needed before the authentication slice (Sprint 3), not blocking current work.
+- **Vercel / Railway / Stripe activation + Clerk/Resend credentials** — requires founder account authorization and environment secrets (charter stop conditions #3, #7). Configuration is prepared in-repo; activation waits on the founder connecting accounts and providing secrets via the platform dashboards (never in the repo).
+- ~~Auth provider~~ ✅ **decided 2026-07-18: Clerk** (ADR-0006 Accepted) — implementation behind `packages/auth` adapter when the auth slice lands; credentials prepare-only.
 - **Production Stripe charges** ⛔ — disabled until valid credentials and founder-approved service packages exist; all billing work stays in test-mode / pure logic until then.
 - **Golden Key workflow specifics** 👤 — `docs/research/GOLDEN_KEY_WORKFLOW_DISCOVERY.md` holds TBD questions for Natalia; assumptions stay configurable until answered.
 
@@ -63,7 +64,7 @@ _Last updated: 2026-07-18 · PRs #2 and #3 merged to `main`; branch `claude/part
 
 ## Deployment status
 
-- **main**: will contain the deployable monorepo after PR #2 merges.
+- **main**: contains the deployable monorepo (PRs #2, #3, #16 merged).
 - **Vercel**: not yet imported — configuration prepared; import requires founder account (see Blocked).
 - **Railway**: not yet created — build/start commands and config documented; requires founder account.
-- **Neon**: no branches provisioned — deferred until database-backed code lands.
+- **Neon**: **provisioned by founder** (`main`/`preview`/`dev` branches exist — never recreate). No code connects until the first Drizzle slice; connection strings live only in provider dashboards.

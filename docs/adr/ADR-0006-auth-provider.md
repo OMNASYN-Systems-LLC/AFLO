@@ -1,10 +1,10 @@
-# ADR-0006: Authentication Provider — Clerk (Recommended) vs Auth.js
+# ADR-0006: Authentication Provider — Clerk
 
 ## Status
 
-**Proposed — awaiting founder decision** — 2026-07-17
+**Accepted** — 2026-07-18 (founder approved Clerk for V1; originally Proposed 2026-07-17)
 
-The charter permits "Clerk or Auth.js after documenting security and multi-tenant implications." This ADR documents those implications and recommends Clerk. **Decision trigger: founder approval is required before any Sprint 3 auth implementation begins.**
+The charter permits "Clerk or Auth.js after documenting security and multi-tenant implications." This ADR documents those implications. **Founder decision (2026-07-18): Clerk is approved for V1**, implemented behind a provider adapter in `packages/auth` so the Auth.js fallback remains a contained swap. Production Clerk credentials are prepared but not activated until supplied via provider dashboards.
 
 ## Context
 
