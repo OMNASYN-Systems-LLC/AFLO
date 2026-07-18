@@ -21,6 +21,7 @@ _Last updated: 2026-07-18 · branch `claude/new-session-dv6ka5` → merging to `
 - CLAUDE.md reconciled to the 12-agent contract, expanded stack, Organization Admin role, and auto-merge policy.
 - CI (GitHub Actions): typecheck, lint, unit tests (42), build, **critical Playwright e2e (5)**, report-only dependency audit.
 - Env examples (`apps/web`, `apps/worker`) — placeholders only.
+- Deployment config-as-code: `apps/web/vercel.json`, `apps/worker/railway.json`; `DEPLOYMENT.md` updated with the account-authorization blockers.
 
 ## In progress 🔨
 
@@ -28,7 +29,6 @@ _Last updated: 2026-07-18 · branch `claude/new-session-dv6ka5` → merging to `
 
 ## Next ⏭
 
-- Deployment configuration prepared for Vercel (`apps/web`) and Railway (`apps/worker`); Neon connection deferred until database-backed code exists.
 - Deterministic billing state-machine rules (`packages/billing`) — invoice/subscription/payment state transitions as pure, versioned, tested logic (no Stripe credentials required).
 - Administrative settings layer (typed configuration: pipeline stages, service packages, templates, education modules, appointment types, staff assignments, partner categories, billing terms, reminder schedules).
 - Event model / outbox typed contracts (`packages/shared`).

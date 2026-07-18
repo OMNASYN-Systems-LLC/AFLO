@@ -29,15 +29,19 @@ Neon branching notes:
 
 The repo is a pnpm workspace monorepo. Vercel must build from the workspace root but target the web app.
 
+Config-as-code lives in **`apps/web/vercel.json`** (framework, install, and build commands). The dashboard-only settings below still have to be set once when the project is imported.
+
 | Setting | Value |
 |---|---|
-| Framework preset | Next.js |
+| Framework preset | Next.js (also declared in `vercel.json`) |
 | Root directory | `apps/web` |
 | Include files outside root directory | Enabled (required for workspace packages) |
-| Install command | default (`pnpm install`) — Vercel detects pnpm from the lockfile |
-| Build command | default (`next build`) |
+| Install command | `cd ../.. && pnpm install --frozen-lockfile` (from `vercel.json`) |
+| Build command | `cd ../.. && pnpm --filter @aflo/web build` (from `vercel.json`) |
 | Node.js version | 22.x (matches `engines.node >=22` in root `package.json`) |
 | Production branch | `main` |
+
+> **Blocked on founder account authorization (charter stop condition #7).** The Vercel project import, the Root-Directory / include-outside-root toggles, and all environment variables must be configured in the founder's Vercel account. The in-repo `vercel.json` makes the build reproducible once the project exists; it does not create the project. No Vercel deployment exists yet.
 
 pnpm version pinning:
 
@@ -46,17 +50,8 @@ pnpm version pinning:
 
 Workspace packages:
 
-- Internal packages (`@aflo/shared`, later `@aflo/ui`, `@aflo/rules`, `@aflo/database`, ...) are consumed as TypeScript source and transpiled by Next.js. List them in `transpilePackages` in `apps/web/next.config.ts`:
-
-```ts
-// apps/web/next.config.ts
-const nextConfig = {
-  transpilePackages: ["@aflo/shared", "@aflo/ui", "@aflo/rules"],
-};
-export default nextConfig;
-```
-
-- This avoids per-package build steps in V1. If a package later ships compiled output, remove it from `transpilePackages` and add a `build` script that Turborepo/`pnpm -r build` runs first.
+- Internal packages (`@aflo/shared`, `@aflo/rules`, `@aflo/ai`, later `@aflo/ui`, `@aflo/database`, ...) are consumed as TypeScript source and transpiled by Next.js. List them in `transpilePackages` in `apps/web/next.config.ts` (currently `["@aflo/shared", "@aflo/rules", "@aflo/ai"]`).
+- This avoids per-package build steps in V1. If a package later ships compiled output, remove it from `transpilePackages` and add a `build` script that `pnpm -r build` runs first.
 
 Preview deployments:
 
@@ -77,6 +72,10 @@ One Railway service running the background worker: outbox polling, scheduled rem
 | Start command | `pnpm --filter @aflo/worker start` (requires `WORKER_HEARTBEAT=1` while the stub is the deployed artifact — see §6; without it the process exits cleanly and never restarts) |
 | Restart policy | On failure, capped retries (e.g. max 10) — the worker should also exit non-zero on unrecoverable errors so Railway restarts it |
 | Health | Worker logs a heartbeat; alerting via Sentry, not Railway health checks, in V1 |
+
+Config-as-code lives in **`apps/worker/railway.json`** (Nixpacks builder, build/start commands, `ON_FAILURE` restart policy with max 10 retries). Set the service Root Directory to the repo root and `WORKER_HEARTBEAT=1` in the service variables.
+
+> **Blocked on founder account authorization (charter stop condition #7).** Creating the Railway service and setting its variables requires the founder's Railway account. No Railway service exists yet; `railway.json` makes it reproducible once created.
 
 Scheduling:
 
