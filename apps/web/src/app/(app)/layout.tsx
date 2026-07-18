@@ -25,7 +25,8 @@ export default function AppShellLayout({ children }: { children: React.ReactNode
 
         <nav className="mt-8 space-y-1">
           <NavLink href="/dashboard">Dashboard</NavLink>
-          <NavLink href="/clients">Leads &amp; Clients</NavLink>
+          <NavLink href="/leads">Lead Pipeline</NavLink>
+          <NavLink href="/clients">Clients</NavLink>
         </nav>
 
         <div className="mt-8">

@@ -17,13 +17,8 @@ export type { EngagementStatus, LifecycleStage };
 
 export type ClientKind = "lead" | "client";
 
-export type PipelineStatus =
-  | "new_lead"
-  | "contacted"
-  | "consult_scheduled"
-  | "onboarding"
-  | "active"
-  | "paused";
+/** Post-activation client lifecycle status; null while still a lead. */
+export type ClientStatus = "active" | "paused";
 
 export type DocumentReviewStatus =
   | "requested"
@@ -66,7 +61,12 @@ export interface ClientRecord {
   id: string;
   organizationId: string;
   kind: ClientKind;
-  pipelineStatus: PipelineStatus;
+  /** Stage id from the organization's configurable pipeline definition
+   * (@aflo/rules PipelineDefinition). Transitions only via pipeline rules —
+   * never assigned free-form. Activated clients sit at the terminal stage. */
+  pipelineStageId: string;
+  /** Post-activation lifecycle status; null while kind === "lead". */
+  clientStatus: ClientStatus | null;
   firstName: string;
   lastName: string;
   email: string;

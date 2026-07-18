@@ -32,8 +32,9 @@ _Last updated: 2026-07-18 · PRs #2, #3, #16 merged to `main`. Founder decisions
 ## In progress 🔨
 
 - Client-lifecycle slice B: outbox typed contracts + deterministic claim/complete/fail rules (`outbox.v1.0.0`) + ADR-0008. **Merged (PR #19).**
-- Slice C1: deterministic pipeline rules (`pipeline.v1.0.0`, configurable stages, no silent skips, flagged reversals). _In PR (branch `claude/pipeline-rules`)._
-- Slice C2 next: staff lead-conversion workflow + synthetic data + Playwright coverage over the pipeline rules.
+- Slice C1: deterministic pipeline rules (`pipeline.v1.0.0`). **Merged (PR #20).**
+- **Slice C2 — staff lead conversion** (commercial-grade mandate captured in `COMMERCIAL_GRADE_V1.md`): domain migrated to configurable pipeline stage ids + client status; mutable AfloStore applying rules-gated mutations with outbox events and an append-only audit trail; staff Lead Pipeline workspace with only rule-legal actions; server-side-session-only tenancy for mutations; 8 store tests + 3 conversion e2e tests. _In PR (branch `claude/lead-conversion`)._
+- Slice D next: client intake (structured sections, completeness rules, IntakeStarted/SectionCompleted/Completed events).
 
 ## Next ⏭ (founder-approved build-now order)
 

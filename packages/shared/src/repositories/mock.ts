@@ -25,7 +25,6 @@ import {
   type CreditProfile,
   type FinancialProfile,
   type Goal,
-  type PipelineStatus,
   type StaffMember,
 } from "../domain/types";
 
@@ -141,6 +140,9 @@ export class MockClientRepository implements ClientRepository {
 
     return {
       record,
+      pipelineStageLabel:
+        this.db.pipeline.stages.find((s) => s.id === record.pipelineStageId)?.label ??
+        record.pipelineStageId,
       assignedStaff: scope.staffById.get(record.assignedStaffId) ?? null,
       financialProfile,
       creditProfile,
@@ -182,11 +184,15 @@ function toSummary(scope: OrgScope, c: ClientRecord, now: Date): ClientSummary {
   const credit = scope.creditByClient.get(c.id);
   const engagement = assessEngagement(c.lastActivityAt, now);
 
+  const stageDef = scope.db.pipeline.stages.find((s) => s.id === c.pipelineStageId);
+
   return {
     id: c.id,
     name: fullName(c),
     kind: c.kind,
-    pipelineStatus: c.pipelineStatus,
+    pipelineStageId: c.pipelineStageId,
+    pipelineStageLabel: stageDef?.label ?? c.pipelineStageId,
+    clientStatus: c.clientStatus,
     stage: financial && credit ? assessReadiness(toReadinessFacts(financial, credit)).stage : null,
     primaryGoal: scope.primaryGoalByClient.get(c.id)?.title ?? null,
     engagement: engagement.status,
@@ -220,18 +226,22 @@ export class MockDashboardRepository implements DashboardRepository {
       count: stageCounts.get(stage) ?? 0,
     }));
 
-    const pipelineCounts = new Map<PipelineStatus, number>();
+    // Pipeline counts in definition order, every configured stage present.
+    const pipelineCounts = new Map<string, number>();
     for (const s of summaries) {
-      pipelineCounts.set(s.pipelineStatus, (pipelineCounts.get(s.pipelineStatus) ?? 0) + 1);
+      pipelineCounts.set(s.pipelineStageId, (pipelineCounts.get(s.pipelineStageId) ?? 0) + 1);
     }
-    const pipeline: PipelineCount[] = [...pipelineCounts.entries()].map(([status, count]) => ({
-      status,
-      count,
-    }));
+    const pipeline: PipelineCount[] = [...this.db.pipeline.stages]
+      .sort((a, b) => a.order - b.order)
+      .map((stage) => ({
+        stageId: stage.id,
+        label: stage.label,
+        count: pipelineCounts.get(stage.id) ?? 0,
+      }));
 
     // KPI contract: completion across ACTIVE clients' plans for this month.
     const activeClientIds = new Set(
-      scope.clients.filter((c) => c.kind === "client" && c.pipelineStatus === "active").map((c) => c.id),
+      scope.clients.filter((c) => c.kind === "client" && c.clientStatus === "active").map((c) => c.id),
     );
     const monthActions = scope
       .monthlyActions()
