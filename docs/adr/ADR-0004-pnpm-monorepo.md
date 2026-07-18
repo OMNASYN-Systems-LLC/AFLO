@@ -27,12 +27,14 @@ Planned packages, added only when a slice needs them (per the README structure):
 
 > **Amendment (2026-07-17, Product Charter reconciliation):** the charter mandates the full package layout up front. `packages/config` (shared ts/eslint base), `packages/rules` (dependency-free deterministic kernel + rule registry), and `packages/ai` (agent envelope) are now **real** — extracted from `shared` behind unchanged consumer imports. `database`, `auth`, `ui`, `reports`, `notifications`, and `analytics` exist as **documented thin stubs** (a manifest, an inert export, and a README naming the activating slice) so the layout is visible without speculative code. `packages/shared` re-exports `@aflo/rules`/`@aflo/ai` as a convenience facade for the single app consumer; this facade is scheduled for removal when `packages/database` activates and apps import each package directly.
 
+> **Amendment (2026-07-18, partner-orchestration decision):** `packages/billing` is now **real** (deterministic billing kernel, `billing.v1.0.0`). `packages/integrations` (provider adapters) joins the charter stub set. Five gated partner-orchestration stubs are added per the founder decision and ADR-0007: `academy`, `partner-marketplace`, `credit-data`, `opportunity-intelligence`, `embedded-finance`. The "no placeholder packages ahead of need" convention below is amended: stubs **are** created when an authoritative founder decision or the charter mandates the boundary — but they stay inert (manifest + README naming the activating phase/gate), and gated stubs must state their unlock condition.
+
 Conventions:
 
 - Internal packages are consumed via `workspace:*` protocol; nothing is published.
 - One root TypeScript base config; each package extends it. Type checking, linting, tests, and builds run via plain pnpm scripts (`pnpm -r typecheck`, etc.) and CI.
 - Vercel builds `apps/web`; Railway builds `apps/worker`; both resolve workspace packages from the same lockfile.
-- Empty placeholder packages are not created ahead of need.
+- Empty placeholder packages are not created ahead of need, except where an authoritative founder decision or the charter mandates the boundary (see 2026-07-18 amendment) — such stubs stay inert and name their activating slice or gate.
 
 ## Consequences
 

@@ -43,8 +43,6 @@ _Last updated: 2026-07-18 · PRs #2 and #3 merged to `main`; branch `claude/part
 
 - **After pilot:** real affiliate integrations · bureau-data provider adapter · credit monitoring/alerts · opportunity & regulatory intelligence feed.
 - **After commercial + compliance validation:** embedded credit-builder applications · AFLO-branded secured card (sequence: referrals → embedded apps → co-brand pilot → branded card) · deposit/savings-linked products · interchange-based revenue model.
-- Event model / outbox typed contracts (`packages/shared`).
-- Notifications templates + mock delivery (`packages/notifications`).
 
 ## Blocked ⛔ / Founder decision required 👤
 

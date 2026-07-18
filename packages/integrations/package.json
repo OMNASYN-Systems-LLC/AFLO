@@ -1,0 +1,8 @@
+{
+  "name": "@aflo/integrations",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "External-provider adapters (Stripe, Resend, storage, PostHog, Sentry) behind AFLO-owned interfaces so no provider schema leaks into domain logic. Stub until the first provider integration slice (Stripe test-mode billing).",
+  "exports": { ".": "./src/index.ts" }
+}

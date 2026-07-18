@@ -85,9 +85,9 @@ Partner referrals → Embedded applications → Co-branded or white-label pilot 
 
 > ⚠️ Do not use the "up to 2× interchange revenue" claim anywhere unless a program partner provides documented economics.
 
-### 3. Bureau integration (phase 2/3)
+### 3. Bureau integration (adapter built in phase 2; live bureau access only when the phase-2/3 gate clears)
 
-Provider-neutral by design — never architect around one bureau's proprietary response schema (Experian Partner Solutions, Array, or another approved provider must be swappable):
+Provider-neutral by design — never architect around one bureau's proprietary response schema (Experian Partner Solutions, Array, or another approved provider must be swappable). "Credit monitoring and alerts" in the phase-2 list likewise means **building the integration and alerting surface** — monitoring data itself always comes from a licensed partner (see build-vs-orchestrate table):
 
 ```text
 Bureau Provider → Credit Data Adapter → Normalized AFLO Credit Model

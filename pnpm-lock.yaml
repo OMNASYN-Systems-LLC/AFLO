@@ -130,6 +130,8 @@ importers:
 
   packages/embedded-finance: {}
 
+  packages/integrations: {}
+
   packages/notifications: {}
 
   packages/opportunity-intelligence: {}

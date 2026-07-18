@@ -3,6 +3,7 @@
 **Product:** Golden Key Wealth, powered by AFLO
 **Status:** Approved scope for V1 (Sprint 0 planning)
 **Governing document:** `/CLAUDE.md` (execution brief). Where this document and the long-term business plan differ, the execution brief wins for V1.
+**Partner-orchestration phasing:** governed by `docs/product/PARTNER_ORCHESTRATION_ROADMAP.md` (authoritative founder decision, 2026-07-18).
 
 ---
 
@@ -43,13 +44,13 @@ Sign-in, sessions, and role-based access control using Clerk or Auth.js, with an
 
 Multi-tenant organizations with member records, role assignments, and invitations. Golden Key Wealth is the first tenant; the model supports additional coaching organizations without code changes.
 **Primary roles:** Platform Admin, Organization Owner.
-**Out for V1:** Cross-organization data sharing, tenant self-signup and billing, white-label theming per tenant.
+**Out for V1:** Cross-organization data sharing, tenant self-signup and platform-subscription billing for new organizations (Golden Key's client billing **is** in V1 — see 2.21), white-label theming per tenant.
 
 ### 2.3 Lead and Client CRM
 
 Pipeline of leads through conversion to clients, with pipeline stages, staff assignments, and basic search/filtering. This is the operational backbone for the staff dashboard and client list.
 **Primary roles:** Golden Key Staff, Organization Owner.
-**Out for V1:** Marketing automation, email campaign sequencing, lead scoring models, third-party CRM sync (HubSpot/Salesforce), telephony integration.
+**Out for V1:** Marketing automation and campaign sequencing (workflow-triggered transactional email **is** in V1 — see 2.20), lead scoring models, third-party CRM sync (HubSpot/Salesforce), telephony integration.
 
 ### 2.4 Client Onboarding and Intake
 
@@ -93,11 +94,12 @@ A monthly slice of the roadmap: the small set of concrete actions a client shoul
 **Primary roles:** Client, Golden Key Staff.
 **Out for V1:** Automated plan regeneration without staff review, payment-linked action verification.
 
-### 2.11 Contextual Education
+### 2.11 Contextual Education — Wealth Unlockers Academy
 
-Curated educational content assigned in context (stage, goal, or task). The `education-agent` selects relevant content from an approved library; it does not author financial advice.
+Curated educational content assigned in context (stage, goal, or task) under the **Wealth Unlockers Academy** brand. Assignment is **event-driven from verified facts**: utilization rises → utilization lesson; a document remains missing → document-readiness lesson; business/personal expense commingling → entity-separation lesson; approaching mortgage readiness → pre-application lesson. Every lesson must be short, contextual, stage-specific, assigned from verified facts, measurable, connected to a real task, and reviewed by Golden Key Wealth. The `education-agent` selects relevant content from an approved library; it does not author financial advice.
+**Hard rule:** course completion never unlocks regulated financial products. It may unlock platform features, badges, coaching sessions, or discounts — financial-product eligibility comes only from partner criteria.
 **Primary roles:** Client, Golden Key Staff.
-**Out for V1:** AI-generated educational content published without review, external content licensing, LMS features (quizzes, certifications).
+**Out for V1:** AI-generated educational content published without review, external content licensing, third-party LMS platforms and formal certifications. (Lightweight knowledge checks and completion tracking **are** in scope — the Academy must be measurable.)
 
 ### 2.12 Documents and Review States
 
@@ -120,8 +122,10 @@ Quarterly summaries of a client's stage movement, completed actions, and goal pr
 ### 2.15 Partner Directory and Referrals
 
 A directory of vetted external partners (lenders, CPAs, attorneys, etc.) with capabilities, referral rules, and referral tracking. AFLO routes context to licensed professionals; it never performs their regulated work.
+
+**V1 addition — credit-builder opportunity rules using MOCK providers only.** A deterministic **Credit-Building Opportunity Engine** determines whether a client may benefit from a credit-builder product, rent/utility reporting, a lower-cost debt product, or **no new account at all** — a first-class outcome; AFLO never assumes another tradeline is beneficial. Before ever suggesting a new tradeline, the engine evaluates: existing open accounts, recent inquiries, average account age, monthly affordability, payment-history weakness, utilization, and upcoming mortgage or lending plans. No real partner names or compensation figures until commercial agreements are reviewed (see `docs/product/PARTNER_ORCHESTRATION_ROADMAP.md`).
 **Primary roles:** Golden Key Staff; Partner Viewer later.
-**Out for V1:** Partner-facing portal, automated data-payload delivery to partners, referral-fee accounting, API integrations into partner systems.
+**Out for V1:** Partner-facing portal, automated data-payload delivery to partners, referral-fee accounting, API integrations into partner systems, real affiliate providers or compensation terms.
 
 ### 2.16 Admin Notes and Communication History
 
@@ -146,6 +150,18 @@ A **simulation-only** tool showing what round-ups or micro-allocations against a
 Immutable audit events for every material state change (sensitive reads, writes, exports, sharing), rule-version records, AI run logs, approvals, and client consent/data-sharing grants.
 **Primary roles:** Platform Admin, Organization Owner; written by the system.
 **Out for V1:** External audit-log export integrations (SIEM), cryptographically signed audit chains (long-term passport feature), consent-driven data delivery to third parties.
+
+### 2.20 Automated Communications (build-now item 2)
+
+Workflow-driven transactional email through Resend behind `packages/notifications`: invitations, verification, intake/appointment/missed-action reminders, document requests, roadmap approval notices, monthly and quarterly summaries, engagement-recovery messages, referral updates, and billing notices. Requirements: organization-specific templates with preview/test modes, communication consent and opt-out handling, delivery-event logging, retry with idempotency, no sensitive financial information in subject lines, signed portal links instead of attachments, and staff-review gates for sensitive client communications. Mock delivery in local and preview environments.
+**Primary roles:** System (triggered), Golden Key Staff (templates, review), Client (recipient, consent).
+**Out for V1:** Marketing campaign automation, SMS/push channels, third-party ESP journeys, cold outreach.
+
+### 2.21 Billing and Payments (build-now item 3; Stripe test mode)
+
+Service-package catalog, one-time invoices, recurring subscriptions, hosted checkout/payment links, payment status, failed-payment handling with retry/dunning, receipts, refund-request tracking, pause/cancel, and billing history in the staff and client portals — all state transitions governed by the deterministic `@aflo/billing` kernel. **Stripe executes all charges and stores all payment instruments**; AFLO stores only Stripe ids, status, amount, currency, timestamps, and the internal package reference. Webhook signature verification and processing changes are founder-review items, never auto-merged. Production charges stay disabled until valid credentials and founder-approved service packages exist.
+**Primary roles:** Organization Owner/Admin (packages, pricing), Golden Key Staff (invoices, dashboard), Client (payment, history).
+**Out for V1:** Production charges (gated), raw card/bank data of any kind, money transmission beyond Stripe processing, billing entangled with readiness results.
 
 ---
 
@@ -199,6 +215,8 @@ These are excluded from V1 **regardless of demand**. Each maps to the risk-isola
 | **Government benefit submissions** | No filing or submitting applications to government benefit, housing, or support programs on a client's behalf. | Agency-specific authorized-representative rules apply; AFLO remains an un-certifying data processor and leaves submissions to the client or licensed representatives. |
 
 Additional V1 exclusions: no banking-as-a-service (carried from the README), and no persistent bank-connection maintenance (from the business plan MVP's "exclude entirely" list — see `docs/business-plan/BUSINESS_PLAN_DIGEST.md`).
+
+**Gated partner-ecosystem capabilities.** The following are excluded from V1 and remain disabled until their gates clear, per `docs/product/PARTNER_ORCHESTRATION_ROADMAP.md` (disabled-until-validated gates): real affiliate integrations, bureau-data access, embedded credit applications, card issuance, deposit-linked products, and interchange-based revenue modeling. Until a gate clears, the corresponding module stays a documented stub with mock providers only.
 
 ---
 

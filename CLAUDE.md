@@ -30,7 +30,7 @@ Do not attempt to build every long-term feature at once. Deliver in small, revie
 - Sentry
 - Provider-neutral AI integration supporting `mock`, Claude, and OpenAI via `packages/ai`
 
-**Workspace packages:** `database`, `auth`, `ui`, `rules`, `ai`, `reports`, `notifications`, `analytics`, `billing`, `integrations`, `shared`, `config`. Shared domain logic lives in packages, never duplicated between apps.
+**Workspace packages:** `database`, `auth`, `ui`, `rules`, `ai`, `reports`, `notifications`, `analytics`, `billing`, `integrations`, `shared`, `config`, plus the gated partner-orchestration packages `academy`, `partner-marketplace`, `credit-data`, `opportunity-intelligence`, `embedded-finance` (documented stubs until their phases clear — `docs/product/PARTNER_ORCHESTRATION_ROADMAP.md`, ADR-0007). Shared domain logic lives in packages, never duplicated between apps; `embedded-finance` stays isolated from the readiness engine.
 
 AFLO never stores raw card numbers, CVVs, full bank-account numbers, or payment credentials — Stripe is the system of record for payment instruments and charge execution.
 
