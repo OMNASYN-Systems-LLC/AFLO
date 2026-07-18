@@ -3,6 +3,23 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Wealth Unlockers Academy: course/lesson library, stage-based and trigger-based assignment from verified facts, completion tracking, knowledge checks, staff-authored content, engagement analytics. Stub until the V1 Academy slice (build-now item 4).",
-  "exports": { ".": "./src/index.ts" }
+  "description": "ΛFLO Wealth Academy (technical: AFLO): versioned course/lesson catalog, deterministic trigger→lesson assignment (education.v1.0.0), knowledge-check scoring, and the Golden Key starter library. Completion is educational only and never determines regulated-product eligibility.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src test",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@aflo/rules": "workspace:*"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "eslint": "^9.39.5",
+    "typescript": "^5.9.2",
+    "typescript-eslint": "^8.64.0",
+    "vitest": "^4.1.10"
+  }
 }

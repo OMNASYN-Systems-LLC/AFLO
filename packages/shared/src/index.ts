@@ -14,3 +14,4 @@ export type { SyntheticDatabase } from "./data/synthetic";
 export * from "@aflo/rules";
 export * from "@aflo/ai";
 export * from "@aflo/notifications";
+export * from "@aflo/academy";

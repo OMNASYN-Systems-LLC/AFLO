@@ -35,6 +35,8 @@ import {
   addMonthlyActionAction,
   addNoteAction,
   addVirtualTransactionAction,
+  assignEducationAction,
+  completeEducationAction,
   createGoalAction,
   generateReportAction,
   requestDocumentAction,
@@ -88,6 +90,7 @@ export default async function ClientDetailPage({
     .sort((x, y) => x.scheduledAt.localeCompare(y.scheduledAt));
   const communications = store.communicationsFor(DEMO_ORG_ID, clientId).slice(-6).reverse();
   const notificationPrefs = store.notificationPreferencesFor(DEMO_ORG_ID, clientId);
+  const education = store.educationFor(DEMO_ORG_ID, clientId);
   const simulation = store.simulationFor(DEMO_ORG_ID, clientId);
   const virtualTransactions = store.virtualTransactionsFor(DEMO_ORG_ID, clientId);
   const roundUpTotalCents = simulation
@@ -862,6 +865,42 @@ export default async function ClientDetailPage({
                 ))}
               </ul>
             )}
+          </SectionCard>
+
+          <SectionCard
+            title="Wealth Academy"
+            subtitle="Deterministic assignment · completion is educational only"
+          >
+            {education.length === 0 ? (
+              <EmptyState message="No lessons assigned yet." />
+            ) : (
+              <ul className="space-y-2.5">
+                {education.map((e) => (
+                  <li key={e.id} className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="min-w-0">
+                      <p className="truncate text-sm text-ink">{e.lessonId.replace("lsn-", "").replace(/-/g, " ")}</p>
+                      <p className="text-[11px] text-ink-faint">
+                        {e.reasonCode} · v{e.contentVersion}
+                        {e.knowledgeCheckScore !== null ? ` · check ${Math.round(e.knowledgeCheckScore * 100)}%` : ""}
+                      </p>
+                    </div>
+                    {e.completedAt ? (
+                      <Badge tone="good" label="Completed" />
+                    ) : (
+                      <form action={completeEducationAction.bind(null, clientId, e.id)}>
+                        <ActionButton label="Mark complete" />
+                      </form>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
+            <form
+              action={assignEducationAction.bind(null, clientId, "missing_document")}
+              className="mt-4 border-t border-line/70 pt-4"
+            >
+              <ActionButton label="Assign: Documents that build trust" />
+            </form>
           </SectionCard>
 
           <SectionCard
