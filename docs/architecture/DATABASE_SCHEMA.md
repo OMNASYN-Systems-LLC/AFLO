@@ -215,6 +215,27 @@ CREATE TABLE client_assignments (
 
 CREATE INDEX idx_assignments_org_member ON client_assignments (organization_id, member_id);
 
+-- Structured-intake progress. Section ids reference the organization's intake
+-- definition (organizations.settings); the data each section gathers lives in
+-- the domain tables it feeds (financial_profiles, credit_profiles, goals,
+-- documents…). Completion is decided only by the intake rules
+-- (intake.completeness) — status may never contradict them.
+CREATE TABLE intakes (
+  id                    uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  organization_id       uuid NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  client_id             uuid NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+  definition_id         text NOT NULL,              -- intake definition id from organizations.settings
+  status                text NOT NULL DEFAULT 'in_progress',  -- 'in_progress' | 'completed'
+  completed_section_ids text[] NOT NULL DEFAULT '{}',
+  started_at            timestamptz NOT NULL DEFAULT now(),
+  completed_at          timestamptz,
+  created_at            timestamptz NOT NULL DEFAULT now(),
+  updated_at            timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (client_id)                                -- one intake per client in V1
+);
+
+CREATE INDEX idx_intakes_org_status ON intakes (organization_id, status);
+
 CREATE TABLE notes (
   id               uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   organization_id  uuid NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,

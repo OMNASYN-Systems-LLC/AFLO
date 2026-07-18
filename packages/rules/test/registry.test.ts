@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { ENGAGEMENT_RULES_VERSION } from "../src/engagement";
+import { INTAKE_RULES_VERSION } from "../src/intake";
+import { PIPELINE_RULES_VERSION } from "../src/pipeline";
 import { READINESS_RULES_VERSION, REASON_CODE_DESCRIPTIONS } from "../src/readiness";
 import { getRule, RULE_REGISTRY } from "../src/registry";
 
@@ -26,6 +28,8 @@ describe("rule registry", () => {
   it("stays in lockstep with implementation version constants", () => {
     expect(getRule("readiness.stage")?.version).toBe(READINESS_RULES_VERSION);
     expect(getRule("readiness.utilization")?.version).toBe(READINESS_RULES_VERSION);
+    expect(getRule("pipeline.transition")?.version).toBe(PIPELINE_RULES_VERSION);
+    expect(getRule("intake.completeness")?.version).toBe(INTAKE_RULES_VERSION);
     expect(getRule("engagement.status")?.version).toBe(ENGAGEMENT_RULES_VERSION);
   });
 

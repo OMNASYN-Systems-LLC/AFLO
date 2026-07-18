@@ -1,4 +1,4 @@
-import { nextRequiredStage } from "@aflo/shared";
+import { PIPELINE_BACKBONE, intakeCompleteness, nextRequiredStage } from "@aflo/shared";
 import Link from "next/link";
 import { EngagementBadge } from "@/components/badges";
 import { EmptyState, SectionCard } from "@/components/ui";
@@ -19,6 +19,7 @@ export default async function LeadsPage() {
   const rows = await clientRepository.list(DEMO_ORG_ID, demoNow);
   const leads = rows.filter((r) => r.kind === "lead");
   const pipeline = store.pipelineFor(DEMO_ORG_ID);
+  const intakeDefinition = store.intakeDefinitionFor(DEMO_ORG_ID);
   const audit = store.auditFor(DEMO_ORG_ID).slice(-8).reverse();
   const stages = pipeline ? [...pipeline.stages].sort((a, b) => a.order - b.order) : [];
   const nonTerminal = stages.filter((s) => !s.terminal);
@@ -58,6 +59,16 @@ export default async function LeadsPage() {
                           .reverse()
                           .find((s) => s.order < stage.order && s.required) ?? null
                       : null;
+                    // Entry to intake_completed is gated on the intake rules,
+                    // so the forward action mid-intake is the workspace itself.
+                    const intake =
+                      next?.id === PIPELINE_BACKBONE.intakeCompleted
+                        ? store.intakeFor(DEMO_ORG_ID, leadRow.id)
+                        : null;
+                    const progress =
+                      intake && intakeDefinition
+                        ? intakeCompleteness(intakeDefinition, intake.completedSectionIds)
+                        : null;
                     return (
                       <li key={leadRow.id} className="flex flex-wrap items-center justify-between gap-3 py-3">
                         <div className="min-w-0">
@@ -85,7 +96,15 @@ export default async function LeadsPage() {
                               </button>
                             </form>
                           ) : null}
-                          {next ? (
+                          {next?.id === PIPELINE_BACKBONE.intakeCompleted ? (
+                            <Link
+                              href={`/clients/${leadRow.id}/intake`}
+                              className="rounded-md bg-emerald px-3.5 py-1.5 text-xs font-medium text-ivory-ink transition-colors hover:bg-emerald-deep"
+                            >
+                              Continue intake
+                              {progress ? ` (${progress.completedRequiredCount}/${progress.requiredCount})` : ""}
+                            </Link>
+                          ) : next ? (
                             <form action={advanceLeadAction.bind(null, leadRow.id, next.id, false)}>
                               <button
                                 type="submit"

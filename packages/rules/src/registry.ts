@@ -1,4 +1,5 @@
 import { ENGAGEMENT_RULES_VERSION } from "./engagement";
+import { INTAKE_RULES_VERSION } from "./intake";
 import { PIPELINE_RULES_VERSION } from "./pipeline";
 import { READINESS_RULES_VERSION, REASON_CODE_DESCRIPTIONS } from "./readiness";
 
@@ -123,6 +124,28 @@ export const RULE_REGISTRY: readonly RuleDefinition[] = [
     sources: [],
     changeHistory: [
       { version: "pipeline.v1.0.0", date: "2026-07-18", note: "Initial configurable pipeline state machine (founder workstream slice C)." },
+    ],
+  },
+  {
+    id: "intake.completeness",
+    version: INTAKE_RULES_VERSION,
+    effectiveDate: "2026-07-18",
+    description:
+      "Client-intake completeness over configurable section definitions: sections may only be marked complete once and must exist in the definition; the intake completes only when every required section is complete. Unknown completed section ids fail closed. Section data lives in the domain records the sections feed, never in the rules.",
+    inputs: ["intakeDefinition", "completedSectionIds", "sectionId (per-section check)"],
+    output:
+      "IntakeSectionResult { allowed, reasonCode } / IntakeCompletenessResult { complete, missingRequiredSectionIds, reasonCode }",
+    reasonCodes: [
+      "IN_OK",
+      "IN_COMPLETE",
+      "IN_MISSING_REQUIRED",
+      "IN_UNKNOWN_SECTION",
+      "IN_SECTION_ALREADY_COMPLETE",
+      "IN_INVALID_DEFINITION",
+    ],
+    sources: [],
+    changeHistory: [
+      { version: "intake.v1.0.0", date: "2026-07-18", note: "Initial founder-required section set (founder workstream slice D)." },
     ],
   },
   {

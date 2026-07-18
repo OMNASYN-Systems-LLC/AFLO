@@ -76,6 +76,24 @@ export interface ClientRecord {
   lastActivityAt: string; // ISO date — drives engagement rules
 }
 
+export type IntakeStatus = "in_progress" | "completed";
+
+/**
+ * Structured-intake progress for one client/lead. Section ids reference the
+ * organization's intake definition (@aflo/rules IntakeDefinition); the data
+ * each section gathers lives in the domain records it feeds (financial
+ * profile, credit profile, goals, documents…), never here. Completion is
+ * only ever decided by the intake rules.
+ */
+export interface IntakeRecord {
+  id: string;
+  clientId: string;
+  status: IntakeStatus;
+  completedSectionIds: string[];
+  startedAt: string; // ISO datetime
+  completedAt: string | null; // ISO datetime once the rules declared it complete
+}
+
 /** Self- or staff-reported financial facts. Synthetic in V1 slice. */
 export interface FinancialProfile {
   clientId: string;

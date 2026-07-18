@@ -43,16 +43,28 @@ describe("AfloStore.advanceLead — legal path", () => {
 
   it("activation converts the lead to a client and emits a caused ClientActivated", () => {
     const store = makeStore();
-    // Omar is at intake_started; walk the required path to activation.
-    for (const to of ["intake_completed", "client_activated"]) {
-      const res = store.advanceLead({
-        organizationId: ORG,
-        leadId: "l-haddad",
-        toStageId: to,
-        actorStaffId: "s-boyd",
-      });
-      expect(res.ok).toBe(true);
+    // Omar is at intake_started with three required sections outstanding;
+    // finish the intake (which advances him to intake_completed), then activate.
+    for (const sectionId of ["primary_goal", "credit_self_report", "debts"]) {
+      expect(
+        store.completeIntakeSection({
+          organizationId: ORG,
+          clientId: "l-haddad",
+          sectionId,
+          actorStaffId: "s-boyd",
+        }).ok,
+      ).toBe(true);
     }
+    expect(
+      store.completeIntake({ organizationId: ORG, clientId: "l-haddad", actorStaffId: "s-boyd" }).ok,
+    ).toBe(true);
+    const res = store.advanceLead({
+      organizationId: ORG,
+      leadId: "l-haddad",
+      toStageId: "client_activated",
+      actorStaffId: "s-boyd",
+    });
+    expect(res.ok).toBe(true);
     const record = store.database().clients.find((c) => c.id === "l-haddad")!;
     expect(record.kind).toBe("client");
     expect(record.clientStatus).toBe("active");
