@@ -2,10 +2,12 @@ import {
   AfloStore,
   MockClientRepository,
   MockDashboardRepository,
+  MockPortalRepository,
   SYNTHETIC_NOW,
   syntheticDatabase,
   type ClientRepository,
   type DashboardRepository,
+  type PortalRepository,
   type StaffMember,
 } from "@aflo/shared";
 
@@ -30,6 +32,7 @@ export const store = new AfloStore(syntheticDatabase);
 
 export const clientRepository: ClientRepository = new MockClientRepository(store.database());
 export const dashboardRepository: DashboardRepository = new MockDashboardRepository(store.database());
+export const portalRepository: PortalRepository = new MockPortalRepository(store.database());
 
 /** The signed-in staff member the shell impersonates until Clerk lands. */
 export const DEMO_STAFF: StaffMember = (() => {
@@ -46,4 +49,16 @@ export const DEMO_STAFF: StaffMember = (() => {
  */
 export function getStaffSession(): { organizationId: string; staffId: string } {
   return { organizationId: DEMO_ORG_ID, staffId: DEMO_STAFF.id };
+}
+
+/** The demo client persona the portal shell impersonates until Clerk lands. */
+export const DEMO_CLIENT_ID = "c-bell";
+
+/**
+ * Server-side client-portal session — the ONLY source of organization and
+ * client identity for portal reads. Never accept ids from the browser.
+ * Replaced by the Clerk adapter (packages/auth, ADR-0006) with the same shape.
+ */
+export function getClientSession(): { organizationId: string; clientId: string } {
+  return { organizationId: DEMO_ORG_ID, clientId: DEMO_CLIENT_ID };
 }

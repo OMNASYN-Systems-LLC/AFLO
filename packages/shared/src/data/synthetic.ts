@@ -254,6 +254,21 @@ const creditProfiles: CreditProfile[] = [
  * verified facts — re-running the assessment is the natural staff action.
  */
 const assessments: ReadinessAssessmentRecord[] = [
+  // Marcus Bell's standing assessment backs the client-portal demo persona.
+  {
+    id: "ra-bell-1",
+    clientId: "c-bell",
+    stage: "recovery",
+    previousStage: null,
+    ruleVersion: "readiness.v1.0.0",
+    reasonCodes: ["RC_PAYMENT_HISTORY_POOR", "RC_DEROGATORY_HIGH"],
+    factsUsed: ["creditScore", "utilizationPct", "dtiPct", "reserveMonths", "derogatoryMarks", "onTimePaymentRate", "incomeStability"],
+    proposedNextAction: "Set up autopay minimums on every open account and verify each statement cycle",
+    requiresHumanReview: false,
+    reviewReasonCodes: [],
+    assessedAt: daysAgo(30),
+    actorStaffId: "s-boyd",
+  },
   {
     id: "ra-whitaker-1",
     clientId: "c-whitaker",

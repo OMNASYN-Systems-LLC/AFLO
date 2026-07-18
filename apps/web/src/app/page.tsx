@@ -30,13 +30,12 @@ export default function SignInPage() {
             >
               Continue as Golden Key Staff
             </Link>
-            <button
-              type="button"
-              disabled
-              className="block w-full cursor-not-allowed rounded-md border border-line px-4 py-2.5 text-center text-sm text-ink-faint"
+            <Link
+              href="/portal"
+              className="block w-full rounded-md border border-line px-4 py-2.5 text-center text-sm text-ink-soft transition-colors hover:border-gold/60 hover:text-gold-deep"
             >
-              Client portal — coming soon
-            </button>
+              Continue as Sample Client (demo)
+            </Link>
           </div>
         </div>
 

@@ -1,5 +1,6 @@
 import type { AgentEnvelope } from "@aflo/ai";
 import type {
+  ActionStatus,
   Appointment,
   AdminNote,
   ClientDocument,
@@ -10,6 +11,7 @@ import type {
   FinancialProfile,
   Goal,
   LifecycleStage,
+  MilestoneStatus,
   MonthlyAction,
   Organization,
   ClientStatus,
@@ -128,6 +130,41 @@ export interface ClientDetail {
   notes: AdminNote[];
   /** Draft AI output awaiting or past review — proposals only, never facts. */
   aiSuggestions: AgentEnvelope[];
+}
+
+/**
+ * Client-portal projection — the ONLY data surface the portal renders.
+ * Structurally excludes internal material: reason codes, review flags,
+ * draft/under-review roadmaps and reports, pipeline internals, and staff
+ * notes can never leak because they are not representable here.
+ */
+export interface PortalView {
+  organizationName: string;
+  clientFirstName: string;
+  clientName: string;
+  /** From the latest recorded assessment NOT awaiting human review; null until one exists. */
+  stage: { label: string; focus: string; assessedAt: string } | null;
+  primaryGoal: { title: string; targetDate: string; progressPct: number } | null;
+  /** Published roadmap only — drafts and reviews never reach the client. */
+  roadmap: {
+    title: string;
+    milestones: { title: string; description: string; status: MilestoneStatus; targetMonth: string }[];
+  } | null;
+  /** Current month's action plan. */
+  monthlyActions: { title: string; category: string; status: ActionStatus; dueDate: string }[];
+  /** Published reports only, newest first. */
+  publishedReports: {
+    quarter: string;
+    highlights: string[];
+    focusForNextQuarter: string;
+    generatedAt: string;
+  }[];
+  nextAppointment: { purpose: string; scheduledAt: string; channel: string; staffName: string } | null;
+}
+
+export interface PortalRepository {
+  /** Null for unknown ids, foreign-org ids, and non-activated records (fail closed). */
+  getPortalView(organizationId: string, clientId: string, now: Date): Promise<PortalView | null>;
 }
 
 export interface DashboardRepository {
