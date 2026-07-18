@@ -24,7 +24,7 @@ describe("requestDocument", () => {
     expect(res.document).toMatchObject({ reviewStatus: "requested", clientId: "c-okafor" });
     const event = deserializeEvent(store.outbox.at(-1)!.serializedEvent);
     expect(event.eventType).toBe("DocumentRequested");
-    expect(store.auditFor(ORG).at(-1)?.action).toBe("doc.requested");
+    expect(store.auditFor(ORG).map((a) => a.action)).toContain("doc.requested");
   });
 
   it("denies invalid input, audited", () => {
@@ -130,7 +130,7 @@ describe("scheduleAppointment", () => {
     expect(res.appointment).toMatchObject({ staffId: "s-mercer", channel: "video" });
     const event = deserializeEvent(store.outbox.at(-1)!.serializedEvent);
     expect(event.eventType).toBe("AppointmentScheduled");
-    expect(store.auditFor(ORG).at(-1)?.action).toBe("appointment.scheduled");
+    expect(store.auditFor(ORG).map((a) => a.action)).toContain("appointment.scheduled");
   });
 
   it("denies past times and bad input, audited", () => {

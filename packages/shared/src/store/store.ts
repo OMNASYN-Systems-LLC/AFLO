@@ -31,6 +31,12 @@ import {
   type RoadmapStatus,
   type RoadmapTransitionResult,
 } from "@aflo/rules";
+import {
+  NOTIFICATION_RULES_VERSION,
+  planNotification,
+  type NotificationType,
+  type NotificationVarsMap,
+} from "@aflo/notifications";
 import { createEvent, type DomainEvent } from "../events";
 import { toOutboxRecord, type OutboxRecord } from "../outbox";
 import { syntheticDatabase, type SyntheticDatabase } from "../data/synthetic";
@@ -298,10 +304,29 @@ export interface RunAssessmentInput {
   actorStaffId: string;
 }
 
+/**
+ * A recorded outbound communication (charter: communication history). The
+ * consent gate runs before any content is planned, so a suppressed entry
+ * carries no rendered subject — only the reason it was withheld.
+ */
+export interface CommunicationLogEntry {
+  id: string;
+  organizationId: string;
+  clientId: string;
+  notificationType: NotificationType;
+  channel: string;
+  /** "sent" = mock-delivered in dev; "suppressed" = withheld by the consent gate. */
+  status: "sent" | "suppressed";
+  subject: string | null;
+  suppressionReason: string | null;
+  occurredAt: string;
+}
+
 export class AfloStore {
   private readonly db: SyntheticDatabase;
   readonly outbox: OutboxRecord[] = [];
   readonly auditLog: AuditEntry[] = [];
+  readonly communicationsLog: CommunicationLogEntry[] = [];
   private counter = 0;
 
   constructor(
@@ -794,6 +819,16 @@ export class AfloStore {
       occurredAt: now.toISOString(),
     });
 
+    if (input.toStatus === "published") {
+      this.logNotification(
+        input.organizationId,
+        client,
+        "roadmap_published",
+        { firstName: client.firstName, roadmapTitle: roadmap.title },
+        now,
+      );
+    }
+
     return { ok: true, transition, roadmap, emittedEventIds: emitted.map((e) => e.eventId) };
   }
 
@@ -869,6 +904,14 @@ export class AfloStore {
       ruleVersion: ACTION_RULES_VERSION,
       occurredAt: now.toISOString(),
     });
+
+    this.logNotification(
+      input.organizationId,
+      record,
+      "task_assigned",
+      { firstName: record.firstName, taskTitle: title, dueDate: action.dueDate.slice(0, 10) },
+      now,
+    );
 
     return { ok: true, action, emittedEventIds: [event.eventId] };
   }
@@ -1145,6 +1188,16 @@ export class AfloStore {
       occurredAt: now.toISOString(),
     });
 
+    if (input.toStatus === "published") {
+      this.logNotification(
+        input.organizationId,
+        client,
+        "report_published",
+        { firstName: client.firstName, quarter: report.quarter },
+        now,
+      );
+    }
+
     return { ok: true, transition, report, emittedEventIds: emitted.map((e) => e.eventId) };
   }
 
@@ -1214,6 +1267,14 @@ export class AfloStore {
       ruleVersion: DOCUMENT_RULES_VERSION,
       occurredAt: now.toISOString(),
     });
+
+    this.logNotification(
+      input.organizationId,
+      record,
+      "document_requested",
+      { firstName: record.firstName, documentName: name },
+      now,
+    );
 
     return { ok: true, document, emittedEventIds: [event.eventId] };
   }
@@ -1385,6 +1446,14 @@ export class AfloStore {
       occurredAt: now.toISOString(),
     });
 
+    this.logNotification(
+      input.organizationId,
+      record,
+      "appointment_scheduled",
+      { firstName: record.firstName, when: appointment.scheduledAt, advisorName: actor.name },
+      now,
+    );
+
     return { ok: true, appointment, emittedEventIds: [event.eventId] };
   }
 
@@ -1555,6 +1624,64 @@ export class AfloStore {
 
   private findActor(organizationId: string, staffId: string) {
     return this.db.staff.find((s) => s.id === staffId && s.organizationId === organizationId);
+  }
+
+  /** Recorded communications for one client, oldest first, org-verified. */
+  communicationsFor(organizationId: string, clientId: string): CommunicationLogEntry[] {
+    const record = this.findRecord(organizationId, clientId);
+    if (!record) return [];
+    return this.communicationsLog.filter(
+      (c) => c.organizationId === organizationId && c.clientId === clientId,
+    );
+  }
+
+  /**
+   * Plan and record an outbound communication triggered by a workflow event.
+   * The consent gate (notification.v1.0.0) runs before any content is
+   * rendered; suppressed communications are recorded with their reason and
+   * carry no content. In dev/preview a queued communication is recorded as
+   * mock-delivered ("sent"); real async provider dispatch with retries is the
+   * worker slice. The recipient id in the prototype is the client id.
+   */
+  private logNotification<T extends NotificationType>(
+    organizationId: string,
+    client: ClientRecord,
+    type: T,
+    vars: NotificationVarsMap[T],
+    now: Date,
+  ): void {
+    const planned = planNotification({
+      type,
+      recipientUserId: client.id,
+      vars,
+      consentRecords: this.db.consentRecords,
+    });
+    this.counter += 1;
+    const suppressed = planned.status === "suppressed";
+    this.communicationsLog.push({
+      id: `comm-${this.counter}`,
+      organizationId,
+      clientId: client.id,
+      notificationType: type,
+      channel: planned.message?.channel ?? "email",
+      status: suppressed ? "suppressed" : "sent",
+      subject: planned.message?.subject ?? null,
+      suppressionReason: planned.suppressionReason,
+      occurredAt: now.toISOString(),
+    });
+    this.audit({
+      organizationId,
+      actorStaffId: "system",
+      action: suppressed ? "comm.suppressed" : "comm.sent",
+      targetType: "communication",
+      targetId: client.id,
+      detail: suppressed
+        ? `${type} suppressed (${planned.suppressionReason})`
+        : `${type} sent: "${planned.message?.subject}"`,
+      reasonCode: suppressed ? planned.suppressionReason ?? "SUPPRESSED" : "SENT",
+      ruleVersion: NOTIFICATION_RULES_VERSION,
+      occurredAt: now.toISOString(),
+    });
   }
 
   private audit(entry: Omit<AuditEntry, "id">): void {
