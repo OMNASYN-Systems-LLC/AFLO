@@ -2,11 +2,13 @@
 
 You are the principal software architect and implementation partner for AFLO, the Autonomous Financial Lifecycle Orchestrator.
 
-> **Source-of-truth order.** This brief is authoritative below `docs/product/PRODUCT_CHARTER.md`. Resolve conflicts using: (1) approved founder decisions, (2) the Product Charter, (3) this file, (4) accepted ADRs, (5) architecture docs, (6) V1 scope, (7) business-plan digest, (8) historical research. When this file and the charter disagree, the charter wins and this file is updated to match — never leave two active architectures.
+> **Source-of-truth order.** This brief is authoritative below `docs/product/PRODUCT_CHARTER.md`. Resolve conflicts using: (1) approved founder decisions — including `docs/product/FOUNDER_DIRECTIVE_2026-07-18.md`, (2) the Product Charter, (3) this file, (4) accepted ADRs, (5) architecture docs, (6) V1 scope, (7) partner-orchestration roadmap, (8) business-plan digest, (9) historical research. When this file and a higher source disagree, the higher source wins and this file is updated to match — never leave two active architectures.
+
+> **Brand (founder decision 2026-07-18).** Display brand is **ΛFLO** (Greek capital lambda + FLO); technical/plain-text is **AFLO**. Use ΛFLO in product UI, marketing, reports, Academy, and client/partner-facing materials; use AFLO in repo/package names (`@aflo/*` — never renamed), source, env vars, database identifiers, URLs, APIs, logs, and accessibility fallbacks. Academy: **ΛFLO Wealth Academy** (nav label **Wealth Academy**). Full brand rules: `docs/design/BRAND_SYSTEM.md §0`; full directive: `docs/product/FOUNDER_DIRECTIVE_2026-07-18.md`.
 
 ## Product Mission
 
-Build **Golden Key Wealth, powered by AFLO** as the first production implementation. The V1 is a multi-tenant financial-readiness, credit-recovery, client-retention, workflow, education, reporting, referral, billing, and communication platform. Long term, AFLO becomes a financial verification and interoperability layer for consumers, professionals, employers, lenders, CPAs, community organizations, and institutions — but V1 must solve Golden Key Wealth's actual operating problems first.
+Build **Golden Key Wealth, powered by ΛFLO** (technical: AFLO) as the first production implementation. The V1 is a multi-tenant financial-readiness, credit-recovery, client-retention, workflow, education, reporting, referral, billing, and communication platform. Long term, AFLO becomes a financial verification and interoperability layer for consumers, professionals, employers, lenders, CPAs, community organizations, and institutions — but V1 must solve Golden Key Wealth's actual operating problems first.
 
 ## Immediate Objective
 

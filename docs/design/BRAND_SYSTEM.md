@@ -1,6 +1,24 @@
-# AFLO Two-Level Brand System
+# ΛFLO Two-Level Brand System
 
-AFLO carries **two distinct identities** that must never blur: the **AFLO platform identity** (the company and control plane) and per-tenant identities, of which **Golden Key Wealth** is the first. Product surfaces are themed by tenant; platform surfaces (corporate site, platform admin, developer/docs, status) use the corporate identity.
+## 0. Wordmark: ΛFLO (display) vs AFLO (technical) — founder rule (2026-07-18)
+
+The official **display** brand is **ΛFLO** (Greek capital lambda `Λ` + `FLO`). The **technical / plain-text** form remains **AFLO**. These never blur:
+
+| Use **ΛFLO** (display) | Use **AFLO** (technical / plain-text) |
+|---|---|
+| Product UI, marketing, reports, presentations | Repository & package names (`@aflo/*`), source code, identifiers |
+| Academy branding, partner-facing & client-facing materials | Env vars, database identifiers, URLs, domains, APIs, logs |
+| | **Accessibility fallbacks** and plain-text references |
+
+- Full product reference: **AFLO — Autonomous Financial Lifecycle Orchestrator**.
+- Initial implementation: **Golden Key Wealth, powered by ΛFLO**.
+- In the web app, render the display mark via `components/brand.tsx` (`AfloWordmark` / `PoweredByAflo`): it shows `ΛFLO` visually with `aria-label="AFLO"`, so screen readers, search, and copy-paste get the plain-text brand.
+- **Do not** rename `@aflo/*` namespaces, env vars, or any technical identifier to use the lambda. `<title>` tags and log lines stay `AFLO` (plain-text/accessibility).
+- Academy: official name **ΛFLO Wealth Academy**; navigation label **Wealth Academy**. Natalia's content is the *Wealth Unlockers curriculum, delivered through the ΛFLO Wealth Academy*. Do not rename it to "Sovereign Academy" or "Golden Key Vault".
+
+---
+
+ΛFLO carries **two distinct identities** that must never blur: the **ΛFLO platform identity** (the company and control plane) and per-tenant identities, of which **Golden Key Wealth** is the first. Product surfaces are themed by tenant; platform surfaces (corporate site, platform admin, developer/docs, status) use the corporate identity.
 
 ## 1. AFLO platform identity — "Control Plane Delta" (Option B)
 

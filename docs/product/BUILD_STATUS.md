@@ -1,8 +1,12 @@
-# AFLO Build Status
+# ΛFLO Build Status
 
-Living status of the AFLO V1 build. Updated every implementation cycle. Newest state at top of each list.
+Living status of the ΛFLO (technical: AFLO) V1 build. Updated every implementation cycle. Newest state at top of each list.
 
-_Last updated: 2026-07-18 · PRs #2, #3, #16–#21 merged to `main`. Founder decisions applied: Clerk accepted (ADR-0006), Neon provisioned, Control Plane Delta brand. Client-lifecycle workstream (slices A–J) underway; commercial-grade execution priority in effect._
+_Last updated: 2026-07-18 · PRs #2–#34 merged to `main` (client lifecycle A–P + persistence schema, notifications kernel+wiring, auth boundary, round-up simulator, goals). Founder decisions applied: Clerk accepted (ADR-0006), Neon provisioned, Control Plane Delta brand, **ΛFLO display brand + expanded charter (`FOUNDER_DIRECTIVE_2026-07-18.md`)**. Now executing the founder's 21-item implementation order; credential-gated items paused, safe work continuing._
+
+## Founder implementation order (2026-07-18) — status
+
+1. Lead→client conversion ✅ · 2. Structured intake ✅ · 3. Neon/Drizzle persistence — schema ✅, **connection ⛔ `DATABASE_URL`** · 4. Authz/RLS/audit/tenant isolation — audit + tenant tests ✅, **RLS DDL ⏭** · 5. Readiness rules ✅ · 6. Roadmap + monthly actions ✅ · 7. Clerk auth — boundary ✅, **activation ⛔ keys** · 8. Outbox worker ⛔ (needs shared DB) · 9. **Notification preferences ⏭ (next)** · 10. Resend adapter — ⛔ keys (test-mode buildable) · 11. Twilio SMS — ⛔ keys · 12. Wealth Academy ⏭ · 13. Reports ✅ + signed packages ⏭ · 14. Stripe test-mode ⛔ keys · 15. Partner referrals ⏭ · 16. Partner neutrality ⏭ · 17. Credit-data interfaces ⏭ · 18. Behavioral Support (opt-in) ⏭ · 19. Opportunity registry ⏭ · 20. Pilot 👤 · 21. Provider eval 👤.
 
 ## Legend
 
@@ -46,7 +50,8 @@ _Last updated: 2026-07-18 · PRs #2, #3, #16–#21 merged to `main`. Founder dec
 - Slice M — notification wiring: the kernel wired into the store; workflow events plan consent-gated communications recorded in a staff-visible log (revoked-consent sends suppressed and recorded, never silent). **Merged (PR #31).**
 - Slice N — Drizzle schema foundation: `@aflo/database` activated (ADR-0005) — kernel-derived Postgres enums + core tables matching the implemented model, offline-generated migration, 9 lockstep tests. **Merged (PR #32).**
 - Slice O — round-up simulator: `roundup.v1.0.0` deterministic calculator (SIMULATION ONLY), simulation domain + rule-computed seed, store workflows, client-detail simulator card. **Merged (PR #33).**
-- **Slice P — goals workflow**: store `createGoal` (validated, emits `GoalCreated` — the catalog event's first producer; single-primary enforced), `updateGoalProgress` (0–100), `setPrimaryGoal` (exclusive), all audited + isolated; client-detail Goals card with add/edit-progress/make-primary controls. 8 store tests + a goals e2e. _In PR (branch `claude/goals-workflow`)._
+- Slice P — goals workflow: store `createGoal`/`updateGoalProgress`/`setPrimaryGoal`, `GoalCreated` first producer, single-primary invariant, client-detail Goals card. **Merged (PR #34).**
+- **Slice Q — ΛFLO brand + charter reconciliation**: `FOUNDER_DIRECTIVE_2026-07-18.md` captured as authoritative; `AfloWordmark`/`PoweredByAflo` display component (renders `ΛFLO`, `aria-label="AFLO"` fallback) applied to sign-in, staff shell, and portal; `BRAND_SYSTEM.md §0` ΛFLO/AFLO usage rules; staff nav coming-soon aligned to the founder set (Tasks/Reports/Partners/Billing/Settings); CLAUDE.md brand + source-of-truth lines updated; `@aflo/*` identifiers unchanged. _In PR (branch `claude/brand-charter-reconcile`)._
 - Founder-action-gated (credentials/accounts, not code): Neon connection + repository swap (`DATABASE_URL`), outbox worker (needs the shared DB), Clerk activation (keys), Resend activation (keys), Stripe test-mode billing (keys + approved packages). Remaining credential-free modules: admin settings layer, engagement/retention analytics, observability instrumentation.
 
 ## Next ⏭ (founder-approved build-now order)
