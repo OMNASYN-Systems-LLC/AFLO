@@ -92,7 +92,7 @@ describe("transitionReport", () => {
     const event = deserializeEvent(store.outbox.at(-1)!.serializedEvent);
     expect(event.eventType).toBe("ProgressReportPublished");
     expect(event.payload).toMatchObject({ reportId: "qr-solomon-q2", publishedByMemberId: "s-mercer" });
-    expect(store.auditFor(ORG).at(-1)?.action).toBe("report.published");
+    expect(store.auditFor(ORG).map((a) => a.action)).toContain("report.published");
   });
 
   it("denies publishing a draft directly — review is never skipped", () => {

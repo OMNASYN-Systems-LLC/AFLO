@@ -73,6 +73,7 @@ export default async function ClientDetailPage({
     .database()
     .appointments.filter((ap) => ap.clientId === clientId && new Date(ap.scheduledAt) > demoNow)
     .sort((x, y) => x.scheduledAt.localeCompare(y.scheduledAt));
+  const communications = store.communicationsFor(DEMO_ORG_ID, clientId).slice(-6).reverse();
   const intakeProgress =
     intake && intakeDefinition
       ? intakeCompleteness(intakeDefinition, intake.completedSectionIds)
@@ -663,6 +664,35 @@ export default async function ClientDetailPage({
                 </p>
               </form>
             ) : null}
+          </SectionCard>
+
+          <SectionCard
+            title="Communications"
+            subtitle="Consent-gated — suppressed sends are recorded, never silently dropped"
+          >
+            {communications.length === 0 ? (
+              <EmptyState message="No communications yet this session." />
+            ) : (
+              <ul className="space-y-2.5">
+                {communications.map((c) => (
+                  <li key={c.id} className="flex flex-wrap items-baseline justify-between gap-2">
+                    <div className="min-w-0">
+                      <p className="truncate text-sm text-ink">
+                        {c.subject ?? c.notificationType.replace(/_/g, " ")}
+                      </p>
+                      <p className="text-[11px] text-ink-faint">
+                        {c.channel} · {fmtDateTime(c.occurredAt)}
+                      </p>
+                    </div>
+                    {c.status === "sent" ? (
+                      <Badge tone="good" label="Sent" />
+                    ) : (
+                      <Badge tone="neutral" label="Suppressed — no consent" />
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
           </SectionCard>
 
           <SectionCard title="Notes" subtitle="Internal — never visible in the client portal">

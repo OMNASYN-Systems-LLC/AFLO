@@ -1,4 +1,5 @@
 import type { AgentEnvelope } from "@aflo/ai";
+import type { ConsentRecord } from "@aflo/notifications";
 import {
   DEFAULT_INTAKE,
   INTAKE_RULES_VERSION,
@@ -74,6 +75,12 @@ export interface SyntheticDatabase {
   appointments: Appointment[];
   reports: QuarterlyReport[];
   notes: AdminNote[];
+  /**
+   * Communication-consent records (append-only). Keyed by recipient id,
+   * which in the prototype is the client id — clients are the recipients
+   * until portal user accounts land, at which point this keys on user id.
+   */
+  consentRecords: ConsentRecord[];
   aiSuggestions: AgentEnvelope[];
 }
 
@@ -546,6 +553,25 @@ const notes: AdminNote[] = [
 ];
 
 /**
+ * Communication consent per activated client. Every activated client granted
+ * it at onboarding except Harold Ngo, who later revoked it — a newer
+ * `granted: false` record — so his notifications are suppressed. Leads have
+ * not yet granted communication consent.
+ */
+const consentRecords: ConsentRecord[] = [
+  ...clients
+    .filter((c) => c.kind === "client" && c.id !== "c-ngo")
+    .map((c) => ({
+      userId: c.id,
+      consentType: "communication" as const,
+      granted: true,
+      recordedAt: c.joinedAt,
+    })),
+  { userId: "c-ngo", consentType: "communication", granted: true, recordedAt: daysAgo(460) },
+  { userId: "c-ngo", consentType: "communication", granted: false, recordedAt: daysAgo(70) },
+];
+
+/**
  * Synthetic examples of the typed agent envelope (drafts only — proposals,
  * never facts). These illustrate the review workflow in the UI.
  */
@@ -645,5 +671,6 @@ export const syntheticDatabase: SyntheticDatabase = {
   appointments,
   reports,
   notes,
+  consentRecords,
   aiSuggestions,
 };

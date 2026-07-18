@@ -1,7 +1,7 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  transpilePackages: ["@aflo/shared", "@aflo/rules", "@aflo/ai", "@aflo/auth"],
+  transpilePackages: ["@aflo/shared", "@aflo/rules", "@aflo/ai", "@aflo/auth", "@aflo/notifications"],
 };
 
 export default nextConfig;

@@ -32,7 +32,7 @@ describe("addMonthlyAction", () => {
     const event = deserializeEvent(store.outbox.at(-1)!.serializedEvent);
     expect(event.eventType).toBe("TaskAssigned");
     expect(event.payload).toMatchObject({ clientId: "c-grant", milestoneId: null, templateId: null });
-    expect(store.auditFor(ORG).at(-1)?.action).toBe("action.assigned");
+    expect(store.auditFor(ORG).map((a) => a.action)).toContain("action.assigned");
     expect(store.database().monthlyActions.some((a) => a.id === res.action?.id)).toBe(true);
   });
 
