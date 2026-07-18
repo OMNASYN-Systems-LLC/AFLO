@@ -58,14 +58,16 @@ _Last updated: 2026-07-18 · PRs #2–#39 merged to `main`, plus slices T + U la
 - **Slice U — tracked partner referrals + Partner Neutrality Engine** (founder order #15–#16, ADR-0010): `@aflo/partner-marketplace` activated from stub — `partner.v1.0.0` referral lifecycle allow-list (`suggested → shared_with_client → client_engaged → outcome_recorded`, `declined` from any non-terminal), the eight-field `NeutralityRecord` with fail-closed `validateNeutralityRecord`, and `orderPartnerOptions` (non-commercial-first then name, **never** by compensation). `PartnerReferral` domain record + synthetic partner directory (fictional names, dollar-free disclosures — ADR-0007). Store `createReferral` (fails closed without a complete neutrality record; emits `PartnerReferralCreated`), `transitionReferral`, `recordReferralOutcome` (staff observation, never an approval) + `partnersFor`/`referralsFor`; all audited, org/actor scoped, isolated from the readiness engine. Staff "Partner referrals" card (create with neutrality disclosure, route the lifecycle, record outcome). 9 marketplace + 8 store tests + partner-referrals e2e (2). **Merged (PR #39).**
 - Founder-action-gated (credentials/accounts, not code): Neon connection + repository swap (`DATABASE_URL`), outbox worker (needs the shared DB), Clerk activation (keys), Resend activation (keys), Stripe test-mode billing (keys + approved packages). Remaining credential-free modules: admin settings layer, engagement/retention analytics, observability instrumentation.
 
-## Next ⏭ (founder-approved build-now order)
+## Next ⏭ (forward order — the persistence pivot is the decisive milestone)
 
-1. **Golden Key client lifecycle** — event model / outbox typed contracts, then lead→client conversion, intake, and lifecycle workflows over the existing deterministic stage engine.
-2. **Automated email workflows** — `packages/notifications`: template registry, consent/opt-out handling, delivery-event logging, retry/idempotency contracts, mock delivery in dev/preview.
-3. **Billing + Stripe test-mode payments** — billing entities DDL, service-package catalog, test-mode invoices/subscriptions consuming the `@aflo/billing` kernel; webhook verification is a founder-review item (never auto-merged).
-4. **Wealth Unlockers Academy** — `packages/academy`: staff-authored lesson library, stage/trigger-based assignment from verified facts, completion tracking; completion never unlocks regulated products.
-5. **Partner directory + referral tracking** — `packages/partner-marketplace` with the Partner Neutrality Engine record on every recommendation.
-6. **Credit-builder opportunity rules (mock providers only)** — deterministic Credit-Building Opportunity Engine; "no new account" is a first-class outcome; no partner names or compensation figures.
+The synthetic-module surface is broad; the next decisive work moves it from in-memory demonstration to durable, restart-safe operation. Credential-free work continues in parallel.
+
+1. **Credit-data interfaces (founder order #17)** — provider-neutral normalized AFLO credit model behind an adapter, mock provider only; no production bureau, no FCRA-gated data (ADR-0007 §5). Credential-free.
+2. **Neon-backed persistence pivot** — complete the Drizzle workflow tables, generate/apply migrations to the Neon `dev` branch, build Neon repository implementations behind the existing interfaces, add mock-vs-Neon parity tests, then swap the store. **Gated on `DATABASE_URL`.**
+3. **Database-level RLS (founder order #4)** — org-scoped row-level security as defense-in-depth over the app-level isolation already tested.
+4. **Clerk activation (order #7)** and **Railway outbox worker (order #8)** — both gated on credentials / the shared database.
+5. **Behavioral Support Engine (order #18, opt-in)** and **opportunity registry (order #19)** — credential-free, deterministic, safe-language.
+6. **Real communications (Resend/Twilio), Stripe test mode, and document storage** — each gated on credentials/accounts.
 
 ## Phased later (gated — see `PARTNER_ORCHESTRATION_ROADMAP.md`)
 
@@ -91,7 +93,8 @@ _Last updated: 2026-07-18 · PRs #2–#39 merged to `main`, plus slices T + U la
 
 ## Deployment status
 
-- **main**: contains the deployable monorepo (PRs #2, #3, #16 merged).
-- **Vercel**: not yet imported — configuration prepared; import requires founder account (see Blocked).
-- **Railway**: not yet created — build/start commands and config documented; requires founder account.
-- **Neon**: **provisioned by founder** (`main`/`preview`/`dev` branches exist — never recreate). No code connects until the first Drizzle slice; connection strings live only in provider dashboards.
+- **main**: contains the deployable monorepo through slice U (partner referrals) + slice T (signed handoff packages).
+- **Vercel**: **connected** (project `aflo-web`, root `apps/web`) — per-PR preview deployments build and deploy on every push. Production promotion + env vars remain a founder action.
+- **Railway**: not yet created — build/start commands and config documented; requires founder account. The worker stays inactive until the shared Neon database is connected.
+- **Neon**: **provisioned by founder** (`main`/`preview`/`dev` branches exist — never recreate). The app is still mock-backed; no code connects until the Neon repository swap, and connection strings live only in provider dashboards (`DATABASE_URL`).
+- **Repository visibility**: recommend setting the GitHub repo to **private** before real credentials, vendor details, or pilot config are added (a founder admin action in repo Settings → Change visibility). Everything committed today is synthetic — no secrets or real PII.
