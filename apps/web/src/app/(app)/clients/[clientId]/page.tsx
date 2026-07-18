@@ -21,7 +21,12 @@ import {
   RoadmapStatusBadge,
   StageBadge,
 } from "@/components/badges";
-import { runReadinessAssessmentAction, transitionRoadmapAction } from "./actions";
+import {
+  addMonthlyActionAction,
+  runReadinessAssessmentAction,
+  transitionMonthlyActionAction,
+  transitionRoadmapAction,
+} from "./actions";
 import { StageTrack } from "@/components/stage";
 import { EmptyState, ProgressBar, SectionCard } from "@/components/ui";
 import { DEMO_ORG_ID, clientRepository, demoNow, store } from "@/lib/data";
@@ -310,7 +315,7 @@ export default async function ClientDetailPage({
             ) : (
               <ul className="divide-y divide-line/60">
                 {detail.monthlyActions.map((action) => (
-                  <li key={action.id} className="flex items-center justify-between gap-3 py-2.5">
+                  <li key={action.id} className="flex flex-wrap items-center justify-between gap-3 py-2.5">
                     <div className="flex min-w-0 items-center gap-3">
                       <ActionMarker done={action.status === "done"} inProgress={action.status === "in_progress"} />
                       <span
@@ -325,11 +330,76 @@ export default async function ClientDetailPage({
                       <span className="rounded bg-sand px-1.5 py-0.5 capitalize">{action.category}</span>
                       <span>{ACTION_STATUS_LABELS[action.status]}</span>
                       <span>due {fmtDate(action.dueDate)}</span>
+                      <span className="flex items-center gap-1.5">
+                        {action.status === "todo" ? (
+                          <form action={transitionMonthlyActionAction.bind(null, clientId, action.id, "in_progress")}>
+                            <ActionButton label="Start" />
+                          </form>
+                        ) : null}
+                        {action.status !== "done" ? (
+                          <form action={transitionMonthlyActionAction.bind(null, clientId, action.id, "done")}>
+                            <ActionButton label="Complete" primary />
+                          </form>
+                        ) : (
+                          <form action={transitionMonthlyActionAction.bind(null, clientId, action.id, "todo")}>
+                            <ActionButton label="Reopen" />
+                          </form>
+                        )}
+                      </span>
                     </div>
                   </li>
                 ))}
               </ul>
             )}
+            <form
+              action={addMonthlyActionAction.bind(null, clientId)}
+              className="mt-4 flex flex-wrap items-end gap-2 border-t border-line/70 pt-4"
+            >
+              <label className="min-w-0 flex-1">
+                <span className="mb-1 block text-[11px] font-medium uppercase tracking-[0.14em] text-ink-soft">
+                  New action
+                </span>
+                <input
+                  name="title"
+                  required
+                  placeholder="What should happen this month?"
+                  className="w-full rounded-md border border-line bg-card px-3 py-1.5 text-sm text-ink placeholder:text-ink-faint"
+                />
+              </label>
+              <label>
+                <span className="mb-1 block text-[11px] font-medium uppercase tracking-[0.14em] text-ink-soft">
+                  Category
+                </span>
+                <select
+                  name="category"
+                  className="rounded-md border border-line bg-card px-2 py-1.5 text-sm text-ink"
+                  defaultValue="habit"
+                >
+                  <option value="payment">Payment</option>
+                  <option value="savings">Savings</option>
+                  <option value="documentation">Documentation</option>
+                  <option value="education">Education</option>
+                  <option value="habit">Habit</option>
+                </select>
+              </label>
+              <label>
+                <span className="mb-1 block text-[11px] font-medium uppercase tracking-[0.14em] text-ink-soft">
+                  Due
+                </span>
+                <input
+                  name="dueDate"
+                  type="date"
+                  required
+                  className="rounded-md border border-line bg-card px-2 py-1.5 text-sm text-ink"
+                />
+              </label>
+              <button
+                type="submit"
+                className="rounded-md bg-emerald px-3.5 py-2 text-xs font-medium text-ivory-ink transition-colors hover:bg-emerald-deep"
+              >
+                Add action
+              </button>
+            </form>
           </SectionCard>
 
           <SectionCard
@@ -539,6 +609,21 @@ function MilestoneMarker({ status }: { status: "completed" | "in_progress" | "up
     );
   }
   return <span className="mt-0.5 h-5 w-5 shrink-0 rounded-full border-2 border-line" />;
+}
+
+function ActionButton({ label, primary = false }: { label: string; primary?: boolean }) {
+  return (
+    <button
+      type="submit"
+      className={
+        primary
+          ? "rounded bg-emerald px-2 py-1 text-[11px] font-medium text-ivory-ink transition-colors hover:bg-emerald-deep"
+          : "rounded border border-line px-2 py-1 text-[11px] text-ink-soft transition-colors hover:border-gold/60 hover:text-gold-deep"
+      }
+    >
+      {label}
+    </button>
+  );
 }
 
 function ActionMarker({ done, inProgress }: { done: boolean; inProgress: boolean }) {
