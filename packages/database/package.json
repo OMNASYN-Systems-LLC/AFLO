@@ -23,6 +23,7 @@
   },
   "devDependencies": {
     "@aflo/shared": "workspace:*",
+    "@electric-sql/pglite": "^0.5.4",
     "@eslint/js": "^10.0.1",
     "@types/node": "^22.10.2",
     "drizzle-kit": "^0.31.10",
