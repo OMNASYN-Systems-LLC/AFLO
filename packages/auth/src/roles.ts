@@ -52,3 +52,30 @@ export function roleFromMemberRole(memberRole: MemberRole): Role {
 export function isRole(value: string): value is Role {
   return (ROLES as readonly string[]).includes(value);
 }
+
+/**
+ * The inverse of `roleFromMemberRole`: the membership-table role for an
+ * authorization role, or `null` for roles that are NOT `organization_members`
+ * rows (`client` is an account link; `platform_admin` a flag; `partner_viewer`
+ * a deferred grant).
+ */
+export function memberRoleFromRole(role: Role): MemberRole | null {
+  switch (role) {
+    case "organization_owner":
+      return "organization_owner";
+    case "organization_admin":
+      return "organization_admin";
+    case "staff_advisor":
+      return "staff";
+    case "client":
+    case "platform_admin":
+    case "partner_viewer":
+      return null;
+    default: {
+      // Fail loud if a new Role is added without a case here (noImplicitReturns
+      // is off, so the switch would otherwise silently return undefined).
+      const unexpected: never = role;
+      throw new Error(`unknown role: ${String(unexpected)}`);
+    }
+  }
+}
