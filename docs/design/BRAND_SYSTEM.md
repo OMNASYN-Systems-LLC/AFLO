@@ -38,7 +38,22 @@ Rules:
 
 ## 2. Golden Key Wealth tenant identity
 
-Golden Key Wealth retains its own theme (see `DESIGN_SYSTEM.md` for tokens, typography, validated status palette, and component conventions): warm ivory surfaces, obsidian/charcoal ink, muted gold, deep emerald, slate — quiet authority, dignity, progress. Tenant surfaces: staff portal, client portal, client communications, reports.
+**Authoritative brand guide (founder-supplied 2026-07-19).** Golden Key Wealth's identity is a restrained black-and-gold luxe system — "quiet authority, dignity, progress." Tenant surfaces: staff portal, client portal, client communications, reports.
+
+- **Mark:** the "GK" key monogram (a circular key bow + K, with the key shaft/teeth), gold on black. Variants: primary logo (horizontal), stacked logo, icon mark (rounded-square), app icon (circular). The raster/vector asset files must still be exported from the guide — until then the `OrganizationBrand` component renders the "GK" text fallback (ADR-0015); do not auto-trace the guide into a substitute trademark.
+- **Palette (five official swatches, source of truth `GOLDEN_KEY_THEME` in `apps/web/src/components/branding.tsx`):**
+  | Token | Hex | Use |
+  |---|---|---|
+  | Gold | `#D4AF37` | primary accent, the key mark |
+  | White | `#FFFFFF` | text on dark, surfaces |
+  | Onyx (black) | `#0A0A0A` | primary dark ground |
+  | Charcoal (dark) | `#1E1E1E` | dark panels, elevation |
+  | Gray | `#6B6B6B` | secondary text, borders |
+  (`softGray #F5F5F3` is a derived light surface, not one of the five.)
+- **Typography:** **Futura PT** (display/headings) · **Avenir Next** (secondary/body) — both licensed (Adobe Fonts). Until a font kit is provisioned, surfaces fall back to a geometric-sans stack; the intended families are declared so they apply once the kit is available.
+- **Voice:** tagline **"Strategy. Clarity. Freedom."**; positioning *"Modern wealth management built on strategy, clarity, and generational impact. We unlock financial freedom through intelligent solutions and unwavering guidance."*; values **Strategic · Trusted · Innovative · Empowering** (`GOLDEN_KEY_VOICE`).
+
+Note: the app's current editorial ivory/emerald surface tokens in `apps/web/src/app/globals.css` are the ΛFLO **platform** aesthetic (§1/§3). Applying the Golden Key black/gold system to tenant-facing surfaces (beyond the mark + tagline now on the sign-in shell) is a deliberate follow-up theming slice, kept off the auth/persistence critical path.
 
 ## 3. Theming architecture
 
