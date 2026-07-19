@@ -28,6 +28,9 @@ jobs:
       - name: Lint
         run: pnpm -r lint
 
+      - name: Guard — no demo identities in production runtime
+        run: pnpm check:demo-markers
+
       - name: Test
         run: pnpm -r test
 
