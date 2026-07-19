@@ -76,7 +76,13 @@ export interface ReadinessInputCompleteness {
   missingKeys: ReadinessInputKey[];
   /** Missing inputs that BLOCK the diagnosis (required and absent). */
   blockingMissingKeys: ReadinessInputKey[];
-  /** True iff every REQUIRED input is captured — the diagnosis can run. */
+  /**
+   * True iff every REQUIRED readiness INPUT is captured. This is the
+   * verified-facts half of the store's run precondition only — intake
+   * completion is a SEPARATE gate the store also enforces, so a consumer
+   * deciding whether the diagnosis may actually run must AND this with intake
+   * completeness (the readout's `canRunDiagnosis` does exactly that).
+   */
   canDiagnose: boolean;
   /** 0..100 share of all seven inputs captured (deterministic, rounded). */
   completionPct: number;
@@ -86,8 +92,9 @@ export interface ReadinessInputCompleteness {
 /**
  * Deterministic completeness over the readiness inputs. Fails closed: an input
  * whose presence flag is not exactly `true` counts as missing. `canDiagnose`
- * mirrors the store's assessment precondition (both profiles present), treating
- * the credit score as non-blocking.
+ * covers only the verified-facts half of the store's run precondition (both
+ * profiles present), treating the credit score as non-blocking; intake
+ * completion is a separate gate (see `canDiagnose`'s doc).
  */
 export function readinessInputCompleteness(presence: ReadinessInputPresence): ReadinessInputCompleteness {
   const capturedKeys = READINESS_INPUT_KEYS.filter((k) => presence[k] === true);

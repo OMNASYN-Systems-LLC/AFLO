@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { assessEngagement, RESOLUTION_RULES_VERSION } from "@aflo/rules";
+import { assessEngagement, READINESS_RULES_VERSION, RESOLUTION_RULES_VERSION } from "@aflo/rules";
 import {
   buildResolutionReadout,
   toReadinessInputPresence,
@@ -149,9 +149,40 @@ describe("buildResolutionReadout composes verified facts (understand → diagnos
     const r = buildResolutionReadout(baseInput());
     expect(r.ruleVersions).toContain(RESOLUTION_RULES_VERSION);
     expect(r.ruleVersions).toContain("engagement.v1.0.0");
-    expect(r.ruleVersions).toContain("readiness.v1.0.0");
-    // deduped
-    expect(new Set(r.ruleVersions).size).toBe(r.ruleVersions.length);
+    expect(r.ruleVersions).toContain(READINESS_RULES_VERSION);
+  });
+
+  it("provenance keeps the readiness version when obligations exist even with NO recorded assessment", () => {
+    // obligations are readiness-versioned utilization/DTI math and are independent
+    // of whether an assessment row exists — provenance must not drop it.
+    const r = buildResolutionReadout(baseInput({ latestAssessment: null }));
+    expect(r.obligations).not.toBeNull();
+    expect(r.ruleVersions).toContain(READINESS_RULES_VERSION);
+  });
+
+  it("dedupes colliding source versions to a single entry", () => {
+    // Force a genuine collision: engagement reports the same version string as
+    // the recorded assessment; it must appear exactly once.
+    const engagement = { ...assessEngagement("2026-07-15T00:00:00.000Z", NOW), ruleVersion: "readiness.v1.0.0" };
+    const r = buildResolutionReadout(baseInput({ engagement }));
+    expect(r.ruleVersions.filter((v) => v === "readiness.v1.0.0")).toHaveLength(1);
+  });
+
+  it("canRunDiagnosis = facts captured AND intake complete (not canDiagnose alone)", () => {
+    const ready = buildResolutionReadout(baseInput());
+    expect(ready.understanding.canDiagnose).toBe(true);
+    expect(ready.canRunDiagnosis).toBe(true);
+
+    // Facts captured but intake NOT complete → store would deny; canDiagnose is
+    // still true, so canRunDiagnosis must be false.
+    const intakePending = buildResolutionReadout(baseInput({ intakeComplete: false }));
+    expect(intakePending.understanding.canDiagnose).toBe(true);
+    expect(intakePending.canRunDiagnosis).toBe(false);
+
+    // Missing facts → both false.
+    const noFacts = buildResolutionReadout(baseInput({ credit: null }));
+    expect(noFacts.understanding.canDiagnose).toBe(false);
+    expect(noFacts.canRunDiagnosis).toBe(false);
   });
 
   it("surfaces the primary goal compactly", () => {

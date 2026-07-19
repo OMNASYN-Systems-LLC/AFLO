@@ -278,7 +278,7 @@ export const RULE_REGISTRY: readonly RuleDefinition[] = [
     version: RESOLUTION_RULES_VERSION,
     effectiveDate: "2026-07-19",
     description:
-      "Deterministic 'understand' substrate for the Financial Resolution Concierge loop: over the seven verified readiness inputs, reports which are captured, which are still missing, which missing ones BLOCK the diagnosis, and whether the diagnosis can run at all. The credit score is non-blocking (thin-file clients remain assessable); the other six inputs are required and mirror the store's assessment precondition. Produces no stage and no recommendation — it composes, never overrides, the readiness diagnosis.",
+      "Deterministic 'understand' substrate for the Financial Resolution Concierge loop: over the seven verified readiness inputs, reports which are captured, which are still missing, and which missing ones BLOCK the diagnosis. The credit score is non-blocking (thin-file clients remain assessable); the other six are required and mirror the verified-facts half of the store's run precondition (both profiles present) — intake completion is a separate gate. Produces no stage and no recommendation — it composes, never overrides, the readiness diagnosis.",
     inputs: ["readinessInputPresence (creditScore, utilizationPct, dtiPct, reserveMonths, derogatoryMarks, onTimePaymentRate, incomeStability)"],
     output:
       "ReadinessInputCompleteness { capturedKeys, missingKeys, blockingMissingKeys, canDiagnose, completionPct, ruleVersion }",

@@ -1,4 +1,5 @@
 import {
+  READINESS_RULES_VERSION,
   RESOLUTION_RULES_VERSION,
   dtiPct,
   readinessInputCompleteness,
@@ -77,6 +78,13 @@ export interface ResolutionReadout {
   understanding: ReadinessInputCompleteness;
   /** Whether structured intake has been declared complete by the intake rules. */
   intakeComplete: boolean;
+  /**
+   * Whether the readiness diagnosis may actually RUN: the required facts are
+   * captured AND intake is complete — the store's full run precondition. Gate
+   * a "Run assessment" affordance on THIS, never on `understanding.canDiagnose`
+   * alone (which is the facts half only).
+   */
+  canRunDiagnosis: boolean;
 
   /** DIAGNOSE — the latest RECORDED assessment, never recomputed here; null before the first run. */
   diagnosis: ResolutionDiagnosis | null;
@@ -158,6 +166,10 @@ export function buildResolutionReadout(input: ResolutionReadoutInput): Resolutio
     ...new Set([
       RESOLUTION_RULES_VERSION,
       engagement.ruleVersion,
+      // The obligations snapshot is computed with the readiness utilization/DTI
+      // kernels, so their version is part of provenance whenever obligations
+      // exist — independent of whether an assessment has been recorded yet.
+      ...(obligations ? [READINESS_RULES_VERSION] : []),
       ...(latestAssessment ? [latestAssessment.ruleVersion] : []),
     ]),
   ];
@@ -167,6 +179,7 @@ export function buildResolutionReadout(input: ResolutionReadoutInput): Resolutio
     generatedAt: now.toISOString(),
     understanding,
     intakeComplete,
+    canRunDiagnosis: understanding.canDiagnose && intakeComplete,
     diagnosis,
     obligations,
     engagement: { status: engagement.status, daysSinceLastActivity: engagement.daysSinceLastActivity },
