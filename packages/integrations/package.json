@@ -3,6 +3,23 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "External-provider adapters (Stripe, Resend, storage, PostHog, Sentry) behind AFLO-owned interfaces so no provider schema leaks into domain logic. Stub until the first provider integration slice (Stripe test-mode billing).",
-  "exports": { ".": "./src/index.ts" }
+  "description": "External-provider adapters behind AFLO-owned interfaces so no provider schema leaks into domain logic. Hosts the vendor-discovery registry (contract-lifecycle source of truth; nothing enabled in V1) and disabled provider skeletons (e.g. Experian credit-data). Regulated execution always stays with a contracted provider; AFLO never stores raw card numbers, CVVs, bank-account numbers, or payment credentials.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src test",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@aflo/credit-data": "workspace:*"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "eslint": "^9.39.5",
+    "typescript": "^5.9.2",
+    "typescript-eslint": "^8.64.0",
+    "vitest": "^4.1.10"
+  }
 }
