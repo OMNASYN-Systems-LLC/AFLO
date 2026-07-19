@@ -119,6 +119,9 @@ export default async function ClientDetailPage({
   const resolutionReadout = store.resolutionReadoutFor(DEMO_ORG_ID, clientId, demoNow);
   const creditReport = await store.creditReportSummaryFor(DEMO_ORG_ID, clientId, demoNow);
   const opportunities = store.opportunityNoticesFor(DEMO_ORG_ID, clientId, demoNow);
+  const conversations = store
+    .conversationsFor(DEMO_ORG_ID, clientId)
+    .map((thread) => ({ thread, messages: store.messagesForThread(DEMO_ORG_ID, thread.id) }));
   const upcomingAppointments = store
     .database()
     .appointments.filter((ap) => ap.clientId === clientId && new Date(ap.scheduledAt) > demoNow)
@@ -1431,6 +1434,44 @@ export default async function ClientDetailPage({
               Surfaced by jurisdiction and goal alignment — a pointer to review the official terms,
               never a determination of eligibility or amount.
             </p>
+          </SectionCard>
+
+          <SectionCard
+            title="Secure messages"
+            subtitle="Shared with the client — internal notes stay in the Notes card below"
+          >
+            {conversations.length === 0 ? (
+              <EmptyState message="No message threads with this client yet." />
+            ) : (
+              <div className="space-y-5">
+                {conversations.map(({ thread, messages }) => (
+                  <div key={thread.id}>
+                    <div className="flex flex-wrap items-baseline justify-between gap-2">
+                      <p className="text-sm font-medium text-ink">{thread.subject}</p>
+                      <Badge tone={thread.status === "open" ? "calm" : "neutral"} label={thread.status} />
+                    </div>
+                    <ul className="mt-2 space-y-2">
+                      {messages.map((m) => (
+                        <li
+                          key={m.id}
+                          className={`rounded-md px-3 py-2 text-sm leading-relaxed ${
+                            m.senderRole === "staff"
+                              ? "border border-line/70 bg-ivory text-ink-soft"
+                              : "bg-emerald/10 text-ink"
+                          }`}
+                        >
+                          <span className="mr-2 text-[11px] font-medium text-ink-faint">
+                            {m.senderRole === "staff" ? staffName(m.senderId) : name}
+                          </span>
+                          {m.body}
+                          <span className="ml-2 text-[11px] text-ink-faint">{fmtDateTime(m.sentAt)}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ))}
+              </div>
+            )}
           </SectionCard>
 
           <SectionCard title="Notes" subtitle="Internal — never visible in the client portal">
