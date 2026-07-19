@@ -68,3 +68,25 @@ Add a credential-free session-context layer to `@aflo/auth`:
   user and membership from the verified Clerk session server-side, never from
   request bodies or client claims), and must set `platform_admin` only from the
   verified flag (ADR-0018).
+
+## Post-review hardening
+
+An adversarial review confirmed the design fails closed at the engine but flagged
+session-layer footguns to close before any consumer bypasses `authorize()`:
+
+- **Fail closed at the session layer too.** `buildSessionContext` now returns
+  `null` for a degenerate identity — empty `afloUserId`, or the resolved branch's
+  `organizationId`/`clientId` empty — so `requireSessionContext` actually rejects
+  it, rather than relying on the engine's later re-check. A future consumer that
+  reads `ctx.activeOrganizationId` directly cannot get an empty tenant string.
+- **`permissions` is display-only.** The field carries the role's permission set
+  for UI (hide a button), but its doc comment now states explicitly it is **never
+  an authorization source** — gating on `ctx.permissions.has(...)` would grant on
+  role alone and bypass the tenant/ownership/assignment/consent/account gates.
+  Enforcement is always `authorize(toPrincipal(ctx), …)`.
+- **`roleFromMemberRole` fails loud** on an out-of-enum value (a bad DB cast)
+  instead of silently returning an undefined role.
+- **Single-role precedence (accepted).** A user who is both a revoked staff member
+  and an active client resolves as revoked-staff and is denied — a fail-closed
+  under-grant acceptable for the V1 single-role model; revisit if dual-role
+  personas become real.

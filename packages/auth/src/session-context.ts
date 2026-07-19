@@ -25,7 +25,14 @@ export interface SessionContext {
   clerkUserId: string;
   afloUserId: string;
   role: Role;
-  /** The permissions the role holds (a fresh set; safe to hold per request). */
+  /**
+   * INFORMATIONAL / DISPLAY ONLY — never an authorization source. The enforcement
+   * path is `authorize(toPrincipal(ctx), …)`, which re-derives from `role` and
+   * applies the tenant/ownership/assignment/consent/account gates. A call site
+   * that gates on `ctx.permissions.has(...)` would grant on role alone and bypass
+   * every contextual gate (tenant isolation included). Use it only to render UI
+   * (e.g. hide a button), never to decide access.
+   */
   permissions: ReadonlySet<Permission>;
   accountStatus: AccountStatus;
   /** The tenant being acted within. Null for platform admin (no membership). */
@@ -36,6 +43,10 @@ export interface SessionContext {
   linkedClientId: string | null;
   /** Staff assignment scoping: non-null enables it; null = staff see all (§8). */
   assignedClientIds: readonly string[] | null;
+}
+
+function isNonEmpty(value: string): boolean {
+  return value.trim().length > 0;
 }
 
 /** Server-only provider that resolves the current request's session context. */
@@ -66,6 +77,10 @@ export interface SessionContextInput {
 export function buildSessionContext(input: SessionContextInput): SessionContext | null {
   const { sessionId, identity, membership, clientLink } = input;
 
+  // Fail closed at the session layer, not only at the engine: a degenerate
+  // identity (no ΛFLO user) is never a resolved session.
+  if (!isNonEmpty(identity.afloUserId)) return null;
+
   let role: Role;
   let activeOrganizationId: string | null = null;
   let activeMembershipId: string | null = null;
@@ -76,6 +91,8 @@ export function buildSessionContext(input: SessionContextInput): SessionContext 
     // Cross-tenant operator: no membership, no tenant binding.
     role = "platform_admin";
   } else if (membership) {
+    // A membership row with no organization is not a resolvable tenant tie.
+    if (!isNonEmpty(membership.organizationId)) return null;
     role = roleFromMemberRole(membership.memberRole);
     activeOrganizationId = membership.organizationId;
     activeMembershipId = membership.membershipId;
@@ -84,11 +101,19 @@ export function buildSessionContext(input: SessionContextInput): SessionContext 
     // A client's active tie to the org IS the client link (clients are not
     // organization_members rows). The link's presence + an active account is the
     // "active membership" the authorization engine's membership gate checks.
+    // A link missing its client or org is not a resolvable identity.
+    if (!isNonEmpty(clientLink.clientId) || !isNonEmpty(clientLink.organizationId)) return null;
     role = "client";
     activeOrganizationId = clientLink.organizationId;
     linkedClientId = clientLink.clientId;
     membershipStatus = "active";
   } else {
+    // A user with no platform flag, no membership, and no client link (or — see
+    // above — a revoked/pending staff member with no separately resolvable role)
+    // has no tie to any tenant and is unauthenticated. Precedence is by authority
+    // source (platform flag > membership > client link), so a user who is BOTH a
+    // (revoked) staff member and an active client resolves as revoked staff and is
+    // denied — an accepted fail-closed under-grant for the V1 single-role model.
     return null;
   }
 

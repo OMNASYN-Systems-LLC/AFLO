@@ -95,6 +95,16 @@ describe("buildSessionContext — role resolution", () => {
     expect(build({})).toBeNull();
   });
 
+  it("fails closed on degenerate identities (empty ids resolve to null)", () => {
+    // Empty ΛFLO user id — not a resolved identity even with a valid membership.
+    expect(build({ identity: identity({ afloUserId: "" }), membership: staffMembership })).toBeNull();
+    // Membership with no organization — no resolvable tenant tie.
+    expect(build({ membership: { ...staffMembership, organizationId: "" } })).toBeNull();
+    // Client link missing its client or org.
+    expect(build({ clientLink: { clientId: "", organizationId: ORG } })).toBeNull();
+    expect(build({ clientLink: { clientId: "c-1", organizationId: "" } })).toBeNull();
+  });
+
   it("carries account status and assignment scoping", () => {
     const ctx = build({
       identity: identity({ accountStatus: "disabled" }),
