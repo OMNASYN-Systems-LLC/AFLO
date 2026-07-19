@@ -2,7 +2,7 @@ import { notFound } from "next/navigation";
 import { EmptyState, ProgressBar, SectionCard } from "@/components/ui";
 import { demoNow, getClientSession, portalRepository } from "@/lib/data";
 import { ACTION_STATUS_LABELS, fmtDate, fmtDateTime, fmtMonth } from "@/lib/format";
-import { sendClientMessageAction } from "./actions";
+import { markClientThreadReadAction, sendClientMessageAction } from "./actions";
 
 export const dynamic = "force-dynamic";
 
@@ -171,11 +171,28 @@ export default async function PortalPage() {
               // threads can share a subject, so subject is not a stable key.
               <div key={threadIndex}>
                 <div className="flex items-baseline justify-between gap-3">
-                  <p className="text-sm font-medium text-ink">{thread.subject}</p>
+                  <div className="flex items-center gap-2">
+                    <p className="text-sm font-medium text-ink">{thread.subject}</p>
+                    {thread.unreadCount > 0 ? (
+                      <span className="rounded-full bg-gold/20 px-2 py-0.5 text-[11px] font-medium text-gold-deep">
+                        {thread.unreadCount} new
+                      </span>
+                    ) : null}
+                  </div>
                   {thread.status === "closed" ? (
                     <span className="shrink-0 text-[11px] text-ink-faint">Closed</span>
                   ) : null}
                 </div>
+                {thread.unreadCount > 0 ? (
+                  <form action={markClientThreadReadAction.bind(null, threadIndex)} className="mt-1">
+                    <button
+                      type="submit"
+                      className="text-[11px] font-medium text-gold-deep underline-offset-2 hover:underline"
+                    >
+                      Mark as read
+                    </button>
+                  </form>
+                ) : null}
                 <ul className="mt-2 space-y-2">
                   {thread.messages.map((m, i) => (
                     <li

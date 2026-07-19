@@ -460,6 +460,22 @@ export interface ThreadStatusInput {
   actorStaffId: string;
 }
 
+export interface MarkThreadReadInput {
+  organizationId: string;
+  threadId: string;
+  readerRole: MessageSenderRole;
+  /** Staff member id when readerRole="staff"; the thread's own client id when "client". */
+  readerId: string;
+}
+
+export interface MarkReadResult {
+  ok: boolean;
+  denialCode?: MessagingDenialCode;
+  /** Messages transitioned unread→read (0 on an idempotent no-op). */
+  messagesRead: number;
+  emittedEventIds: string[];
+}
+
 export type AssessmentDenialCode =
   | "CLIENT_NOT_FOUND"
   | "ACTOR_NOT_IN_ORG"
@@ -1796,6 +1812,112 @@ export class AfloStore {
         this.db.messages.filter((m) => m.threadId === thread.id && m.organizationId === thread.organizationId),
       ),
     );
+  }
+
+  /** Unread messages in a thread from the client's side, awaiting staff. Org-verified. */
+  unreadCountForStaff(organizationId: string, threadId: string): number {
+    const thread = this.db.conversationThreads.find(
+      (t) => t.id === threadId && t.organizationId === organizationId,
+    );
+    if (!thread) return 0;
+    return this.db.messages.filter(
+      (m) =>
+        m.threadId === threadId &&
+        m.organizationId === organizationId &&
+        m.senderRole === "client" &&
+        m.readByStaffAt === null,
+    ).length;
+  }
+
+  /** Unread advisor messages across all of a client's threads. Org-verified. */
+  unreadCountForClient(organizationId: string, clientId: string): number {
+    const record = this.findRecord(organizationId, clientId);
+    if (!record) return 0;
+    return this.db.messages.filter(
+      (m) =>
+        m.organizationId === organizationId &&
+        m.clientId === clientId &&
+        m.senderRole === "staff" &&
+        m.readByClientAt === null,
+    ).length;
+  }
+
+  /**
+   * Mark the COUNTERPARTY's unread messages in a thread as read (read receipts).
+   * Idempotent: with nothing unread it is a traceless no-op — no event, no
+   * audit. When it marks >= 1 message it emits MessageRead (counts + roles only,
+   * never a body) and audits. Identity is caller-supplied but re-verified: staff
+   * must be an org member; a client may only mark their OWN thread.
+   */
+  markThreadRead(input: MarkThreadReadInput): MarkReadResult {
+    const now = this.clock();
+    const thread = this.db.conversationThreads.find(
+      (t) => t.id === input.threadId && t.organizationId === input.organizationId,
+    );
+    if (!thread) return { ok: false, denialCode: "THREAD_NOT_FOUND", messagesRead: 0, emittedEventIds: [] };
+
+    if (input.readerRole === "staff") {
+      if (!this.findActor(input.organizationId, input.readerId)) {
+        return { ok: false, denialCode: "ACTOR_NOT_IN_ORG", messagesRead: 0, emittedEventIds: [] };
+      }
+    } else {
+      if (input.readerId !== thread.clientId) {
+        return { ok: false, denialCode: "NOT_THREAD_CLIENT", messagesRead: 0, emittedEventIds: [] };
+      }
+      if (!this.findRecord(input.organizationId, thread.clientId)) {
+        return { ok: false, denialCode: "CLIENT_NOT_FOUND", messagesRead: 0, emittedEventIds: [] };
+      }
+    }
+
+    // Reading marks the OTHER side's messages read; a reader never marks their own.
+    const iso = now.toISOString();
+    const counterpart: MessageSenderRole = input.readerRole === "staff" ? "client" : "staff";
+    let messagesRead = 0;
+    for (const m of this.db.messages) {
+      if (m.threadId !== thread.id || m.organizationId !== thread.organizationId) continue;
+      if (m.senderRole !== counterpart) continue;
+      if (input.readerRole === "staff") {
+        if (m.readByStaffAt === null) {
+          m.readByStaffAt = iso;
+          messagesRead += 1;
+        }
+      } else if (m.readByClientAt === null) {
+        m.readByClientAt = iso;
+        messagesRead += 1;
+      }
+    }
+
+    // Idempotent no-op: nothing was unread, so leave no trace (matches denial semantics).
+    if (messagesRead === 0) return { ok: true, messagesRead: 0, emittedEventIds: [] };
+
+    const event = createEvent({
+      eventType: "MessageRead",
+      organizationId: thread.organizationId,
+      aggregateId: thread.id,
+      actorId: input.readerRole === "staff" ? input.readerId : null, // a client is not a member actor
+      occurredAt: iso,
+      payload: {
+        threadId: thread.id,
+        clientId: thread.clientId,
+        readerRole: input.readerRole,
+        messageCount: messagesRead,
+      },
+    });
+    this.outbox.push(toOutboxRecord(event, { now }));
+
+    this.audit({
+      organizationId: thread.organizationId,
+      actorStaffId: input.readerRole === "staff" ? input.readerId : null,
+      action: "message.read",
+      targetType: "conversation",
+      targetId: thread.id,
+      detail: `thread ${thread.id}: ${input.readerRole} read ${messagesRead} message(s)`,
+      reasonCode: "MESSAGE_READ",
+      ruleVersion: MESSAGING_RULES_VERSION,
+      occurredAt: iso,
+    });
+
+    return { ok: true, messagesRead, emittedEventIds: [event.eventId] };
   }
 
   /** Staff opens a new thread with an initial message. Rules-gated; audited; emits MessagePosted. */

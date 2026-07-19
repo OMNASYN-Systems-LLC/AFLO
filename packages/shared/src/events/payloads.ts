@@ -235,6 +235,19 @@ export interface MessagePostedPayload {
   senderRole: "staff" | "client";
 }
 
+/**
+ * A thread's messages from the OTHER side were marked read. Carries counts and
+ * roles only — never a body — so read receipts stay free of sensitive content.
+ */
+export interface MessageReadPayload {
+  threadId: string;
+  clientId: string;
+  /** Who did the reading (their counterpart's messages became read). */
+  readerRole: "staff" | "client";
+  /** How many previously-unread messages this transitioned to read (>= 1). */
+  messageCount: number;
+}
+
 /** Compile-time map from event type to payload shape (exhaustive). */
 export interface EventPayloadMap {
   LeadCreated: LeadCreatedPayload;
@@ -266,6 +279,7 @@ export interface EventPayloadMap {
   ConsentGranted: ConsentGrantedPayload;
   ConsentRevoked: ConsentRevokedPayload;
   MessagePosted: MessagePostedPayload;
+  MessageRead: MessageReadPayload;
 }
 
 // Exhaustiveness guarantee: if EventPayloadMap ever misses an EventType (or

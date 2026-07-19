@@ -48,6 +48,7 @@ import {
   createReferralAction,
   generateHandoffAction,
   generateReportAction,
+  markThreadReadAction,
   openThreadAction,
   postStaffReplyAction,
   recordReferralOutcomeAction,
@@ -123,7 +124,11 @@ export default async function ClientDetailPage({
   const opportunities = store.opportunityNoticesFor(DEMO_ORG_ID, clientId, demoNow);
   const conversations = store
     .conversationsFor(DEMO_ORG_ID, clientId)
-    .map((thread) => ({ thread, messages: store.messagesForThread(DEMO_ORG_ID, thread.id) }));
+    .map((thread) => ({
+      thread,
+      messages: store.messagesForThread(DEMO_ORG_ID, thread.id),
+      unread: store.unreadCountForStaff(DEMO_ORG_ID, thread.id),
+    }));
   const upcomingAppointments = store
     .database()
     .appointments.filter((ap) => ap.clientId === clientId && new Date(ap.scheduledAt) > demoNow)
@@ -1446,12 +1451,29 @@ export default async function ClientDetailPage({
               <EmptyState message="No message threads with this client yet." />
             ) : (
               <div className="space-y-6">
-                {conversations.map(({ thread, messages }) => (
+                {conversations.map(({ thread, messages, unread }) => (
                   <div key={thread.id}>
                     <div className="flex flex-wrap items-baseline justify-between gap-2">
-                      <p className="text-sm font-medium text-ink">{thread.subject}</p>
+                      <div className="flex items-center gap-2">
+                        <p className="text-sm font-medium text-ink">{thread.subject}</p>
+                        {unread > 0 ? (
+                          <span className="rounded-full bg-gold/20 px-2 py-0.5 text-[11px] font-medium text-gold-deep">
+                            {unread} new
+                          </span>
+                        ) : null}
+                      </div>
                       <Badge tone={thread.status === "open" ? "calm" : "neutral"} label={thread.status} />
                     </div>
+                    {unread > 0 ? (
+                      <form action={markThreadReadAction.bind(null, clientId, thread.id)} className="mt-1.5">
+                        <button
+                          type="submit"
+                          className="text-[11px] font-medium text-gold-deep underline-offset-2 hover:underline"
+                        >
+                          Mark as read
+                        </button>
+                      </form>
+                    ) : null}
                     <ul className="mt-2 space-y-2">
                       {messages.map((m) => (
                         <li

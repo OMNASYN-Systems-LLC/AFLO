@@ -200,6 +200,74 @@ describe("messaging isolation across TWO populated orgs (non-tautological)", () 
   });
 });
 
+describe("read receipts + unread counts (messaging.v1.0.0)", () => {
+  /** MessageRead payloads currently in the outbox, decoded. */
+  function messageReadPayloads(store: AfloStore) {
+    return store.outbox
+      .filter((r) => r.eventType === "MessageRead")
+      .map((r) => deserializeEvent(r.serializedEvent).payload as unknown as Record<string, unknown>);
+  }
+
+  it("counts the client's unread messages awaiting staff", () => {
+    const store = makeStore();
+    // Seed: msg-solomon-2 is a client message not yet read by staff.
+    expect(store.unreadCountForStaff(ORG, "th-solomon-docs")).toBe(1);
+  });
+
+  it("staff marking read clears the count, emits MessageRead (count only), and audits", () => {
+    const store = makeStore();
+    const auditBefore = store.auditFor(ORG).length;
+    const res = store.markThreadRead({ organizationId: ORG, threadId: "th-solomon-docs", readerRole: "staff", readerId: "s-lin" });
+    expect(res.ok).toBe(true);
+    expect(res.messagesRead).toBe(1);
+    expect(res.emittedEventIds).toHaveLength(1);
+    expect(store.unreadCountForStaff(ORG, "th-solomon-docs")).toBe(0);
+    expect(store.auditFor(ORG).length).toBe(auditBefore + 1);
+    const payloads = messageReadPayloads(store);
+    expect(payloads[payloads.length - 1]).toMatchObject({ threadId: "th-solomon-docs", readerRole: "staff", messageCount: 1 });
+    // The read receipt carries no message body.
+    expect(JSON.stringify(payloads)).not.toContain("uploaded both");
+  });
+
+  it("marking an already-read thread is a traceless idempotent no-op", () => {
+    const store = makeStore();
+    store.markThreadRead({ organizationId: ORG, threadId: "th-solomon-docs", readerRole: "staff", readerId: "s-lin" });
+    const auditAfterFirst = store.auditFor(ORG).length;
+    const outboxAfterFirst = store.outbox.length;
+    const again = store.markThreadRead({ organizationId: ORG, threadId: "th-solomon-docs", readerRole: "staff", readerId: "s-lin" });
+    expect(again.ok).toBe(true);
+    expect(again.messagesRead).toBe(0);
+    expect(again.emittedEventIds).toHaveLength(0);
+    expect(store.auditFor(ORG).length).toBe(auditAfterFirst);
+    expect(store.outbox.length).toBe(outboxAfterFirst);
+  });
+
+  it("the client can mark advisor messages read; the client projection reflects unread", () => {
+    const store = makeStore();
+    // Staff posts a fresh reply -> unread for the client until they read it.
+    store.postReply({ organizationId: ORG, threadId: "th-solomon-docs", senderRole: "staff", senderId: "s-lin", body: "One more thing." });
+    expect(store.unreadCountForClient(ORG, "c-solomon")).toBe(1);
+    expect(store.clientConversationsFor(ORG, "c-solomon")[0]!.unreadCount).toBe(1);
+    const res = store.markThreadRead({ organizationId: ORG, threadId: "th-solomon-docs", readerRole: "client", readerId: "c-solomon" });
+    expect(res.ok).toBe(true);
+    expect(res.messagesRead).toBe(1);
+    expect(store.unreadCountForClient(ORG, "c-solomon")).toBe(0);
+    expect(store.clientConversationsFor(ORG, "c-solomon")[0]!.unreadCount).toBe(0);
+  });
+
+  it("cross-tenant and wrong-client mark-read attempts are denied and traceless", () => {
+    const store = makeStore();
+    const auditBefore = store.auditFor(ORG).length;
+    const outboxBefore = store.outbox.length;
+    expect(store.markThreadRead({ organizationId: "org-not-mine", threadId: "th-solomon-docs", readerRole: "staff", readerId: "s-lin" }).denialCode).toBe("THREAD_NOT_FOUND");
+    expect(store.markThreadRead({ organizationId: ORG, threadId: "th-solomon-docs", readerRole: "client", readerId: "c-bell" }).denialCode).toBe("NOT_THREAD_CLIENT");
+    expect(store.auditFor(ORG).length).toBe(auditBefore);
+    expect(store.outbox.length).toBe(outboxBefore);
+    // No messages were actually read.
+    expect(store.unreadCountForStaff(ORG, "th-solomon-docs")).toBe(1);
+  });
+});
+
 describe("thread close / reopen", () => {
   it("closes a thread, blocks replies to it, then reopens and accepts them", () => {
     const store = makeStore();
