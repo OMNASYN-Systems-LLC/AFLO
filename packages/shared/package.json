@@ -14,6 +14,7 @@
   "dependencies": {
     "@aflo/academy": "workspace:*",
     "@aflo/ai": "workspace:*",
+    "@aflo/credit-data": "workspace:*",
     "@aflo/notifications": "workspace:*",
     "@aflo/partner-marketplace": "workspace:*",
     "@aflo/rules": "workspace:*",
