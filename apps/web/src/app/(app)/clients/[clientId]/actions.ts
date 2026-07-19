@@ -127,6 +127,43 @@ export async function addNoteAction(clientId: string, formData: FormData): Promi
 }
 
 /**
+ * Secure-messaging actions (messaging.v1.0.0). Staff↔client threads are shared
+ * with the client — internal notes stay in the separate `notes` model. Tenant
+ * and actor identity come only from the server session; the store re-verifies
+ * the thread's org and validates the body. A denial is rejected fail-closed and
+ * leaves no trace (no message, event, or audit); only a successful post is
+ * audited (`message.posted`). The `threadId` arrives from the form but is
+ * re-scoped to the session's org by the store, so a foreign id cannot match.
+ */
+export async function postStaffReplyAction(
+  clientId: string,
+  threadId: string,
+  formData: FormData,
+): Promise<void> {
+  const session = await getStaffSession();
+  store.postReply({
+    organizationId: session.organizationId,
+    threadId,
+    senderRole: "staff",
+    senderId: session.staffId,
+    body: String(formData.get("body") ?? ""),
+  });
+  revalidatePath(`/clients/${clientId}`);
+}
+
+export async function openThreadAction(clientId: string, formData: FormData): Promise<void> {
+  const session = await getStaffSession();
+  store.openThread({
+    organizationId: session.organizationId,
+    clientId,
+    subject: String(formData.get("subject") ?? ""),
+    body: String(formData.get("body") ?? ""),
+    actorStaffId: session.staffId,
+  });
+  revalidatePath(`/clients/${clientId}`);
+}
+
+/**
  * Goal workflow actions. Goals are staff-maintained; the store validates,
  * enforces a single primary, emits GoalCreated, and audits.
  */

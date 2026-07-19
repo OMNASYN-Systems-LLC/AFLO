@@ -2,6 +2,7 @@ import { notFound } from "next/navigation";
 import { EmptyState, ProgressBar, SectionCard } from "@/components/ui";
 import { demoNow, getClientSession, portalRepository } from "@/lib/data";
 import { ACTION_STATUS_LABELS, fmtDate, fmtDateTime, fmtMonth } from "@/lib/format";
+import { sendClientMessageAction } from "./actions";
 
 export const dynamic = "force-dynamic";
 
@@ -165,8 +166,10 @@ export default async function PortalPage() {
           <EmptyState message="No messages yet — your advisor will reach out here when there's something to discuss." />
         ) : (
           <div className="space-y-5">
-            {view.conversations.map((thread) => (
-              <div key={thread.subject}>
+            {view.conversations.map((thread, threadIndex) => (
+              // Keyed by position (the client-safe projection is id-free); two
+              // threads can share a subject, so subject is not a stable key.
+              <div key={threadIndex}>
                 <div className="flex items-baseline justify-between gap-3">
                   <p className="text-sm font-medium text-ink">{thread.subject}</p>
                   {thread.status === "closed" ? (
@@ -191,6 +194,36 @@ export default async function PortalPage() {
                     </li>
                   ))}
                 </ul>
+                {thread.status === "closed" ? (
+                  <p className="mt-2 text-[11px] text-ink-faint">
+                    This conversation is closed. Your advisor will reopen it if there’s more to
+                    discuss.
+                  </p>
+                ) : (
+                  <form
+                    action={sendClientMessageAction.bind(null, threadIndex)}
+                    className="mt-3 space-y-2"
+                  >
+                    <label htmlFor={`reply-${threadIndex}`} className="sr-only">
+                      Reply to {thread.subject}
+                    </label>
+                    <textarea
+                      id={`reply-${threadIndex}`}
+                      name="body"
+                      required
+                      maxLength={5000}
+                      rows={2}
+                      placeholder="Write a reply to your advisory team…"
+                      className="w-full rounded-md border border-line bg-card px-3 py-2 text-sm text-ink placeholder:text-ink-faint"
+                    />
+                    <button
+                      type="submit"
+                      className="rounded-md bg-emerald px-3 py-1.5 text-xs font-medium text-ivory-ink transition-colors hover:bg-emerald-deep"
+                    >
+                      Send
+                    </button>
+                  </form>
+                )}
               </div>
             ))}
           </div>
