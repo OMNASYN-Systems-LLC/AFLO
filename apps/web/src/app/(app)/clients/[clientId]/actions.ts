@@ -130,8 +130,10 @@ export async function addNoteAction(clientId: string, formData: FormData): Promi
  * Secure-messaging actions (messaging.v1.0.0). Staff↔client threads are shared
  * with the client — internal notes stay in the separate `notes` model. Tenant
  * and actor identity come only from the server session; the store re-verifies
- * the thread's org, validates the body, and audits every denial. The `threadId`
- * arrives from the form but is re-scoped to the session's org by the store.
+ * the thread's org and validates the body. A denial is rejected fail-closed and
+ * leaves no trace (no message, event, or audit); only a successful post is
+ * audited (`message.posted`). The `threadId` arrives from the form but is
+ * re-scoped to the session's org by the store, so a foreign id cannot match.
  */
 export async function postStaffReplyAction(
   clientId: string,

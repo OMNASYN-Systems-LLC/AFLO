@@ -50,7 +50,16 @@ Two independent properties make this safe:
    indexes is already scoped to the session.
 2. **Defense in depth.** `store.postReply` independently re-verifies the thread
    belongs to `session.organizationId` and that the sender is the thread's own
-   client (`senderId === thread.clientId`); any mismatch is denied and audited.
+   client (`senderId === thread.clientId`); any mismatch is denied server-side
+   and the denied write is **traceless** — no message, no event, no audit entry
+   (fail-closed, asserted by the store's messaging isolation tests). Only
+   *successful* posts are audited (`message.posted`) and emit `MessagePosted`
+   (which carries no body). This matches the store-wide convention: cross-
+   boundary / not-found denials are rejected without a trace. Systematically
+   auditing *denied* boundary-probes (an intrusion signal) is a worthwhile but
+   cross-cutting change that belongs in the security-observability hardening
+   phase, applied uniformly across every tenant-boundary store method — not
+   bolted onto messaging alone.
 
 ## Alternatives Considered
 

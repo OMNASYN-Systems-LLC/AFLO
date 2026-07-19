@@ -167,7 +167,9 @@ export default async function PortalPage() {
         ) : (
           <div className="space-y-5">
             {view.conversations.map((thread, threadIndex) => (
-              <div key={thread.subject}>
+              // Keyed by position (the client-safe projection is id-free); two
+              // threads can share a subject, so subject is not a stable key.
+              <div key={threadIndex}>
                 <div className="flex items-baseline justify-between gap-3">
                   <p className="text-sm font-medium text-ink">{thread.subject}</p>
                   {thread.status === "closed" ? (

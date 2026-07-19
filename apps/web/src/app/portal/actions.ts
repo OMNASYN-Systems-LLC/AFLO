@@ -15,7 +15,9 @@ import { getClientSession, store } from "@/lib/data";
  *      browser. A tampered index can therefore only ever index into *this
  *      client's own* threads — never another client's or another org's.
  *   2. `store.postReply` re-verifies the thread's org and that the sender is the
- *      thread's own client; a mismatch is denied and audited server-side.
+ *      thread's own client; a mismatch is denied server-side and the denied
+ *      write leaves no trace (no message, event, or audit). Only successful
+ *      posts are audited and emit `MessagePosted` (which carries no body).
  * The index order matches the portal view because both sort conversations by
  * `(lastMessageAt ?? createdAt)` descending.
  */
