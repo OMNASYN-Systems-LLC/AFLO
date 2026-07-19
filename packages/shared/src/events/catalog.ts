@@ -35,6 +35,7 @@ export const EVENT_TYPES = [
   "PartnerReferralCreated",
   "ConsentGranted",
   "ConsentRevoked",
+  "MessagePosted",
 ] as const;
 
 export type EventType = (typeof EVENT_TYPES)[number];
@@ -56,6 +57,7 @@ export const AGGREGATE_TYPES = [
   "education_assignment",
   "referral",
   "consent",
+  "conversation",
 ] as const;
 
 export type AggregateType = (typeof AGGREGATE_TYPES)[number];
@@ -90,6 +92,7 @@ export const EVENT_AGGREGATE: Record<EventType, AggregateType> = {
   PartnerReferralCreated: "referral",
   ConsentGranted: "consent",
   ConsentRevoked: "consent",
+  MessagePosted: "conversation",
 };
 
 /**
@@ -126,4 +129,5 @@ export const EVENT_VERSIONS: Record<EventType, number> = {
   PartnerReferralCreated: 1,
   ConsentGranted: 1,
   ConsentRevoked: 1,
+  MessagePosted: 1,
 };
