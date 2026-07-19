@@ -410,7 +410,8 @@ export interface CommunicationLogEntry {
   organizationId: string;
   clientId: string;
   notificationType: NotificationType;
-  channel: string;
+  /** Always one of NOTIFICATION_CHANNELS — typed so the DB enum column is sound. */
+  channel: NotificationChannel;
   /** "sent" = mock-delivered in dev; "suppressed" = withheld by the consent gate. */
   status: "sent" | "suppressed";
   subject: string | null;

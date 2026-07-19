@@ -6,7 +6,13 @@ import {
   REPORT_STATUSES,
   ROADMAP_STATUSES,
 } from "@aflo/rules";
-import { CONSENT_TYPES } from "@aflo/notifications";
+import { CONSENT_TYPES, NOTIFICATION_CHANNELS, NOTIFICATION_TYPES } from "@aflo/notifications";
+import { AGENT_NAMES } from "@aflo/ai";
+import {
+  PARTNER_CATEGORIES,
+  PARTNER_REFERRAL_STATUSES,
+  REFERRAL_OUTCOMES,
+} from "@aflo/partner-marketplace";
 
 /**
  * Postgres enum types (Drizzle, ADR-0005).
@@ -128,3 +134,49 @@ export const documentTypeEnum = pgEnum("document_type", [
 
 /** Appointment channel (Appointment.channel). */
 export const appointmentChannelEnum = pgEnum("appointment_channel", ["video", "phone", "in_person"]);
+
+// --- Phase A1b: sibling-package + AI enums. Package-array-derived ones are
+//     built from the source `as const` arrays (tuple) so they can never drift;
+//     the AI status enums are canonical here, lockstep-tested via indexed
+//     access into the @aflo/ai unions. ---
+
+/** Partner category (@aflo/partner-marketplace PARTNER_CATEGORIES). */
+export const partnerCategoryEnum = pgEnum("partner_category", tuple(PARTNER_CATEGORIES));
+
+/** Referral lifecycle status (@aflo/partner-marketplace PARTNER_REFERRAL_STATUSES). */
+export const partnerReferralStatusEnum = pgEnum("partner_referral_status", tuple(PARTNER_REFERRAL_STATUSES));
+
+/** Staff-observed referral outcome (@aflo/partner-marketplace REFERRAL_OUTCOMES). */
+export const referralOutcomeEnum = pgEnum("referral_outcome", tuple(REFERRAL_OUTCOMES));
+
+/** Notification type (@aflo/notifications NOTIFICATION_TYPES). */
+export const notificationTypeEnum = pgEnum("notification_type", tuple(NOTIFICATION_TYPES));
+
+/** Notification/delivery channel (@aflo/notifications NOTIFICATION_CHANNELS). */
+export const notificationChannelEnum = pgEnum("notification_channel", tuple(NOTIFICATION_CHANNELS));
+
+/** Credit-intelligence sub-agent name (@aflo/ai AGENT_NAMES — the 12 agents). */
+export const agentNameEnum = pgEnum("agent_name", tuple(AGENT_NAMES));
+
+/** Education assignment staff-review status (EducationAssignment.staffReviewStatus). */
+export const educationReviewStatusEnum = pgEnum("education_review_status", [
+  "not_required",
+  "pending_review",
+  "approved",
+]);
+
+/** Agent envelope status (@aflo/ai AgentStatus). Non-empty prohibited actions force `blocked`. */
+export const agentStatusEnum = pgEnum("agent_status", [
+  "ok",
+  "needs_clarification",
+  "insufficient_data",
+  "blocked",
+]);
+
+/** Agent output human-review status (@aflo/ai ReviewStatus). */
+export const aiReviewStatusEnum = pgEnum("ai_review_status", [
+  "pending_review",
+  "approved",
+  "rejected",
+  "auto_published",
+]);

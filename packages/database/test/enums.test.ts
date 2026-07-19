@@ -6,12 +6,19 @@ import {
   REPORT_STATUSES,
   ROADMAP_STATUSES,
 } from "@aflo/rules";
-import { CONSENT_TYPES } from "@aflo/notifications";
+import { CONSENT_TYPES, NOTIFICATION_CHANNELS, NOTIFICATION_TYPES } from "@aflo/notifications";
+import { AGENT_NAMES, type AgentStatus, type ReviewStatus } from "@aflo/ai";
+import {
+  PARTNER_CATEGORIES,
+  PARTNER_REFERRAL_STATUSES,
+  REFERRAL_OUTCOMES,
+} from "@aflo/partner-marketplace";
 import type {
   Appointment,
   ClientDocument,
   ClientStatus,
   CreditProfile,
+  EducationAssignment,
   FinancialProfile,
   Goal,
   IntakeStatus,
@@ -31,9 +38,18 @@ import {
   incomeStabilityEnum,
   intakeStatusEnum,
   lifecycleStageEnum,
+  agentNameEnum,
+  agentStatusEnum,
+  aiReviewStatusEnum,
+  educationReviewStatusEnum,
   memberRoleEnum,
   milestoneStatusEnum,
   monthlyActionCategoryEnum,
+  notificationChannelEnum,
+  notificationTypeEnum,
+  partnerCategoryEnum,
+  partnerReferralStatusEnum,
+  referralOutcomeEnum,
   reportStatusEnum,
   roadmapStatusEnum,
 } from "../src/enums";
@@ -148,5 +164,52 @@ describe("Phase A1 workflow enums cover the domain field types", () => {
   it("appointment_channel == Appointment.channel", () => {
     const all: Appointment["channel"][] = ["video", "phone", "in_person"];
     expect(appointmentChannelEnum.enumValues).toEqual(all);
+  });
+});
+
+/**
+ * Phase A1b enums. Package-array-derived enums are built from the source
+ * `as const` arrays and asserted equal to them; the AI status enums are
+ * canonical here and asserted via indexed access into the @aflo/ai unions.
+ */
+describe("Phase A1b sibling-package + AI enums", () => {
+  it("partner_category == PARTNER_CATEGORIES", () => {
+    expect(partnerCategoryEnum.enumValues).toEqual([...PARTNER_CATEGORIES]);
+  });
+
+  it("partner_referral_status == PARTNER_REFERRAL_STATUSES", () => {
+    expect(partnerReferralStatusEnum.enumValues).toEqual([...PARTNER_REFERRAL_STATUSES]);
+  });
+
+  it("referral_outcome == REFERRAL_OUTCOMES", () => {
+    expect(referralOutcomeEnum.enumValues).toEqual([...REFERRAL_OUTCOMES]);
+  });
+
+  it("notification_type == NOTIFICATION_TYPES", () => {
+    expect(notificationTypeEnum.enumValues).toEqual([...NOTIFICATION_TYPES]);
+  });
+
+  it("notification_channel == NOTIFICATION_CHANNELS", () => {
+    expect(notificationChannelEnum.enumValues).toEqual([...NOTIFICATION_CHANNELS]);
+  });
+
+  it("agent_name == AGENT_NAMES (the 12 sub-agents)", () => {
+    expect(agentNameEnum.enumValues).toEqual([...AGENT_NAMES]);
+    expect(agentNameEnum.enumValues).toHaveLength(12);
+  });
+
+  it("education_review_status == EducationAssignment.staffReviewStatus", () => {
+    const all: EducationAssignment["staffReviewStatus"][] = ["not_required", "pending_review", "approved"];
+    expect(educationReviewStatusEnum.enumValues).toEqual(all);
+  });
+
+  it("agent_status == AgentStatus", () => {
+    const all: AgentStatus[] = ["ok", "needs_clarification", "insufficient_data", "blocked"];
+    expect(agentStatusEnum.enumValues).toEqual(all);
+  });
+
+  it("ai_review_status == ReviewStatus", () => {
+    const all: ReviewStatus[] = ["pending_review", "approved", "rejected", "auto_published"];
+    expect(aiReviewStatusEnum.enumValues).toEqual(all);
   });
 });
