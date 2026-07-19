@@ -135,7 +135,13 @@ import type {
 export interface AuditEntry {
   id: string;
   organizationId: string;
-  actorStaffId: string;
+  /**
+   * The staff/member actor id, or null for a non-member actor (e.g. a client
+   * posting a secure message) — mirrors the DB's nullable actor_member_id. A
+   * client's own identity is captured by the target row and the domain event,
+   * not this staff-actor field, so audit-by-staff queries stay accurate.
+   */
+  actorStaffId: string | null;
   action: string; // e.g. "lead.stage_advanced", "intake.section_completed"
   targetType: string;
   targetId: string;
@@ -1783,7 +1789,12 @@ export class AfloStore {
   /** Client-portal projection: every thread the client can see, client-safe. */
   clientConversationsFor(organizationId: string, clientId: string): ClientThreadView[] {
     return this.conversationsFor(organizationId, clientId).map((thread) =>
-      toClientThreadView(thread, this.db.messages.filter((m) => m.threadId === thread.id)),
+      // Filter on org too (defense-in-depth): this is the client-facing path, so
+      // a stray foreign-org message row must never reach the projection.
+      toClientThreadView(
+        thread,
+        this.db.messages.filter((m) => m.threadId === thread.id && m.organizationId === thread.organizationId),
+      ),
     );
   }
 
@@ -1933,7 +1944,9 @@ export class AfloStore {
 
     this.audit({
       organizationId: thread.organizationId,
-      actorStaffId: senderId, // records who acted (staff member id, or the client id)
+      // A client is not a staff/member actor — null here (the thread + the
+      // MessagePosted event carry the client identity); staff posts record the member.
+      actorStaffId: senderRole === "staff" ? senderId : null,
       action: "message.posted",
       targetType: "conversation",
       targetId: thread.id,

@@ -124,6 +124,82 @@ describe("messaging tenant isolation + authorization (fail-closed)", () => {
   });
 });
 
+describe("messaging isolation across TWO populated orgs (non-tautological)", () => {
+  // The base seed has one org, so a read with a foreign org id returns [] only
+  // because that org has no rows. Seed a SECOND populated org so isolation is
+  // proven against real cross-tenant data, not an empty set.
+  const ORG_B = "org-rival";
+  function twoOrgStore() {
+    const seed = structuredClone(syntheticDatabase);
+    seed.clients.push({
+      id: "c-rival",
+      organizationId: ORG_B,
+      kind: "client",
+      pipelineStageId: "active",
+      clientStatus: "active",
+      firstName: "Rhea",
+      lastName: "Vasquez",
+      email: "rhea@example.test",
+      phone: "555-0100",
+      assignedStaffId: "s-rival",
+      joinedAt: "2026-06-01T00:00:00.000Z",
+      lastActivityAt: "2026-07-15T00:00:00.000Z",
+    });
+    seed.conversationThreads.push({
+      id: "th-rival",
+      organizationId: ORG_B,
+      clientId: "c-rival",
+      subject: "Rival org thread",
+      status: "open",
+      createdAt: "2026-07-01T00:00:00.000Z",
+      lastMessageAt: "2026-07-01T00:00:00.000Z",
+    });
+    seed.messages.push({
+      id: "msg-rival-1",
+      threadId: "th-rival",
+      organizationId: ORG_B,
+      clientId: "c-rival",
+      senderRole: "staff",
+      senderId: "s-rival",
+      body: "rival-only content",
+      sentAt: "2026-07-01T00:00:00.000Z",
+      readByClientAt: null,
+      readByStaffAt: "2026-07-01T00:00:00.000Z",
+    });
+    return new AfloStore(seed, () => NOW);
+  }
+
+  it("org B (populated) cannot READ org A's thread or messages, and vice versa", () => {
+    const store = twoOrgStore();
+    // Each org sees only its own.
+    expect(store.conversationsFor(ORG, "c-solomon").map((t) => t.id)).toContain("th-solomon-docs");
+    expect(store.conversationsFor(ORG_B, "c-rival").map((t) => t.id)).toEqual(["th-rival"]);
+    // Org B reaching for org A's thread by id gets nothing — not an empty-org artifact.
+    expect(store.messagesForThread(ORG_B, "th-solomon-docs")).toEqual([]);
+    expect(store.messagesForThread(ORG, "th-rival")).toEqual([]);
+    // Cross-org client lookups are empty both directions.
+    expect(store.conversationsFor(ORG, "c-rival")).toEqual([]);
+    expect(store.conversationsFor(ORG_B, "c-solomon")).toEqual([]);
+    // The client projection never crosses tenants.
+    const rivalView = JSON.stringify(store.clientConversationsFor(ORG_B, "c-rival"));
+    expect(rivalView).not.toContain("th-solomon-docs");
+    expect(JSON.stringify(store.clientConversationsFor(ORG, "c-solomon"))).not.toContain("rival-only content");
+  });
+
+  it("org B cannot WRITE into org A's thread, and leaves no message/audit/event", () => {
+    const store = twoOrgStore();
+    const msgsBefore = store.messagesForThread(ORG, "th-solomon-docs").length;
+    const auditBefore = store.auditFor(ORG).length;
+    const outboxBefore = store.outbox.length;
+    // Staff of org B and the org-B client both try to post into org A's thread.
+    expect(store.postReply({ organizationId: ORG_B, threadId: "th-solomon-docs", senderRole: "staff", senderId: "s-rival", body: "intrusion" }).denialCode).toBe("THREAD_NOT_FOUND");
+    expect(store.postReply({ organizationId: ORG_B, threadId: "th-solomon-docs", senderRole: "client", senderId: "c-rival", body: "intrusion" }).denialCode).toBe("THREAD_NOT_FOUND");
+    expect(store.messagesForThread(ORG, "th-solomon-docs").length).toBe(msgsBefore);
+    expect(store.auditFor(ORG).length).toBe(auditBefore);
+    expect(store.outbox.length).toBe(outboxBefore);
+  });
+});
+
 describe("thread close / reopen", () => {
   it("closes a thread, blocks replies to it, then reopens and accepts them", () => {
     const store = makeStore();
