@@ -1,5 +1,6 @@
 export * from "./domain/types";
 export * from "./domain/facts";
+export * from "./domain/resolution";
 export * from "./events";
 export * from "./outbox";
 export * from "./store";

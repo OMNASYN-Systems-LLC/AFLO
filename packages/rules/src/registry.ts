@@ -8,6 +8,7 @@ import { ROUNDUP_RULES_VERSION } from "./roundup";
 import { REVIEW_REASON_DESCRIPTIONS, REVIEW_RULES_VERSION } from "./review";
 import { ROADMAP_RULES_VERSION } from "./roadmap";
 import { READINESS_RULES_VERSION, REASON_CODE_DESCRIPTIONS } from "./readiness";
+import { RESOLUTION_RULES_VERSION } from "./resolution";
 
 /**
  * Rule metadata registry (Product Charter, "Deterministic rules engine").
@@ -270,6 +271,21 @@ export const RULE_REGISTRY: readonly RuleDefinition[] = [
     sources: [],
     changeHistory: [
       { version: "roundup.v1.0.0", date: "2026-07-18", note: "Initial simulation calculator (charter round-up module)." },
+    ],
+  },
+  {
+    id: "resolution.input_completeness",
+    version: RESOLUTION_RULES_VERSION,
+    effectiveDate: "2026-07-19",
+    description:
+      "Deterministic 'understand' substrate for the Financial Resolution Concierge loop: over the seven verified readiness inputs, reports which are captured, which are still missing, which missing ones BLOCK the diagnosis, and whether the diagnosis can run at all. The credit score is non-blocking (thin-file clients remain assessable); the other six inputs are required and mirror the store's assessment precondition. Produces no stage and no recommendation — it composes, never overrides, the readiness diagnosis.",
+    inputs: ["readinessInputPresence (creditScore, utilizationPct, dtiPct, reserveMonths, derogatoryMarks, onTimePaymentRate, incomeStability)"],
+    output:
+      "ReadinessInputCompleteness { capturedKeys, missingKeys, blockingMissingKeys, canDiagnose, completionPct, ruleVersion }",
+    reasonCodes: [],
+    sources: [],
+    changeHistory: [
+      { version: "resolution.v1.0.0", date: "2026-07-19", note: "Initial understand-stage completeness primitive (Financial Resolution Concierge substrate)." },
     ],
   },
   {
