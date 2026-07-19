@@ -3,9 +3,12 @@ import { describe, expect, it } from "vitest";
 import {
   applyAcceptedBinding,
   changeMemberRole,
+  memberRoleFromRole,
   reinstateMembership,
   revokeMembership,
+  roleFromMemberRole,
   type AcceptedBinding,
+  type MemberRole,
   type MembershipRecord,
 } from "../src";
 
@@ -29,6 +32,18 @@ function record(overrides: Partial<MembershipRecord> = {}): MembershipRecord {
     ...overrides,
   };
 }
+
+describe("memberRoleFromRole", () => {
+  it("maps membership roles and round-trips with roleFromMemberRole", () => {
+    for (const mr of ["organization_owner", "organization_admin", "staff"] as const satisfies readonly MemberRole[]) {
+      expect(memberRoleFromRole(roleFromMemberRole(mr))).toBe(mr);
+    }
+    // non-membership roles have no membership role
+    expect(memberRoleFromRole("client")).toBeNull();
+    expect(memberRoleFromRole("platform_admin")).toBeNull();
+    expect(memberRoleFromRole("partner_viewer")).toBeNull();
+  });
+});
 
 describe("applyAcceptedBinding", () => {
   it("creates an active staff membership from a staff binding", () => {

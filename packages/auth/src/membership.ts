@@ -112,7 +112,11 @@ export function revokeMembership(m: MembershipRecord, nowIso: string): Membershi
   return { ok: true, membership: { ...m, status: "revoked", updatedAtIso: nowIso } };
 }
 
-/** Reinstate a non-active membership to active. */
+/**
+ * Reinstate a non-active membership to active. NOTE: this also force-activates a
+ * `pending` membership (revoked→active AND pending→active), skipping whatever the
+ * pending state gates — the route must only call it when that is intended.
+ */
 export function reinstateMembership(m: MembershipRecord, nowIso: string): MembershipResult {
   if (m.status === "active") return deny("already_active");
   return { ok: true, membership: { ...m, status: "active", updatedAtIso: nowIso } };

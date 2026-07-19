@@ -71,5 +71,11 @@ export function memberRoleFromRole(role: Role): MemberRole | null {
     case "platform_admin":
     case "partner_viewer":
       return null;
+    default: {
+      // Fail loud if a new Role is added without a case here (noImplicitReturns
+      // is off, so the switch would otherwise silently return undefined).
+      const unexpected: never = role;
+      throw new Error(`unknown role: ${String(unexpected)}`);
+    }
   }
 }
