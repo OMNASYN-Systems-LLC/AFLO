@@ -18,10 +18,10 @@
  *   9. record state ok?       → invalid_record_state
  */
 
-import { type DenialReason } from "./denial-reasons.js";
-import { type Permission } from "./permissions.js";
-import { roleHasPermission } from "./policies.js";
-import { type Role } from "./roles.js";
+import { type DenialReason } from "./denial-reasons";
+import { type Permission } from "./permissions";
+import { roleHasPermission } from "./policies";
+import { type Role } from "./roles";
 
 export type MembershipStatus = "active" | "pending" | "revoked" | "none";
 export type AccountStatus = "active" | "disabled";

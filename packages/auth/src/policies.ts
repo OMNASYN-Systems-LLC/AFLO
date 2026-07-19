@@ -8,8 +8,8 @@
  * same tenant, assigned staff, consent on file) are applied by authorize().
  */
 
-import { PERMISSIONS, type Permission } from "./permissions.js";
-import type { Role } from "./roles.js";
+import { PERMISSIONS, type Permission } from "./permissions";
+import type { Role } from "./roles";
 
 /** Organization Owner: full administration of the tenant — every permission. */
 const OWNER: readonly Permission[] = [...PERMISSIONS];

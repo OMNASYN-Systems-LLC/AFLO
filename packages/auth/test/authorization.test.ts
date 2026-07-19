@@ -14,7 +14,7 @@ import {
   type AuthorizationRequest,
   type Principal,
   type Role,
-} from "../src/index.js";
+} from "../src";
 
 const ORG = "org-golden-key";
 const OTHER_ORG = "org-rival";
