@@ -129,6 +129,8 @@ describe("buildSessionContext — role resolution", () => {
     ).not.toBeNull();
     // no cutoff → resolves regardless of issued-at
     expect(build({ membership: staffMembership, sessionIssuedAtIso: "2020-01-01T00:00:00.000Z" })).not.toBeNull();
+    // cutoff present but issued-at OMITTED → fail closed (can't prove the session post-dates the cutoff)
+    expect(build({ identity: revoked, membership: staffMembership })).toBeNull();
   });
 });
 

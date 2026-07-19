@@ -4,9 +4,10 @@
  * `SessionContext` is the fully-resolved, SERVER-SIDE authorization context for a
  * single request. Every field is resolved server-side from the verified session
  * plus ΛFLO's own records — the browser NEVER authoritatively supplies
- * `organizationId`, `afloUserId`, `clientId`, `membershipId`, `role`, or
- * `permissions`. A request whose identity cannot be resolved is rejected
- * (fail closed).
+ * `organizationId`, `afloUserId`, `clientId`, `membershipId`, `role`,
+ * `permissions`, or `sessionIssuedAtIso` (the last must come from the verified
+ * session, or a future-dated value would bypass revocation). A request whose
+ * identity cannot be resolved is rejected (fail closed).
  *
  * The Clerk-backed provider that produces this from a real session is a later,
  * credential-gated slice; this module defines the contract, the deterministic
@@ -87,12 +88,15 @@ export function buildSessionContext(input: SessionContextInput): SessionContext 
   // A disabled account gets NO session at all (not merely an authorize() denial).
   if (identity.accountStatus === "disabled") return null;
 
-  // A session issued before the account's revocation cutoff no longer resolves.
-  if (
-    input.sessionIssuedAtIso !== undefined &&
-    isSessionRevoked(input.sessionIssuedAtIso, identity.sessionsInvalidatedBeforeIso ?? null)
-  ) {
-    return null;
+  // Session revocation: when a cutoff is in effect, a session issued before it no
+  // longer resolves. Fails CLOSED — if a cutoff is set but the session's issued-at
+  // is unknown, we cannot prove the session post-dates the cutoff, so we reject.
+  // (Reactivate-after-disable and sign-out-everywhere leave status=active with a
+  // live cutoff, so this — not the disabled gate — is the only control there.)
+  const revocationCutoff = identity.sessionsInvalidatedBeforeIso ?? null;
+  if (revocationCutoff !== null) {
+    if (input.sessionIssuedAtIso === undefined) return null;
+    if (isSessionRevoked(input.sessionIssuedAtIso, revocationCutoff)) return null;
   }
 
   let role: Role;
