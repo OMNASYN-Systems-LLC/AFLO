@@ -14,6 +14,20 @@
 
 import type { Role } from "./roles";
 
+/**
+ * Roles that can legitimately be INVITED into an organization. `platform_admin`
+ * is a platform flag (never invited into a tenant) and `partner_viewer` has no
+ * V1 grant model — both are rejected at issue time so an invitation can never
+ * mint them. (The issuing route must still authorize WHICH of these a given
+ * actor may invite — e.g. only an owner invites owners.)
+ */
+const INVITABLE_ROLES: ReadonlySet<Role> = new Set<Role>([
+  "organization_owner",
+  "organization_admin",
+  "staff_advisor",
+  "client",
+]);
+
 export type InvitationStatus = "pending" | "accepted" | "revoked" | "expired";
 
 export interface Invitation {
@@ -57,14 +71,15 @@ export type InvitationResult =
 
 /** Thrown by issueInvitation on a construction invariant violation (programmer error). */
 export class InvitationError extends Error {
-  constructor(public readonly reason: "invalid_client_invitation") {
+  constructor(public readonly reason: "invalid_client_invitation" | "role_not_invitable") {
     super(`invalid invitation: ${reason}`);
     this.name = "InvitationError";
   }
 }
 
+/** Normalize an email for equality: trim, NFKC-fold, lowercase (deterministic). */
 export function normalizeEmail(email: string): string {
-  return email.trim().toLowerCase();
+  return email.trim().normalize("NFKC").toLowerCase();
 }
 
 function deny(reason: InvitationDenial): InvitationResult {
@@ -79,6 +94,11 @@ function nonPendingDenial(status: Exclude<InvitationStatus, "pending">): Invitat
       return "already_revoked";
     case "expired":
       return "already_expired";
+    default: {
+      // Fail closed on an out-of-enum persisted status (a bad DB row cast).
+      const unexpected: never = status;
+      return unexpected;
+    }
   }
 }
 
@@ -106,6 +126,10 @@ export interface IssueInvitationInput {
  * `client`-role invitation MUST reserve a client; any other role MUST NOT.
  */
 export function issueInvitation(input: IssueInvitationInput): Invitation {
+  if (!INVITABLE_ROLES.has(input.intendedRole)) {
+    // platform_admin / partner_viewer can never be minted via an invitation.
+    throw new InvitationError("role_not_invitable");
+  }
   const isClient = input.intendedRole === "client";
   const reservedClientId = input.reservedClientId ?? null;
   if (isClient !== (reservedClientId !== null)) {
@@ -129,8 +153,9 @@ export function issueInvitation(input: IssueInvitationInput): Invitation {
 export interface AcceptInvitationInput {
   /** The authenticated ΛFLO user accepting (never browser-supplied at the binding). */
   afloUserId: string;
-  /** The accepting identity's VERIFIED email — must match the invitation. */
+  /** The accepting identity's VERIFIED email (from the IdP) — must match the invitation. */
   email: string;
+  /** Current time — the SERVER clock only, never a browser-supplied value. */
   nowIso: string;
   /**
    * Optional guardrails: if the acceptance flow echoes an org/client it thinks it

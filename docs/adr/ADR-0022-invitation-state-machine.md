@@ -58,3 +58,27 @@ Add the invitation model to `@aflo/auth`:
   Clerk + the DB. This ADR delivers the rules + token primitives it will use.
 - The verified email must come from Clerk (the identity provider), never a form
   field — documented for the wiring slice.
+
+## Contracts the wiring (accept route) MUST honor
+
+An adversarial review confirmed the state machine has no in-module claiming
+bypass, but the route that consumes it carries the rest of the security:
+
+- **Verify the raw token first.** `acceptInvitation` does NOT check the token —
+  it gates only status/expiry/email. The route must
+  `verifyInvitationToken(rawToken, invitation.tokenHash)` (subpath) BEFORE
+  calling `acceptInvitation`; otherwise acceptance reduces to "any IdP-verified
+  email matching a pending invite."
+- **Accept is a compare-and-swap.** The object-level status guard does not stop
+  two concurrent requests both reading the same pending row (TOCTOU). Persist the
+  transition as `UPDATE … WHERE status = 'pending'` (or a unique constraint) so
+  only one acceptance wins.
+- **Server-authority inputs.** `afloUserId` (session), `email` (IdP-verified),
+  and `nowIso` (server clock) must all be resolved server-side — never from the
+  request body. A browser-supplied `nowIso` would let an attacker accept an
+  expired invite.
+- **Authorize the issuer's role choice.** `issueInvitation` now rejects the
+  never-invitable roles (`platform_admin`, `partner_viewer`), but the issuing
+  route must still authorize WHICH of the invitable roles a given actor may
+  grant (e.g. only an owner may invite an owner) — otherwise issuance is a
+  privilege-escalation vector.

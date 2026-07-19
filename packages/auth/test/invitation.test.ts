@@ -65,6 +65,14 @@ describe("issueInvitation", () => {
     );
     expect(() => staffInvite({ reservedClientId: "c-9" })).toThrow(InvitationError);
   });
+
+  it("refuses to mint a never-invitable role (platform_admin / partner_viewer)", () => {
+    expect(() => staffInvite({ intendedRole: "platform_admin" })).toThrow(InvitationError);
+    expect(() => staffInvite({ intendedRole: "partner_viewer" })).toThrow(InvitationError);
+    // the four invitable roles are accepted
+    expect(staffInvite({ intendedRole: "organization_owner" }).intendedRole).toBe("organization_owner");
+    expect(staffInvite({ intendedRole: "organization_admin" }).intendedRole).toBe("organization_admin");
+  });
 });
 
 describe("acceptInvitation", () => {
