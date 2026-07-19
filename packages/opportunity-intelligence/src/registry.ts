@@ -13,7 +13,7 @@ import {
   getTrustedSource,
   type OpportunityNotice,
 } from "./model";
-import { toClientSafeSummary, validateOpportunityLanguage } from "./language";
+import { toClientSafeSummary } from "./language";
 
 const SEED_NOTICES: readonly OpportunityNotice[] = [
   {
@@ -34,7 +34,7 @@ const SEED_NOTICES: readonly OpportunityNotice[] = [
     {
       id: "opp-hud-counsel",
       category: "housing_program",
-      title: "HUD-approved housing counseling",
+      title: "HUD housing counseling",
       summary:
         "Free or low-cost housing counseling from HUD-approved agencies covers homebuying readiness, budgeting, and avoiding foreclosure. Availability varies by agency and location.",
       jurisdiction: "US",
@@ -79,7 +79,14 @@ const SEED_NOTICES: readonly OpportunityNotice[] = [
 ];
 
 export const OPPORTUNITY_REGISTRY: readonly OpportunityNotice[] = Object.freeze(
-  SEED_NOTICES.map((n) => Object.freeze({ ...n, eligibilityFields: Object.freeze([...n.eligibilityFields]) })),
+  SEED_NOTICES.map((n) =>
+    Object.freeze({
+      ...n,
+      eligibilityFields: Object.freeze([...n.eligibilityFields]),
+      // Deep-freeze the citation too — it carries the trusted-source binding.
+      citation: Object.freeze({ ...n.citation }),
+    }),
+  ),
 );
 
 export function getOpportunityNotice(id: string): OpportunityNotice | undefined {
@@ -107,8 +114,13 @@ export function validateOpportunityNotices(notices: readonly OpportunityNotice[]
     if (seen.has(n.id)) violations.push(`duplicate notice id: ${n.id}`);
     seen.add(n.id);
 
-    if (!getTrustedSource(n.citation.sourceId)) {
+    const source = getTrustedSource(n.citation.sourceId);
+    if (!source) {
       violations.push(`notice ${n.id} cites an untrusted source: ${n.citation.sourceId}`);
+    } else if (!sameOrigin(n.citation.url, source.url)) {
+      // The client verifies at citation.url; it must live on the trusted
+      // source's own origin, or the trusted-source guarantee is defeated.
+      violations.push(`notice ${n.id} citation url is not on the ${source.id} origin: ${n.citation.url}`);
     }
     if (n.verifiedEligibility) {
       violations.push(`notice ${n.id} must not assert verified eligibility at the registry level`);
@@ -116,20 +128,35 @@ export function validateOpportunityNotices(notices: readonly OpportunityNotice[]
     if (n.ruleVersion !== OPPORTUNITY_RULES_VERSION) {
       violations.push(`notice ${n.id} has a stale rule version`);
     }
-    // The title must carry no prohibited claim...
-    const titleViolations = validateOpportunityLanguage(n.title);
-    if (titleViolations.length > 0) {
-      violations.push(`notice ${n.id} title trips safe-language: ${titleViolations.join(", ")}`);
+    for (const [field, value] of [
+      ["publicationDate", n.publicationDate],
+      ["effectiveDate", n.effectiveDate],
+      ["expirationDate", n.expirationDate],
+    ] as const) {
+      if (value !== null && Number.isNaN(Date.parse(value))) {
+        violations.push(`notice ${n.id} has an unparseable ${field}: ${value}`);
+      }
     }
-    // ...and it must render client-safe without throwing.
+    // The client-facing render must succeed AND carry no prohibited claim in the
+    // title or any eligibility field. reviewApproved bypasses the runtime
+    // human-review gate here — this checks LANGUAGE, not the review workflow.
     try {
-      toClientSafeSummary(n);
+      toClientSafeSummary(n, { reviewApproved: true });
     } catch (error) {
       violations.push(`notice ${n.id} cannot render client-safe: ${(error as Error).message}`);
     }
   }
 
   return violations;
+}
+
+/** True if `url` is on the same origin as `sourceUrl` (both must be valid). */
+function sameOrigin(url: string, sourceUrl: string): boolean {
+  try {
+    return new URL(url).origin === new URL(sourceUrl).origin;
+  } catch {
+    return false;
+  }
 }
 
 /** Validate the live registry — the CI guard. */

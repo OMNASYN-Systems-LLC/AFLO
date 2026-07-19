@@ -62,8 +62,15 @@ export function matchNoticeToProfile(
   const requiresReview = REVIEW_REQUIRED_CATEGORIES.includes(notice.category);
   const reasonCodes: OpportunityMatchReasonCode[] = [];
 
-  if (notice.expirationDate && Date.parse(notice.expirationDate) < signals.now.getTime()) {
-    return { relevant: false, reasonCodes: ["OM_EXPIRED"], requiresReview };
+  if (notice.expirationDate !== null) {
+    const exp = Date.parse(notice.expirationDate);
+    // Fail closed: an unparseable expiration is treated as expired. A date-only
+    // value parses to UTC midnight; the notice stays valid THROUGH that day, so
+    // compare against the end of the expiration day (+24h).
+    const MS_PER_DAY = 24 * 60 * 60 * 1000;
+    if (Number.isNaN(exp) || exp + MS_PER_DAY <= signals.now.getTime()) {
+      return { relevant: false, reasonCodes: ["OM_EXPIRED"], requiresReview };
+    }
   }
 
   if (notice.jurisdiction === "US") {
