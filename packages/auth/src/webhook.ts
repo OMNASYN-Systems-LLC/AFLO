@@ -110,6 +110,10 @@ export function verifyWebhook(input: VerifyWebhookInput): VerifiedWebhook {
     throw new WebhookVerificationError("missing_headers");
   }
 
+  // Svix timestamps are canonical Unix seconds — a plain run of digits. Reject
+  // non-canonical forms ("1.7e9", "+123", " 123 ") outright rather than relying
+  // on a downstream signature mismatch (defense in depth).
+  if (!/^\d+$/.test(svixTimestamp)) throw new WebhookVerificationError("invalid_timestamp");
   const timestamp = Number(svixTimestamp);
   if (!Number.isInteger(timestamp)) throw new WebhookVerificationError("invalid_timestamp");
   const tolerance = input.toleranceSeconds ?? 300;

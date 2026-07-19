@@ -85,6 +85,10 @@ describe("verifyWebhook — fails closed", () => {
 
   it("rejects a non-integer or out-of-tolerance timestamp", () => {
     expect(reason(() => verify(EVENT, { ...headers(EVENT), "svix-timestamp": "notanumber" }))).toBe("invalid_timestamp");
+    // Non-canonical numeric forms are rejected outright (not left to signature mismatch).
+    for (const bad of ["1.7e9", "+1700000000", " 1700000000 ", "0x65517d00"]) {
+      expect(reason(() => verify(EVENT, { ...headers(EVENT), "svix-timestamp": bad }))).toBe("invalid_timestamp");
+    }
     expect(reason(() => verify(EVENT, headers(EVENT, { ts: NOW - 400 })))).toBe("timestamp_out_of_tolerance");
     expect(reason(() => verify(EVENT, headers(EVENT, { ts: NOW + 400 })))).toBe("timestamp_out_of_tolerance");
   });
