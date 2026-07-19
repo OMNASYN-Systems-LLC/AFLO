@@ -5,6 +5,7 @@ import { ENGAGEMENT_RULES_VERSION } from "../src/engagement";
 import { INTAKE_RULES_VERSION } from "../src/intake";
 import { PIPELINE_RULES_VERSION } from "../src/pipeline";
 import { READINESS_RULES_VERSION, REASON_CODE_DESCRIPTIONS } from "../src/readiness";
+import { RESOLUTION_RULES_VERSION } from "../src/resolution";
 import { REPORT_RULES_VERSION } from "../src/report";
 import { ROUNDUP_RULES_VERSION } from "../src/roundup";
 import { REVIEW_REASON_DESCRIPTIONS, REVIEW_RULES_VERSION } from "../src/review";
@@ -43,6 +44,7 @@ describe("rule registry", () => {
     expect(getRule("document.transition")?.version).toBe(DOCUMENT_RULES_VERSION);
     expect(getRule("roundup.calculator")?.version).toBe(ROUNDUP_RULES_VERSION);
     expect(getRule("engagement.status")?.version).toBe(ENGAGEMENT_RULES_VERSION);
+    expect(getRule("resolution.input_completeness")?.version).toBe(RESOLUTION_RULES_VERSION);
   });
 
   it("registers every review reason code", () => {

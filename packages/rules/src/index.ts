@@ -3,6 +3,7 @@ export * from "./document";
 export * from "./lifecycle";
 export * from "./time";
 export * from "./readiness";
+export * from "./resolution";
 export * from "./report";
 export * from "./roundup";
 export * from "./review";
