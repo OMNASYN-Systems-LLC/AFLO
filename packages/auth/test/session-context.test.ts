@@ -43,6 +43,7 @@ function build(input: Partial<SessionContextInput> & { identity?: AfloIdentity }
     membership: input.membership,
     clientLink: input.clientLink,
     assignedClientIds: input.assignedClientIds,
+    sessionIssuedAtIso: input.sessionIssuedAtIso,
   });
 }
 
@@ -106,13 +107,30 @@ describe("buildSessionContext — role resolution", () => {
   });
 
   it("carries account status and assignment scoping", () => {
-    const ctx = build({
-      identity: identity({ accountStatus: "disabled" }),
-      membership: staffMembership,
-      assignedClientIds: ["c-1", "c-2"],
-    })!;
-    expect(ctx.accountStatus).toBe("disabled");
+    const ctx = build({ membership: staffMembership, assignedClientIds: ["c-1", "c-2"] })!;
+    expect(ctx.accountStatus).toBe("active");
     expect(ctx.assignedClientIds).toEqual(["c-1", "c-2"]);
+  });
+
+  it("resolves a DISABLED account to no session (fail closed at the session layer)", () => {
+    expect(build({ identity: identity({ accountStatus: "disabled" }), membership: staffMembership })).toBeNull();
+    expect(build({ identity: identity({ accountStatus: "disabled" }), clientLink })).toBeNull();
+  });
+
+  it("resolves a session issued before the revocation cutoff to null", () => {
+    const revoked = identity({ sessionsInvalidatedBeforeIso: "2026-07-19T12:00:00.000Z" });
+    // issued before cutoff → null
+    expect(
+      build({ identity: revoked, membership: staffMembership, sessionIssuedAtIso: "2026-07-19T11:59:59.000Z" }),
+    ).toBeNull();
+    // issued at/after cutoff → resolves
+    expect(
+      build({ identity: revoked, membership: staffMembership, sessionIssuedAtIso: "2026-07-19T12:00:00.000Z" }),
+    ).not.toBeNull();
+    // no cutoff → resolves regardless of issued-at
+    expect(build({ membership: staffMembership, sessionIssuedAtIso: "2020-01-01T00:00:00.000Z" })).not.toBeNull();
+    // cutoff present but issued-at OMITTED → fail closed (can't prove the session post-dates the cutoff)
+    expect(build({ identity: revoked, membership: staffMembership })).toBeNull();
   });
 });
 
@@ -137,11 +155,14 @@ describe("toPrincipal + authorize bridge (PHASE 2 → PHASE 4)", () => {
     ).toBe("not_owner");
   });
 
-  it("a disabled account is denied through the bridge", () => {
-    const p = toPrincipal(build({ identity: identity({ accountStatus: "disabled" }), membership: staffMembership })!);
-    expect(authorize({ principal: p, permission: "client.read", resource: { organizationId: ORG } }).reason).toBe(
-      "account_disabled",
-    );
+  it("a disabled account is denied at BOTH the session layer and the engine", () => {
+    // Session layer: no session at all.
+    expect(build({ identity: identity({ accountStatus: "disabled" }), membership: staffMembership })).toBeNull();
+    // Engine layer (independent): a directly-constructed disabled principal is denied.
+    const p = toPrincipal(build({ membership: staffMembership })!);
+    expect(
+      authorize({ principal: { ...p, accountStatus: "disabled" }, permission: "client.read", resource: { organizationId: ORG } }).reason,
+    ).toBe("account_disabled");
   });
 
   it("a revoked staff membership is denied through the bridge", () => {

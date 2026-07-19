@@ -10,3 +10,4 @@ export * from "./session-context";
 export * from "./test-provider";
 export * from "./invitation";
 export * from "./membership";
+export * from "./account";
