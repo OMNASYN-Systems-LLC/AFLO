@@ -22,6 +22,7 @@
   "devDependencies": {
     "@aflo/shared": "workspace:*",
     "@eslint/js": "^10.0.1",
+    "@types/node": "^22.10.2",
     "drizzle-kit": "^0.31.10",
     "eslint": "^9.39.5",
     "typescript": "^5.9.2",
