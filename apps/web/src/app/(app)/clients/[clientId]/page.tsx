@@ -116,6 +116,7 @@ export default async function ClientDetailPage({
   const pendingAi = detail.aiSuggestions.filter((s) => s.reviewStatus === "pending_review");
   const intake = store.intakeFor(DEMO_ORG_ID, clientId);
   const intakeDefinition = store.intakeDefinitionFor(DEMO_ORG_ID);
+  const resolutionReadout = store.resolutionReadoutFor(DEMO_ORG_ID, clientId, demoNow);
   const upcomingAppointments = store
     .database()
     .appointments.filter((ap) => ap.clientId === clientId && new Date(ap.scheduledAt) > demoNow)
@@ -336,6 +337,120 @@ export default async function ClientDetailPage({
               />
             )}
           </SectionCard>
+
+          {resolutionReadout ? (
+            <SectionCard
+              title="Resolution readout"
+              subtitle="Concierge substrate · understand → diagnose → organize (deterministic, read-only)"
+              action={
+                <Badge
+                  tone={resolutionReadout.canRunDiagnosis ? "good" : "neutral"}
+                  label={resolutionReadout.canRunDiagnosis ? "Ready to diagnose" : "Awaiting inputs"}
+                />
+              }
+            >
+              <div className="space-y-5">
+                <div>
+                  <div className="flex items-center justify-between">
+                    <p className="text-[11px] font-medium uppercase tracking-[0.14em] text-ink-soft">
+                      Understand
+                    </p>
+                    <span className="text-xs text-ink-faint">
+                      {resolutionReadout.understanding.completionPct}% of inputs captured
+                    </span>
+                  </div>
+                  <div className="mt-2">
+                    <ProgressBar pct={resolutionReadout.understanding.completionPct} />
+                  </div>
+                  <div className="mt-2.5 flex flex-wrap gap-1.5">
+                    {resolutionReadout.understanding.capturedKeys.map((k) => (
+                      <span
+                        key={k}
+                        className="rounded bg-status-good-tint px-2 py-0.5 text-[11px] text-emerald-deep"
+                      >
+                        {READINESS_INPUT_LABELS[k] ?? k}
+                      </span>
+                    ))}
+                    {resolutionReadout.understanding.missingKeys.map((k) => {
+                      const blocks = resolutionReadout.understanding.blockingMissingKeys.includes(k);
+                      return (
+                        <span
+                          key={k}
+                          className={`rounded px-2 py-0.5 text-[11px] ${
+                            blocks ? "bg-status-warn-tint text-gold-deep" : "bg-sand text-ink-faint"
+                          }`}
+                        >
+                          {READINESS_INPUT_LABELS[k] ?? k} · missing{blocks ? " (blocks)" : ""}
+                        </span>
+                      );
+                    })}
+                  </div>
+                  <p className="mt-2 text-[11px] text-ink-faint">
+                    {resolutionReadout.canRunDiagnosis
+                      ? "All required inputs captured and intake complete — the diagnosis can run."
+                      : resolutionReadout.understanding.canDiagnose
+                        ? "Required facts captured, but the intake is not yet complete."
+                        : "Required facts still missing before a diagnosis can run."}
+                  </p>
+                </div>
+
+                <div className="border-t border-line/70 pt-4">
+                  <p className="text-[11px] font-medium uppercase tracking-[0.14em] text-ink-soft">
+                    Diagnose
+                  </p>
+                  {resolutionReadout.diagnosis ? (
+                    <div className="mt-2 space-y-1">
+                      <p className="text-sm text-ink">
+                        <span className="font-medium">
+                          {STAGE_LABELS[resolutionReadout.diagnosis.stage]}
+                        </span>
+                        {resolutionReadout.diagnosis.bindingBlocker ? (
+                          <> · binding blocker: {REASON_CODE_LABELS[resolutionReadout.diagnosis.bindingBlocker]}</>
+                        ) : null}
+                      </p>
+                      <p className="text-xs text-ink-soft">
+                        <span className="font-medium text-ink">Proposed next action:</span>{" "}
+                        {resolutionReadout.diagnosis.proposedNextAction}
+                      </p>
+                    </div>
+                  ) : (
+                    <p className="mt-2 text-xs text-ink-soft">
+                      No recorded assessment yet — this mirrors the workflow&rsquo;s diagnosis and is
+                      never re-run here.
+                    </p>
+                  )}
+                </div>
+
+                {resolutionReadout.obligations ? (
+                  <div className="border-t border-line/70 pt-4">
+                    <p className="text-[11px] font-medium uppercase tracking-[0.14em] text-ink-soft">
+                      Organize · obligations
+                    </p>
+                    <div className="mt-2.5 grid grid-cols-3 gap-3">
+                      <MiniStat
+                        label="Debt-to-income"
+                        value={fmtPct(resolutionReadout.obligations.dtiPct, 1)}
+                      />
+                      <MiniStat
+                        label="Utilization"
+                        value={fmtPct(resolutionReadout.obligations.utilizationPct, 1)}
+                        hint="revolving"
+                      />
+                      <MiniStat
+                        label="Monthly debt"
+                        value={fmtMoney(resolutionReadout.obligations.monthlyDebtPaymentsCents)}
+                      />
+                    </div>
+                  </div>
+                ) : null}
+
+                <p className="border-t border-line/70 pt-3 text-[11px] leading-relaxed text-ink-faint">
+                  Composed read-only from verified facts — no AI, no changes. Rule provenance:{" "}
+                  {resolutionReadout.ruleVersions.join(" · ")}.
+                </p>
+              </div>
+            </SectionCard>
+          ) : null}
 
           <SectionCard
             title="Roadmap"
@@ -1339,6 +1454,17 @@ const NOTIFICATION_CHANNEL_LABELS: Record<NotificationChannel, string> = {
   in_app: "In-app",
   email: "Email",
   sms: "SMS",
+};
+
+/** Staff-facing labels for the readiness inputs the Concierge readout tracks. */
+const READINESS_INPUT_LABELS: Record<string, string> = {
+  creditScore: "Credit score",
+  utilizationPct: "Utilization",
+  dtiPct: "Debt-to-income",
+  reserveMonths: "Reserves",
+  derogatoryMarks: "Derogatory marks",
+  onTimePaymentRate: "On-time payments",
+  incomeStability: "Income stability",
 };
 
 /** Staff-facing labels for rule-legal document moves, keyed by target status. */
