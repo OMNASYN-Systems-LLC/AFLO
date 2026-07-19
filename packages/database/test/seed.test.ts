@@ -5,7 +5,7 @@ import { PGlite } from "@electric-sql/pglite";
 import { drizzle, type PgliteDatabase } from "drizzle-orm/pglite";
 import { eq } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { syntheticDatabase } from "@aflo/shared";
+import { syntheticDatabase, type SyntheticDatabase } from "@aflo/shared";
 import { clients, creditProfiles, financialProfiles, goals, organizations } from "../src/schema";
 import { loadSyntheticCore, slugToUuid } from "../src/repositories/seed";
 
@@ -63,31 +63,54 @@ describe("loadSyntheticCore — schema⟷domain fidelity", () => {
     expect(row!.firstName).toBe(source.firstName);
     expect(row!.lastName).toBe(source.lastName);
     expect(row!.email).toBe(source.email);
+    expect(row!.clientStatus).toBe(source.clientStatus);
     expect(row!.joinedAt.toISOString()).toBe(new Date(source.joinedAt).toISOString());
+    expect(row!.lastActivityAt.toISOString()).toBe(new Date(source.lastActivityAt).toISOString());
     // Deferred columns are null, not fabricated.
     expect(row!.assignedMemberId).toBeNull();
     expect(row!.phoneEncrypted).toBeNull();
   });
 
-  it("round-trips financial cents exactly (bigint, no float drift)", async () => {
+  it("stores a lead's null clientStatus as null (not a fabricated default)", async () => {
+    const lead = syntheticDatabase.clients.find((c) => c.kind === "lead");
+    expect(lead, "synthetic data should include at least one lead").toBeDefined();
+    expect(lead!.clientStatus).toBeNull(); // domain invariant: leads have no lifecycle status
+    const [row] = await db.select().from(clients).where(eq(clients.id, slugToUuid(lead!.id)));
+    expect(row!.kind).toBe("lead");
+    expect(row!.clientStatus).toBeNull();
+  });
+
+  it("round-trips EVERY financial cents column exactly (bigint, no float drift)", async () => {
     const source = syntheticDatabase.financialProfiles[0]!;
     const [row] = await db.select().from(financialProfiles).where(eq(financialProfiles.clientId, slugToUuid(source.clientId)));
     expect(row!.monthlyIncomeCents).toBe(source.monthlyIncomeCents);
+    expect(row!.monthlyDebtPaymentsCents).toBe(source.monthlyDebtPaymentsCents);
     expect(row!.liquidSavingsCents).toBe(source.liquidSavingsCents);
     expect(row!.monthlyEssentialExpensesCents).toBe(source.monthlyEssentialExpensesCents);
     expect(row!.incomeStability).toBe(source.incomeStability);
     expect(typeof row!.monthlyIncomeCents).toBe("number"); // bigint mode:number, not a string
   });
 
-  it("round-trips a credit profile incl. the numeric on-time rate", async () => {
+  it("round-trips EVERY credit column incl. numeric rate and date-only scoreAsOf", async () => {
     const source = syntheticDatabase.creditProfiles[0]!;
     const [row] = await db.select().from(creditProfiles).where(eq(creditProfiles.clientId, slugToUuid(source.clientId)));
     expect(row!.score).toBe(source.score);
     expect(row!.scoreSource).toBe(source.scoreSource);
     expect(row!.revolvingBalanceCents).toBe(source.revolvingBalanceCents);
+    expect(row!.revolvingLimitCents).toBe(source.revolvingLimitCents);
     expect(row!.openTradelines).toBe(source.openTradelines);
+    expect(row!.derogatoryMarks).toBe(source.derogatoryMarks);
+    // `date` column stores date-only, matching the write (Finding 1 fix).
+    expect(row!.scoreAsOf).toBe(source.scoreAsOf === null ? null : source.scoreAsOf.slice(0, 10));
     // numeric(4,3) comes back as a decimal string; equal in value.
     expect(Number(row!.onTimePaymentRate)).toBeCloseTo(source.onTimePaymentRate, 3);
+  });
+
+  it("stores goal target_date as date-only (no silent datetime truncation)", async () => {
+    const g = syntheticDatabase.goals[0]!;
+    const [row] = await db.select().from(goals).where(eq(goals.id, slugToUuid(g.id)));
+    expect(row!.targetDate).toBe(g.targetDate.slice(0, 10));
+    expect(row!.targetDate).toMatch(/^\d{4}-\d{2}-\d{2}$/);
   });
 
   it("INJECTS organization_id into sub-records from the owning client", async () => {
@@ -114,5 +137,29 @@ describe("loadSyntheticCore — schema⟷domain fidelity", () => {
       primaryByClient.set(row.clientId, (primaryByClient.get(row.clientId) ?? 0) + 1);
     }
     for (const count of primaryByClient.values()) expect(count).toBe(1);
+  });
+});
+
+describe("loadSyntheticCore — nullable passthrough", () => {
+  // The real synthetic data has no null credit scores; construct one so the
+  // loader's null-passthrough path (score / scoreAsOf) is actually exercised.
+  it("passes a null credit score and null scoreAsOf through as null", async () => {
+    const isolated = await PGlite.create();
+    try {
+      await isolated.exec(allMigrations());
+      const db2 = drizzle(isolated);
+      const anchor = syntheticDatabase.creditProfiles[0]!;
+      const modified: SyntheticDatabase = {
+        ...syntheticDatabase,
+        creditProfiles: [{ ...anchor, score: null, scoreAsOf: null }],
+      };
+      await loadSyntheticCore(db2, modified);
+      const [row] = await db2.select().from(creditProfiles).where(eq(creditProfiles.clientId, slugToUuid(anchor.clientId)));
+      expect(row!.score).toBeNull();
+      expect(row!.scoreAsOf).toBeNull();
+      expect(row!.revolvingBalanceCents).toBe(anchor.revolvingBalanceCents); // non-null neighbours intact
+    } finally {
+      await isolated.close();
+    }
   });
 });

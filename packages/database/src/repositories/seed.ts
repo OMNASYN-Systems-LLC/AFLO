@@ -83,7 +83,9 @@ export async function loadSyntheticCore(db: OutboxDrizzleDb, seed: SyntheticData
           clientId: slugToUuid(g.clientId),
           title: g.title,
           category: g.category,
-          targetDate: g.targetDate,
+          // `date` column: store date-only (YYYY-MM-DD), so the write matches
+          // the read-back instead of relying on Postgres truncating a datetime.
+          targetDate: g.targetDate.slice(0, 10),
           progressPct: g.progressPct,
           isPrimary: g.isPrimary,
         })),
@@ -111,7 +113,8 @@ export async function loadSyntheticCore(db: OutboxDrizzleDb, seed: SyntheticData
           clientId: slugToUuid(c.clientId),
           score: c.score,
           scoreSource: c.scoreSource,
-          scoreAsOf: c.scoreAsOf,
+          // `date` column: date-only, null-safe (see targetDate above).
+          scoreAsOf: c.scoreAsOf === null ? null : c.scoreAsOf.slice(0, 10),
           revolvingBalanceCents: c.revolvingBalanceCents,
           revolvingLimitCents: c.revolvingLimitCents,
           openTradelines: c.openTradelines,
