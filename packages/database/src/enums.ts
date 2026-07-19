@@ -85,3 +85,46 @@ export const outboxStatusEnum = pgEnum("outbox_status", [
 
 /** Communication delivery outcome (notification.v1.0.0 log). */
 export const communicationStatusEnum = pgEnum("communication_status", ["sent", "suppressed"]);
+
+// --- Phase A1: workflow-table enums (canonical here; lockstep-tested against
+//     the domain field types via indexed access, e.g. Goal["category"][]). ---
+
+/** Self-/staff-reported income stability (FinancialProfile.incomeStability). */
+export const incomeStabilityEnum = pgEnum("income_stability", ["stable", "variable", "unstable"]);
+
+/** Credit-score provenance — manual entry or uploaded report only, no bureau (CreditProfile.scoreSource). */
+export const creditScoreSourceEnum = pgEnum("credit_score_source", ["manual_entry", "uploaded_report"]);
+
+/** Goal category (Goal.category). */
+export const goalCategoryEnum = pgEnum("goal_category", [
+  "credit",
+  "savings",
+  "debt",
+  "home_purchase",
+  "business_capital",
+  "other",
+]);
+
+/** Roadmap-milestone status (RoadmapMilestone.status = MilestoneStatus). Distinct from action_status. */
+export const milestoneStatusEnum = pgEnum("milestone_status", ["upcoming", "in_progress", "completed"]);
+
+/** Monthly-action category (MonthlyAction.category). */
+export const monthlyActionCategoryEnum = pgEnum("monthly_action_category", [
+  "payment",
+  "savings",
+  "documentation",
+  "education",
+  "habit",
+]);
+
+/** Document type (ClientDocument.docType). Metadata only; file bytes never in the DB. */
+export const documentTypeEnum = pgEnum("document_type", [
+  "credit_report",
+  "income_verification",
+  "bank_statement",
+  "identification",
+  "other",
+]);
+
+/** Appointment channel (Appointment.channel). */
+export const appointmentChannelEnum = pgEnum("appointment_channel", ["video", "phone", "in_person"]);

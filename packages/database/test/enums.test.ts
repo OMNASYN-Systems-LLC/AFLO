@@ -7,15 +7,33 @@ import {
   ROADMAP_STATUSES,
 } from "@aflo/rules";
 import { CONSENT_TYPES } from "@aflo/notifications";
-import type { ClientStatus, IntakeStatus, MemberRole } from "@aflo/shared";
+import type {
+  Appointment,
+  ClientDocument,
+  ClientStatus,
+  CreditProfile,
+  FinancialProfile,
+  Goal,
+  IntakeStatus,
+  MemberRole,
+  MilestoneStatus,
+  MonthlyAction,
+} from "@aflo/shared";
 import {
   actionStatusEnum,
+  appointmentChannelEnum,
   clientStatusEnum,
   consentTypeEnum,
+  creditScoreSourceEnum,
   documentReviewStatusEnum,
+  documentTypeEnum,
+  goalCategoryEnum,
+  incomeStabilityEnum,
   intakeStatusEnum,
   lifecycleStageEnum,
   memberRoleEnum,
+  milestoneStatusEnum,
+  monthlyActionCategoryEnum,
   reportStatusEnum,
   roadmapStatusEnum,
 } from "../src/enums";
@@ -73,5 +91,62 @@ describe("domain-owned enums cover the domain types exactly", () => {
     // Client and partner_viewer principals are DB-modeled ahead of their slices.
     expect(memberRoleEnum.enumValues).toContain("client");
     expect(memberRoleEnum.enumValues).toContain("partner_viewer");
+  });
+});
+
+/**
+ * Phase A1 workflow enums. These have no exported named type alias, so they
+ * are asserted via indexed access into the domain interface — a change to the
+ * domain union becomes a compile error in the literal array here, forcing the
+ * enum (and its migration) to be updated in lockstep.
+ */
+describe("Phase A1 workflow enums cover the domain field types", () => {
+  it("income_stability == FinancialProfile.incomeStability", () => {
+    const all: FinancialProfile["incomeStability"][] = ["stable", "variable", "unstable"];
+    expect(incomeStabilityEnum.enumValues).toEqual(all);
+  });
+
+  it("credit_score_source == CreditProfile.scoreSource", () => {
+    const all: CreditProfile["scoreSource"][] = ["manual_entry", "uploaded_report"];
+    expect(creditScoreSourceEnum.enumValues).toEqual(all);
+  });
+
+  it("goal_category == Goal.category", () => {
+    const all: Goal["category"][] = [
+      "credit",
+      "savings",
+      "debt",
+      "home_purchase",
+      "business_capital",
+      "other",
+    ];
+    expect(goalCategoryEnum.enumValues).toEqual(all);
+  });
+
+  it("milestone_status == MilestoneStatus (distinct from action_status)", () => {
+    const all: MilestoneStatus[] = ["upcoming", "in_progress", "completed"];
+    expect(milestoneStatusEnum.enumValues).toEqual(all);
+    expect(milestoneStatusEnum.enumValues).not.toContain("todo");
+  });
+
+  it("monthly_action_category == MonthlyAction.category", () => {
+    const all: MonthlyAction["category"][] = ["payment", "savings", "documentation", "education", "habit"];
+    expect(monthlyActionCategoryEnum.enumValues).toEqual(all);
+  });
+
+  it("document_type == ClientDocument.docType", () => {
+    const all: ClientDocument["docType"][] = [
+      "credit_report",
+      "income_verification",
+      "bank_statement",
+      "identification",
+      "other",
+    ];
+    expect(documentTypeEnum.enumValues).toEqual(all);
+  });
+
+  it("appointment_channel == Appointment.channel", () => {
+    const all: Appointment["channel"][] = ["video", "phone", "in_person"];
+    expect(appointmentChannelEnum.enumValues).toEqual(all);
   });
 });
