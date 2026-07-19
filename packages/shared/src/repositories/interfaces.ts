@@ -22,6 +22,7 @@ import type {
   StaffMember,
 } from "../domain/types";
 import type { EngagementAssessment, ReadinessAssessment } from "@aflo/rules";
+import type { ClientThreadView } from "../domain/messaging";
 
 /**
  * Repository contracts for the first vertical slice.
@@ -162,6 +163,11 @@ export interface PortalView {
   nextAppointment: { purpose: string; scheduledAt: string; channel: string; staffName: string } | null;
   /** ΛFLO Wealth Academy — assigned lessons, newest first. */
   academy: { lessonTitle: string; format: string; assigned: string; completed: boolean }[];
+  /**
+   * Secure message threads, client-safe (built from the toClientThreadView
+   * projection): "you"/"advisor" only, no staff ids or internal metadata.
+   */
+  conversations: ClientThreadView[];
 }
 
 export interface PortalRepository {

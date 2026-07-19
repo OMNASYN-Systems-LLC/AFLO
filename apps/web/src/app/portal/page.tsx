@@ -160,6 +160,43 @@ export default async function PortalPage() {
         )}
       </SectionCard>
 
+      <SectionCard title="Secure messages" subtitle="Your private thread with your advisory team">
+        {view.conversations.length === 0 ? (
+          <EmptyState message="No messages yet — your advisor will reach out here when there's something to discuss." />
+        ) : (
+          <div className="space-y-5">
+            {view.conversations.map((thread) => (
+              <div key={thread.subject}>
+                <div className="flex items-baseline justify-between gap-3">
+                  <p className="text-sm font-medium text-ink">{thread.subject}</p>
+                  {thread.status === "closed" ? (
+                    <span className="shrink-0 text-[11px] text-ink-faint">Closed</span>
+                  ) : null}
+                </div>
+                <ul className="mt-2 space-y-2">
+                  {thread.messages.map((m, i) => (
+                    <li
+                      key={i}
+                      className={`rounded-md px-3 py-2 text-sm leading-relaxed ${
+                        m.from === "you"
+                          ? "bg-emerald/10 text-ink"
+                          : "border border-line/70 bg-ivory text-ink-soft"
+                      }`}
+                    >
+                      <span className="mr-2 text-[11px] font-medium uppercase tracking-wide text-ink-faint">
+                        {m.from === "you" ? "You" : "Advisor"}
+                      </span>
+                      {m.body}
+                      <span className="ml-2 text-[11px] text-ink-faint">{fmtDateTime(m.sentAt)}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ))}
+          </div>
+        )}
+      </SectionCard>
+
       <SectionCard title="Progress reports">
         {view.publishedReports.length === 0 ? (
           <EmptyState message="Your first quarterly report will appear here once published." />

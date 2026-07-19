@@ -8,6 +8,7 @@ import {
 import { ACADEMY_LIBRARY, getLesson } from "@aflo/academy";
 import { syntheticDatabase, type SyntheticDatabase } from "../data/synthetic";
 import { toReadinessFacts } from "../domain/facts";
+import { toClientThreadView } from "../domain/messaging";
 import type {
   AttentionItem,
   ClientDetail,
@@ -295,6 +296,17 @@ export class MockPortalRepository implements PortalRepository {
             completed: e.completedAt !== null,
           };
         }),
+      // Client-safe threads: org+client scoped, newest-active first, projected
+      // through toClientThreadView so no staff id or internal field is exposed.
+      conversations: this.db.conversationThreads
+        .filter((t) => t.organizationId === organizationId && t.clientId === clientId)
+        .sort((a, b) => (b.lastMessageAt ?? b.createdAt).localeCompare(a.lastMessageAt ?? a.createdAt))
+        .map((thread) =>
+          toClientThreadView(
+            thread,
+            this.db.messages.filter((m) => m.threadId === thread.id && m.organizationId === organizationId),
+          ),
+        ),
     };
   }
 }
