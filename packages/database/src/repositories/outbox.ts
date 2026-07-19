@@ -111,35 +111,69 @@ function toStateColumns(record: OutboxRecord) {
   };
 }
 
+/**
+ * Insert a pending outbox row on the given handle (a db OR a transaction).
+ * Idempotent on the producer-side anchor `event_id`, so a retried producer
+ * transaction that re-enqueues the same event is a no-op. Taking a handle
+ * lets producers insert the event in the SAME transaction as the state change
+ * that emitted it (see `commitWithOutbox`).
+ */
+export async function insertOutboxRecord(qb: OutboxDrizzleDb, record: OutboxRecord): Promise<void> {
+  await qb
+    .insert(outbox)
+    .values({
+      id: record.id,
+      eventId: record.eventId,
+      eventType: record.eventType,
+      eventVersion: record.eventVersion,
+      organizationId: record.organizationId,
+      aggregateType: record.aggregateType,
+      aggregateId: record.aggregateId,
+      payload: JSON.parse(record.serializedEvent),
+      status: record.status,
+      attempts: record.attempts,
+      maxAttempts: record.maxAttempts,
+      nextAttemptAt: new Date(record.nextAttemptAt),
+      lockedBy: record.lockedBy,
+      lockedAt: record.lockedAt === null ? null : new Date(record.lockedAt),
+      lastError: record.lastError,
+      deadLetter: record.status === "dead_letter",
+      processedAt: record.processedAt === null ? null : new Date(record.processedAt),
+      createdAt: new Date(record.createdAt),
+    })
+    .onConflictDoNothing({ target: outbox.eventId });
+}
+
+/**
+ * Transactional-outbox WRITE (ADR-0008): run `work` and flush the outbox rows
+ * it collects in ONE transaction, so a state change and the events it emits
+ * commit together or not at all. An event is never emitted for a change that
+ * rolled back, and a change never commits without its events — the invariant
+ * the whole outbox depends on. `work` performs its domain writes on the `tx`
+ * handle and calls `enqueue(record)` for each event; the records are inserted
+ * when `work` resolves, inside the same transaction. If `work` throws — or any
+ * outbox insert fails — the entire unit of work rolls back.
+ *
+ * In the app this runs under the request's verified org context (RLS on); the
+ * worker's crash-recovery path is the separate consumer side.
+ */
+export async function commitWithOutbox<T>(
+  db: OutboxDrizzleDb,
+  work: (tx: OutboxDrizzleDb, enqueue: (record: OutboxRecord) => void) => Promise<T>,
+): Promise<T> {
+  return db.transaction(async (tx) => {
+    const pending: OutboxRecord[] = [];
+    const result = await work(tx, (record) => pending.push(record));
+    for (const record of pending) await insertOutboxRecord(tx, record);
+    return result;
+  });
+}
+
 export class DrizzleOutboxRepository implements OutboxRepository {
   constructor(private readonly db: OutboxDrizzleDb) {}
 
   async enqueue(record: OutboxRecord): Promise<void> {
-    await this.db
-      .insert(outbox)
-      .values({
-        id: record.id,
-        eventId: record.eventId,
-        eventType: record.eventType,
-        eventVersion: record.eventVersion,
-        organizationId: record.organizationId,
-        aggregateType: record.aggregateType,
-        aggregateId: record.aggregateId,
-        payload: JSON.parse(record.serializedEvent),
-        status: record.status,
-        attempts: record.attempts,
-        maxAttempts: record.maxAttempts,
-        nextAttemptAt: new Date(record.nextAttemptAt),
-        lockedBy: record.lockedBy,
-        lockedAt: record.lockedAt === null ? null : new Date(record.lockedAt),
-        lastError: record.lastError,
-        deadLetter: record.status === "dead_letter",
-        processedAt: record.processedAt === null ? null : new Date(record.processedAt),
-        createdAt: new Date(record.createdAt),
-      })
-      // Idempotent on the producer-side anchor: a retried producer transaction
-      // that re-enqueues the same event is a no-op.
-      .onConflictDoNothing({ target: outbox.eventId });
+    await insertOutboxRecord(this.db, record);
   }
 
   async claimBatch(workerId: string, now: Date, limit: number): Promise<OutboxRecord[]> {
