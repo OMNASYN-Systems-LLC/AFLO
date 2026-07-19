@@ -48,6 +48,8 @@ import {
   createReferralAction,
   generateHandoffAction,
   generateReportAction,
+  openThreadAction,
+  postStaffReplyAction,
   recordReferralOutcomeAction,
   requestDocumentAction,
   revokeHandoffAction,
@@ -1443,7 +1445,7 @@ export default async function ClientDetailPage({
             {conversations.length === 0 ? (
               <EmptyState message="No message threads with this client yet." />
             ) : (
-              <div className="space-y-5">
+              <div className="space-y-6">
                 {conversations.map(({ thread, messages }) => (
                   <div key={thread.id}>
                     <div className="flex flex-wrap items-baseline justify-between gap-2">
@@ -1468,10 +1470,65 @@ export default async function ClientDetailPage({
                         </li>
                       ))}
                     </ul>
+                    {thread.status === "open" ? (
+                      <form
+                        action={postStaffReplyAction.bind(null, clientId, thread.id)}
+                        className="mt-2.5 space-y-2"
+                      >
+                        <label htmlFor={`staff-reply-${thread.id}`} className="sr-only">
+                          Reply in {thread.subject}
+                        </label>
+                        <textarea
+                          id={`staff-reply-${thread.id}`}
+                          name="body"
+                          required
+                          maxLength={5000}
+                          rows={2}
+                          placeholder="Reply to the client…"
+                          className="w-full rounded-md border border-line bg-card px-3 py-2 text-sm text-ink placeholder:text-ink-faint"
+                        />
+                        <button
+                          type="submit"
+                          className="rounded-md bg-emerald px-3 py-1.5 text-xs font-medium text-ivory-ink transition-colors hover:bg-emerald-deep"
+                        >
+                          Send reply
+                        </button>
+                      </form>
+                    ) : (
+                      <p className="mt-2 text-[11px] text-ink-faint">Thread closed — reopen to continue.</p>
+                    )}
                   </div>
                 ))}
               </div>
             )}
+
+            <form
+              action={openThreadAction.bind(null, clientId)}
+              className="mt-5 space-y-2 border-t border-line/70 pt-4"
+            >
+              <p className="text-xs font-medium text-ink-soft">Start a new conversation</p>
+              <input
+                name="subject"
+                required
+                maxLength={200}
+                placeholder="Subject"
+                className="w-full rounded-md border border-line bg-card px-3 py-2 text-sm text-ink placeholder:text-ink-faint"
+              />
+              <textarea
+                name="body"
+                required
+                maxLength={5000}
+                rows={2}
+                placeholder="First message to the client…"
+                className="w-full rounded-md border border-line bg-card px-3 py-2 text-sm text-ink placeholder:text-ink-faint"
+              />
+              <button
+                type="submit"
+                className="rounded-md bg-emerald px-3 py-1.5 text-xs font-medium text-ivory-ink transition-colors hover:bg-emerald-deep"
+              >
+                Start conversation
+              </button>
+            </form>
           </SectionCard>
 
           <SectionCard title="Notes" subtitle="Internal — never visible in the client portal">
