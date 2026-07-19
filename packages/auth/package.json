@@ -5,7 +5,8 @@
   "type": "module",
   "description": "Auth provider adapter (Clerk accepted, ADR-0006; activation founder-gated on credentials). Provider-neutral session contract, fail-closed guards, and the demo provider for the synthetic prototype. Role/membership authority stays with organization_members.",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./webhook": "./src/webhook.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
@@ -14,6 +15,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@types/node": "^22.10.2",
     "eslint": "^9.39.5",
     "typescript": "^5.9.2",
     "typescript-eslint": "^8.64.0",
