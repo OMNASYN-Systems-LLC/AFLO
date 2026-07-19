@@ -17,14 +17,19 @@ import {
 } from "drizzle-orm/pg-core";
 import {
   actionStatusEnum,
+  agentNameEnum,
+  agentStatusEnum,
+  aiReviewStatusEnum,
   appointmentChannelEnum,
   appointmentStatusEnum,
   clientKindEnum,
   clientStatusEnum,
+  communicationStatusEnum,
   consentTypeEnum,
   creditScoreSourceEnum,
   documentReviewStatusEnum,
   documentTypeEnum,
+  educationReviewStatusEnum,
   goalCategoryEnum,
   incomeStabilityEnum,
   intakeStatusEnum,
@@ -32,7 +37,12 @@ import {
   memberRoleEnum,
   milestoneStatusEnum,
   monthlyActionCategoryEnum,
+  notificationChannelEnum,
+  notificationTypeEnum,
   outboxStatusEnum,
+  partnerCategoryEnum,
+  partnerReferralStatusEnum,
+  referralOutcomeEnum,
   reportStatusEnum,
   roadmapStatusEnum,
 } from "./enums";
@@ -42,10 +52,13 @@ import {
  * and the client-workflow tables. Reconciled to the implemented model. Phase A1
  * added the workflow tables for the already-implemented domains (readiness,
  * financial/credit profiles, goals, roadmaps + milestones, monthly actions,
- * documents, appointments, quarterly reports, notes, round-up simulator). The
- * sibling-package tables (partners, referrals, education, notifications,
- * communications, ai_runs, handoff packages) land in the follow-up slice; the
- * Neon connection and repository swap are gated on DATABASE_URL.
+ * documents, appointments, quarterly reports, notes, round-up simulator) and
+ * Phase A1b added the sibling-package + AI tables (partners, referrals with the
+ * inline neutrality record, education assignments, notification preferences,
+ * communications log, ai_runs agent-envelope provenance, and signed handoff
+ * packages). Tables for unbuilt domains (conversation/resolution/provider/card)
+ * stay deferred. The Neon connection and repository swap are gated on
+ * DATABASE_URL; RLS DDL is the next defense-in-depth slice.
  *
  * AFLO never stores raw PII: phone and date-of-birth columns are
  * application-layer-encrypted bytea (never plaintext), and no card, SSN, or
@@ -385,8 +398,8 @@ export const roadmaps = pgTable(
     title: text("title").notNull(),
     status: roadmapStatusEnum("status").notNull().default("draft"),
     stageAtCreation: lifecycleStageEnum("stage_at_creation").notNull(),
-    /** Provenance when drafted by the roadmap-agent; FK to ai_runs added in the AI-tables slice. */
-    aiRunId: uuid("ai_run_id"),
+    /** Provenance when drafted by the roadmap-agent (ai_runs); null = manually authored. */
+    aiRunId: uuid("ai_run_id").references(() => aiRuns.id, { onDelete: "set null" }),
     createdByMemberId: uuid("created_by_member_id")
       .notNull()
       .references(() => organizationMembers.id, { onDelete: "restrict" }),
@@ -515,8 +528,8 @@ export const quarterlyReports = pgTable(
     stageAtGeneration: lifecycleStageEnum("stage_at_generation").notNull(),
     highlights: jsonb("highlights").notNull().default(sql`'[]'::jsonb`),
     focusForNextQuarter: text("focus_for_next_quarter").notNull().default(""),
-    /** Provenance when drafted by the report-agent; FK to ai_runs added in the AI-tables slice. */
-    aiRunId: uuid("ai_run_id"),
+    /** Provenance when drafted by the report-agent (ai_runs); null = manually authored. */
+    aiRunId: uuid("ai_run_id").references(() => aiRuns.id, { onDelete: "set null" }),
     approvedByMemberId: uuid("approved_by_member_id").references(() => organizationMembers.id, {
       onDelete: "set null",
     }),
@@ -587,6 +600,231 @@ export const virtualTransactions = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [index("idx_vtx_org_client_occurred").on(t.organizationId, t.clientId, t.occurredOn)],
+);
+
+// ===========================================================================
+// Phase A1b — sibling-package + AI tables (partner directory/referrals,
+// education, notifications/communications, agent-envelope provenance, and
+// signed handoff packages). Every tenant-owned row carries organization_id.
+// ===========================================================================
+
+/**
+ * Agent-envelope provenance (Credit Intelligence Engine). One row per agent
+ * run, storing the full canonical AgentEnvelope. INVARIANT (enforced by the
+ * orchestrator, mirrored here): a non-empty `prohibited_actions_detected`
+ * forces `status = 'blocked'`, writes an audit event, and keeps the output out
+ * of every review queue. Agents never mutate verified facts or execute
+ * regulated actions.
+ */
+export const aiRuns = pgTable(
+  "ai_runs",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "restrict" }),
+    clientId: uuid("client_id")
+      .notNull()
+      .references(() => clients.id, { onDelete: "restrict" }),
+    agentName: agentNameEnum("agent_name").notNull(),
+    agentVersion: text("agent_version").notNull(),
+    status: agentStatusEnum("status").notNull(),
+    confidence: numeric("confidence", { precision: 4, scale: 3 }).notNull(),
+    factsUsed: jsonb("facts_used").notNull().default(sql`'[]'::jsonb`),
+    missingFacts: jsonb("missing_facts").notNull().default(sql`'[]'::jsonb`),
+    ruleVersionsUsed: jsonb("rule_versions_used").notNull().default(sql`'[]'::jsonb`),
+    reasonCodes: jsonb("reason_codes").notNull().default(sql`'[]'::jsonb`),
+    proposedActions: jsonb("proposed_actions").notNull().default(sql`'[]'::jsonb`),
+    prohibitedActionsDetected: jsonb("prohibited_actions_detected").notNull().default(sql`'[]'::jsonb`),
+    requiresHumanReview: boolean("requires_human_review").notNull().default(true),
+    reviewStatus: aiReviewStatusEnum("review_status").notNull().default("pending_review"),
+    /** The full canonical AgentEnvelope (single source of truth for the run). */
+    responseEnvelope: jsonb("response_envelope").notNull(),
+    reviewedByMemberId: uuid("reviewed_by_member_id").references(() => organizationMembers.id, {
+      onDelete: "set null",
+    }),
+    reviewedAt: timestamp("reviewed_at", { withTimezone: true }),
+    ...timestamps,
+  },
+  (t) => [index("idx_ai_runs_org_client").on(t.organizationId, t.clientId, t.reviewStatus)],
+);
+
+/**
+ * Partner directory. Synthetic in dev — no real partner names or compensation
+ * figures in code (ADR-0007). `non_commercial` marks options AFLO earns nothing
+ * from (surfaced first by the neutrality engine).
+ */
+export const partners = pgTable(
+  "partners",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    category: partnerCategoryEnum("category").notNull(),
+    licensingNote: text("licensing_note").notNull().default(""),
+    nonCommercial: boolean("non_commercial").notNull().default(false),
+    compensationDisclosure: text("compensation_disclosure").notNull().default(""),
+    eligibilityCriteria: text("eligibility_criteria").notNull().default(""),
+    estimatedUserCost: text("estimated_user_cost").notNull().default(""),
+    keyRisks: text("key_risks").notNull().default(""),
+    active: boolean("active").notNull().default(true),
+    ...timestamps,
+  },
+  (t) => [index("idx_partners_org_active").on(t.organizationId, t.active)],
+);
+
+/**
+ * Tracked partner referrals (partner.v1.0.0). The eight-field neutrality record
+ * (ADR-0007 §3) is captured immutably at creation as inline jsonb; the store
+ * refuses creation without a complete validated record. `outcome` is a
+ * staff observation, never an approval. Compensation never touches readiness.
+ */
+export const partnerReferrals = pgTable(
+  "partner_referrals",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    clientId: uuid("client_id")
+      .notNull()
+      .references(() => clients.id, { onDelete: "cascade" }),
+    partnerId: uuid("partner_id")
+      .notNull()
+      .references(() => partners.id, { onDelete: "restrict" }),
+    status: partnerReferralStatusEnum("status").notNull().default("suggested"),
+    /** The eight-field NeutralityRecord, immutable after creation. */
+    neutrality: jsonb("neutrality").notNull(),
+    outcome: referralOutcomeEnum("outcome"),
+    outcomeNote: text("outcome_note"),
+    createdByMemberId: uuid("created_by_member_id")
+      .notNull()
+      .references(() => organizationMembers.id, { onDelete: "restrict" }),
+    sharedAt: timestamp("shared_at", { withTimezone: true }),
+    ...timestamps,
+  },
+  (t) => [index("idx_referrals_org_client").on(t.organizationId, t.clientId)],
+);
+
+/**
+ * ΛFLO Wealth Academy assignments with full provenance. Completion is
+ * educational only — it never gates any regulated product. One assignment per
+ * lesson per client (content_version records the version given).
+ */
+export const educationAssignments = pgTable(
+  "education_assignments",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    clientId: uuid("client_id")
+      .notNull()
+      .references(() => clients.id, { onDelete: "cascade" }),
+    lessonId: text("lesson_id").notNull(),
+    contentVersion: text("content_version").notNull(),
+    trigger: text("trigger").notNull(),
+    reasonCode: text("reason_code").notNull(),
+    ruleVersion: text("rule_version").notNull(),
+    aiRunId: uuid("ai_run_id").references(() => aiRuns.id, { onDelete: "set null" }),
+    assignedAt: timestamp("assigned_at", { withTimezone: true }).notNull().defaultNow(),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+    /** 0..1 fraction, or null if the lesson has no knowledge check. */
+    knowledgeCheckScore: numeric("knowledge_check_score", { precision: 4, scale: 3 }),
+    staffReviewStatus: educationReviewStatusEnum("staff_review_status").notNull().default("not_required"),
+    ...timestamps,
+  },
+  (t) => [uniqueIndex("uq_education_client_lesson").on(t.clientId, t.lessonId)],
+);
+
+/**
+ * User-controlled notification-channel preferences (append-only, latest-wins
+ * per (user, type, channel)). Enriched with organization_id for RLS, as the
+ * consent_records table does over the leaner runtime record.
+ */
+export const notificationPreferences = pgTable(
+  "notification_preferences",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "restrict" }),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "restrict" }),
+    notificationType: notificationTypeEnum("notification_type").notNull(),
+    channel: notificationChannelEnum("channel").notNull(),
+    enabled: boolean("enabled").notNull(),
+    recordedAt: timestamp("recorded_at", { withTimezone: true }).notNull().defaultNow(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("idx_notif_pref_org_user").on(t.organizationId, t.userId, t.notificationType, t.channel)],
+);
+
+/**
+ * Communication history / delivery log (append-only). A suppressed row carries
+ * no rendered subject — only the reason it was withheld. Full message bodies
+ * stay with the provider (Resend), never the DB.
+ */
+export const communications = pgTable(
+  "communications",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    clientId: uuid("client_id")
+      .notNull()
+      .references(() => clients.id, { onDelete: "cascade" }),
+    notificationType: notificationTypeEnum("notification_type").notNull(),
+    channel: notificationChannelEnum("channel").notNull(),
+    status: communicationStatusEnum("status").notNull(),
+    subject: text("subject"),
+    suppressionReason: text("suppression_reason"),
+    occurredAt: timestamp("occurred_at", { withTimezone: true }).notNull().defaultNow(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("idx_comms_org_client_occurred").on(t.organizationId, t.clientId, t.occurredAt)],
+);
+
+/**
+ * Signed verification handoff packages (security.v1.0.0). The signed content
+ * (payload/digest/signature/key_id/algorithm) is immutable; only revoked_at
+ * mutates in place, matching the domain. `payload_digest` is NOT unique — a
+ * re-issue of an identical payload after revocation shares the same SHA-256 and
+ * must not collide. `consent_scope` is a scope descriptor string, not a FK.
+ * Payload is verified facts only — no SSN/bank/raw-credit data.
+ */
+export const handoffPackages = pgTable(
+  "handoff_packages",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "restrict" }),
+    clientId: uuid("client_id")
+      .notNull()
+      .references(() => clients.id, { onDelete: "restrict" }),
+    schemaVersion: text("schema_version").notNull(),
+    recipientScope: text("recipient_scope").notNull(),
+    /** Scope descriptor for the authorizing consent (e.g. "partner_data_sharing@…"). */
+    consentScope: text("consent_scope").notNull(),
+    /** HandoffFacts — verified facts only, never raw regulated data. */
+    payload: jsonb("payload").notNull(),
+    /** SHA-256 hex of the canonical payload (integrity, not the signature). Non-unique. */
+    payloadDigest: varchar("payload_digest", { length: 64 }).notNull(),
+    signature: text("signature").notNull(),
+    keyId: text("key_id").notNull(),
+    algorithm: text("algorithm").notNull(),
+    issuedAt: timestamp("issued_at", { withTimezone: true }).notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    ruleVersion: text("rule_version").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("idx_handoff_org_client_digest").on(t.organizationId, t.clientId, t.payloadDigest)],
 );
 
 // Referenced by later-slice tables; exported so migrations stay append-only.

@@ -15,7 +15,9 @@
     "db:migrate": "drizzle-kit migrate"
   },
   "dependencies": {
+    "@aflo/ai": "workspace:*",
     "@aflo/notifications": "workspace:*",
+    "@aflo/partner-marketplace": "workspace:*",
     "@aflo/rules": "workspace:*",
     "drizzle-orm": "^0.45.2"
   },
