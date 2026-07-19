@@ -77,9 +77,15 @@ import {
   summarizeCreditReport,
   type NormalizedCreditReport,
 } from "@aflo/credit-data";
+import {
+  OPPORTUNITY_REGISTRY,
+  matchNoticeToProfile,
+  toClientSafeSummary,
+} from "@aflo/opportunity-intelligence";
 import { toReadinessFacts } from "../domain/facts";
 import { buildResolutionReadout, type ResolutionReadout } from "../domain/resolution";
 import type { CreditReportSummary } from "../domain/credit";
+import type { ClientOpportunity } from "../domain/opportunity";
 import type {
   AdminNote,
   Appointment,
@@ -2188,6 +2194,57 @@ export class AfloStore {
       facts: summarizeCreditReport(report, now),
       staffVerified: false,
     };
+  }
+
+  /**
+   * Public opportunity notices worth surfacing for one client — a pure READ
+   * over `@aflo/opportunity-intelligence`. It runs `matchNoticeToProfile`
+   * against the client's goal categories and jurisdiction (federal by default —
+   * the client's state is not captured yet, so state programs stay unsurfaced,
+   * fail-closed), keeps only `relevant` notices, and renders each via
+   * `toClientSafeSummary`. Legal/claims notices (`requiresReview`) carry a NULL
+   * `clientSafe` — they are shown to staff but never auto-projected to a client
+   * (roadmap §4 human-review gate). A notice that cannot render client-safe is
+   * dropped (fail closed). Mutates nothing, emits no event, writes no audit.
+   */
+  opportunityNoticesFor(
+    organizationId: string,
+    clientId: string,
+    now: Date = this.clock(),
+    jurisdiction = "US",
+  ): ClientOpportunity[] {
+    const record = this.findRecord(organizationId, clientId);
+    if (!record) return [];
+
+    const goalCategories = this.db.goals.filter((g) => g.clientId === record.id).map((g) => g.category);
+    const signals = { jurisdiction, goalCategories, now };
+
+    const surfaced: ClientOpportunity[] = [];
+    for (const notice of OPPORTUNITY_REGISTRY) {
+      const match = matchNoticeToProfile(notice, signals);
+      if (!match.relevant) continue;
+
+      const base = {
+        noticeId: notice.id,
+        category: notice.category,
+        title: notice.title,
+        reasonCodes: match.reasonCodes,
+        requiresReview: match.requiresReview,
+        sourceUrl: notice.citation.url,
+      };
+
+      if (match.requiresReview) {
+        // Legal/claims: shown to staff, never client-projected without approval.
+        surfaced.push({ ...base, clientSafe: null });
+        continue;
+      }
+      try {
+        surfaced.push({ ...base, clientSafe: toClientSafeSummary(notice) });
+      } catch {
+        // Fail closed: a notice that cannot render client-safe is not surfaced.
+      }
+    }
+    return surfaced;
   }
 
   /**

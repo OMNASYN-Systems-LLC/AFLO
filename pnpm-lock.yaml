@@ -357,6 +357,9 @@ importers:
       '@aflo/notifications':
         specifier: workspace:*
         version: link:../notifications
+      '@aflo/opportunity-intelligence':
+        specifier: workspace:*
+        version: link:../opportunity-intelligence
       '@aflo/partner-marketplace':
         specifier: workspace:*
         version: link:../partner-marketplace

@@ -118,6 +118,7 @@ export default async function ClientDetailPage({
   const intakeDefinition = store.intakeDefinitionFor(DEMO_ORG_ID);
   const resolutionReadout = store.resolutionReadoutFor(DEMO_ORG_ID, clientId, demoNow);
   const creditReport = await store.creditReportSummaryFor(DEMO_ORG_ID, clientId, demoNow);
+  const opportunities = store.opportunityNoticesFor(DEMO_ORG_ID, clientId, demoNow);
   const upcomingAppointments = store
     .database()
     .appointments.filter((ap) => ap.clientId === clientId && new Date(ap.scheduledAt) > demoNow)
@@ -1376,6 +1377,60 @@ export default async function ClientDetailPage({
                 </button>
               </form>
             ) : null}
+          </SectionCard>
+
+          <SectionCard
+            title="Opportunity notices"
+            subtitle="Public programs that may relate — hedged pointers, never eligibility claims"
+          >
+            {opportunities.length === 0 ? (
+              <EmptyState message="No public notices currently match this client's profile." />
+            ) : (
+              <ul className="space-y-3">
+                {opportunities.map((o) => (
+                  <li key={o.noticeId} className="rounded-md border border-line bg-card px-3.5 py-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <p className="text-sm font-medium text-ink">{o.title}</p>
+                      {o.requiresReview ? (
+                        <Badge tone="warn" label="Staff review required" />
+                      ) : (
+                        <Badge tone="calm" label="May relate" />
+                      )}
+                    </div>
+                    <p className="mt-0.5 text-[11px] capitalize text-ink-faint">
+                      {o.category.replace(/_/g, " ")}
+                    </p>
+                    {o.clientSafe ? (
+                      <>
+                        <p className="mt-2 text-xs text-ink-soft">{o.clientSafe.message}</p>
+                        {o.clientSafe.reviewEligibilityFields.length > 0 ? (
+                          <p className="mt-1.5 text-[11px] text-ink-faint">
+                            Check: {o.clientSafe.reviewEligibilityFields.join(" · ")}
+                          </p>
+                        ) : null}
+                      </>
+                    ) : (
+                      <p className="mt-2 rounded-md border border-line bg-status-warn-tint px-3 py-2 text-[11px] leading-relaxed text-gold-deep">
+                        A legal/claims notice — not shown to the client until a staff member reviews
+                        it. Whether any account relates is set solely by the official terms.
+                      </p>
+                    )}
+                    <a
+                      href={o.sourceUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="mt-2 inline-block text-[11px] font-medium text-emerald hover:text-emerald-deep"
+                    >
+                      Official source →
+                    </a>
+                  </li>
+                ))}
+              </ul>
+            )}
+            <p className="mt-3 text-[11px] leading-relaxed text-ink-faint">
+              Surfaced by jurisdiction and goal alignment — a pointer to review the official terms,
+              never a determination of eligibility or amount.
+            </p>
           </SectionCard>
 
           <SectionCard title="Notes" subtitle="Internal — never visible in the client portal">

@@ -2,6 +2,7 @@ export * from "./domain/types";
 export * from "./domain/facts";
 export * from "./domain/resolution";
 export * from "./domain/credit";
+export * from "./domain/opportunity";
 export * from "./events";
 export * from "./outbox";
 export * from "./store";
@@ -17,6 +18,7 @@ export * from "@aflo/rules";
 export * from "@aflo/ai";
 export * from "@aflo/credit-data";
 export * from "@aflo/notifications";
+export * from "@aflo/opportunity-intelligence";
 export * from "@aflo/academy";
 export * from "@aflo/partner-marketplace";
 // Security types only (type-only re-export): the signing functions use
