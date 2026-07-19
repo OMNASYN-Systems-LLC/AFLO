@@ -22,6 +22,11 @@ export interface AfloIdentity {
   clerkUserId: string;
   accountStatus: AccountStatus;
   isPlatformAdmin: boolean;
+  /**
+   * The account's session-revocation cutoff (account.ts): a session issued before
+   * this instant no longer resolves. Absent/null means nothing is revoked.
+   */
+  sessionsInvalidatedBeforeIso?: string | null;
 }
 
 /** One `organization_members` row — a user's staff-role tie to an organization. */

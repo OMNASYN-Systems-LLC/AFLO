@@ -14,6 +14,7 @@
  * fail-closed guard — all credential-free.
  */
 
+import { isSessionRevoked } from "./account";
 import type { AccountStatus, MembershipStatus, Principal } from "./authorization";
 import type { AfloIdentity, ClientLink, Membership } from "./identity";
 import type { Permission } from "./permissions";
@@ -64,6 +65,8 @@ export interface SessionContextInput {
   clientLink?: ClientLink | null;
   /** Optional staff assignment scoping (null/omitted = scoping off). */
   assignedClientIds?: readonly string[] | null;
+  /** When the current session was issued — checked against the revocation cutoff. */
+  sessionIssuedAtIso?: string;
 }
 
 /**
@@ -80,6 +83,17 @@ export function buildSessionContext(input: SessionContextInput): SessionContext 
   // Fail closed at the session layer, not only at the engine: a degenerate
   // identity (no ΛFLO user) is never a resolved session.
   if (!isNonEmpty(identity.afloUserId)) return null;
+
+  // A disabled account gets NO session at all (not merely an authorize() denial).
+  if (identity.accountStatus === "disabled") return null;
+
+  // A session issued before the account's revocation cutoff no longer resolves.
+  if (
+    input.sessionIssuedAtIso !== undefined &&
+    isSessionRevoked(input.sessionIssuedAtIso, identity.sessionsInvalidatedBeforeIso ?? null)
+  ) {
+    return null;
+  }
 
   let role: Role;
   let activeOrganizationId: string | null = null;
