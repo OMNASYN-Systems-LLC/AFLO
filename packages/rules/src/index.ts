@@ -10,5 +10,6 @@ export * from "./review";
 export * from "./roadmap";
 export * from "./engagement";
 export * from "./intake";
+export * from "./messaging";
 export * from "./pipeline";
 export * from "./registry";
