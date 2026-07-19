@@ -61,17 +61,27 @@ Two constraints shaped the design:
   readiness snapshot (runtime mode + a boolean per integration + the selected
   provider modes). It reports; it never exposes a secret value.
 
-## What this slice does NOT do (sequenced follow-ups)
+## Follow-ups (status)
 
-- **Boot-time enforcement is not wired yet.** `assertRuntimeReady` exists and is
-  tested, but nothing calls it at startup. Wiring it (Next `instrumentation.ts`
-  `register()` for web; the worker entrypoint) is the immediate follow-up. It is
-  **safe** to wire because production mode is an explicit `APP_ENV` opt-in — the
-  current prototype (no `APP_ENV`) resolves to `development` and never throws.
-- **`migration current`** is not reported (needs a live DB connection —
+- **Boot-time enforcement — LANDED for web.** `apps/web/src/instrumentation.ts`
+  `register()` calls `assertRuntimeReady(process.env)` on server startup (Node.js
+  runtime only). Verified end-to-end: with `APP_ENV=production` and nothing
+  configured, `register()` throws, Next.js fails to prepare the server, and every
+  request returns HTTP 500 — the app refuses to serve rather than silently
+  running on demo/mock. With `APP_ENV` unset (the prototype) it resolves to
+  `development`, never throws, and boots normally (all e2e pass).
+- **Boot-time enforcement — DEFERRED for the worker.** `apps/worker` is a no-op
+  stub with no dependencies that builds via plain `tsc → node dist`; it cannot
+  import the TypeScript-source contract without a JS build story, and its real
+  operation is credential-blocked. Worker boot enforcement folds into the
+  worker's real-operation slice (when it gains `@aflo/shared` + durable jobs).
+- **Preview-branch detection — STRENGTHENED.** An explicit `DATABASE_BRANCH` is
+  now the authoritative signal (`isPreviewDatabase`): `DATABASE_BRANCH=preview`
+  is rejected in production even when the Neon host string is opaque, and
+  `DATABASE_BRANCH=main` overrides a preview-looking URL (no false positive). The
+  URL substring heuristic remains the fallback when `DATABASE_BRANCH` is unset.
+- **`migration current`** is still not reported (needs a live DB connection —
   credential-blocked).
-- **Preview-branch detection** is a conservative URL substring heuristic; an
-  explicit branch identifier can tighten it later.
 
 ## Alternatives Considered
 
