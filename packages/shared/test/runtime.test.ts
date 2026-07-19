@@ -128,7 +128,9 @@ describe("resolveRuntimeConfig — production fails closed", () => {
   });
 
   it("requires Resend credentials when EMAIL_MODE=resend", () => {
-    const { RESEND_API_KEY: _k, RESEND_FROM_EMAIL: _f, ...noResend } = PROD_OK;
+    const noResend: EnvLike = { ...PROD_OK };
+    delete noResend.RESEND_API_KEY;
+    delete noResend.RESEND_FROM_EMAIL;
     const result = resolveRuntimeConfig(noResend);
     expect(result.problems.join()).toMatch(/RESEND_API_KEY and RESEND_FROM_EMAIL are required/);
   });
