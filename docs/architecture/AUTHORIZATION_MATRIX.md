@@ -77,6 +77,7 @@ Columns: **PA** = Platform Admin, **OO** = Organization Owner, **OA** = Organiza
 | Leads | R | CRUD | CRUD | CRUD | – | – | R | R |
 | Clients (CRM record) | R | CRUD | CRUD | CRU | R (own) | – | R | R |
 | Notes & communications | R | CRUD | CRUD | CRU | – | – | CR ᵍ | R ᵖ |
+| Secure messaging (client↔staff threads) † | R | CRUD | CRUD | CRUD | CRU (own) | – | C ᵍ | R ᵖ |
 | Financial facts | R | CRU | CRU | CRU | CRU (own) ʰ | – | R | R (approved facts only) |
 | Goals | R | CRU | CRU | CRU | CRU (own) | – | R | R |
 | Readiness assessments | R | R / A | R / A | R / A | R (own) | – | C ⁱ | R |
@@ -91,6 +92,7 @@ Columns: **PA** = Platform Admin, **OO** = Organization Owner, **OA** = Organiza
 | Referrals | R | CRU / A | CRU / A | CRU | R (own) | R (shared) | R | R |
 | Engagement analytics | R | R | R | R | – | – | CR ⁱ | R |
 | Round-up simulator | R | R | R | R | CRU (own) | – | C ⁱ | R |
+| Billing (packages, invoices, subscriptions) ‡ | R | CRU | CRU | – | – | – | R | – |
 | AI runs & recommendations | R | R / A | R / A | R / A | R (own, approved) ᵐ | – | C ⁱ | C ⁿ |
 | Audit events | R / E | R (own org) | R (own org) | – | – | – | C | – |
 | Consent & data-sharing grants | R | R | R | R | CRU (own) ᵒ | – | R | R |
@@ -113,6 +115,8 @@ Columns: **PA** = Platform Admin, **OO** = Organization Owner, **OA** = Organiza
 - **n — See §5.** The AI service's *only* create rights.
 - **o — Consent is client-controlled.** Clients grant and revoke consent and data-sharing records for their own data. Revocation is honored prospectively and audited; consent history is never deleted.
 - **p — AI reads communication metadata only.** The AI orchestration service has scoped read access to communication **metadata** (timestamps, channel, direction) so the engagement-agent can analyze inactivity — never message bodies, subjects, or staff note content.
+- **† — Secure messaging is client-facing, unlike staff-internal notes.** Client↔staff message threads are a distinct resource family from "Notes & communications" (which is staff-internal, `CL = –`). A client may create and read **their own** threads (`message.send`/`message.read`, ownership-scoped); staff also assign and close threads (`message.assign`/`message.close`). This is why the authorization engine tags `message.*` as **client-scoped** — a message resource always carries a `clientId`, and a missing one fails closed.
+- **‡ — Billing is org-administered; execution stays with Stripe.** Only the Owner and Organization Admin read and manage billing (`billing.read`/`billing.manage` — service packages, invoices, subscriptions). Staff and clients hold no billing permission in this vocabulary (clients view their own invoices through the portal projection, not this token). ΛFLO never stores payment instruments or executes charges — Stripe is the system of record (CLAUDE.md). Billing is **org-scoped**, so the per-client ownership/assignment gates do not apply.
 
 ---
 

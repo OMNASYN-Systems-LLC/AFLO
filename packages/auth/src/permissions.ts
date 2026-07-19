@@ -1,0 +1,105 @@
+/**
+ * The explicit permission vocabulary (founder directive PHASE 4).
+ *
+ * Protected operations check a PERMISSION, never a role name directly — a role
+ * maps to a set of permissions (see policies.ts), so the boundary can be tuned
+ * without rewriting call sites. Permissions are `resource.action` strings.
+ */
+
+export const PERMISSIONS = [
+  // Leads / CRM intake
+  "lead.read",
+  "lead.create",
+  "lead.update",
+  "lead.convert",
+  // Clients
+  "client.read",
+  "client.update",
+  "client.assign",
+  // Intake / onboarding
+  "intake.read",
+  "intake.review",
+  "intake.approve",
+  // Roadmaps
+  "roadmap.create",
+  "roadmap.review",
+  "roadmap.approve",
+  "roadmap.publish",
+  // Tasks / monthly actions
+  "task.assign",
+  "task.verify",
+  // Documents
+  "document.request",
+  "document.read",
+  "document.review",
+  "document.download",
+  // Appointments
+  "appointment.manage",
+  "appointment.book",
+  // Secure messaging
+  "message.send",
+  "message.read",
+  "message.assign",
+  "message.close",
+  // Quarterly reports
+  "report.generate",
+  "report.review",
+  "report.publish",
+  // Billing
+  "billing.read",
+  "billing.manage",
+  // Organization administration
+  "organization.manage_members",
+  "organization.manage_settings",
+  // Audit
+  "audit.read",
+] as const;
+
+export type Permission = (typeof PERMISSIONS)[number];
+
+export function isPermission(value: string): value is Permission {
+  return (PERMISSIONS as readonly string[]).includes(value);
+}
+
+/**
+ * Permissions that operate on a SPECIFIC client's records (the resource carries a
+ * `clientId`). For these, the ownership gate (client role) and the assignment
+ * gate (staff scoping) require `resource.clientId` to be present AND matching — a
+ * missing `clientId` fails CLOSED, never open.
+ *
+ * Org-scoped permissions are deliberately absent: leads (no client yet), billing,
+ * `organization.*`, and `audit.read` legitimately carry no `clientId` and must
+ * not be blocked by the per-client gates. Keeping this an explicit allow-list
+ * means a new permission is org-scoped (the safe default) until listed here.
+ */
+export const CLIENT_SCOPED_PERMISSIONS: ReadonlySet<Permission> = new Set<Permission>([
+  "client.read",
+  "client.update",
+  "client.assign",
+  "intake.read",
+  "intake.review",
+  "intake.approve",
+  "roadmap.create",
+  "roadmap.review",
+  "roadmap.approve",
+  "roadmap.publish",
+  "task.assign",
+  "task.verify",
+  "document.request",
+  "document.read",
+  "document.review",
+  "document.download",
+  "appointment.manage",
+  "appointment.book",
+  "message.send",
+  "message.read",
+  "message.assign",
+  "message.close",
+  "report.generate",
+  "report.review",
+  "report.publish",
+]);
+
+export function isClientScopedPermission(permission: Permission): boolean {
+  return CLIENT_SCOPED_PERMISSIONS.has(permission);
+}
