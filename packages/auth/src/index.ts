@@ -8,3 +8,4 @@ export * from "./authorization";
 export * from "./identity";
 export * from "./session-context";
 export * from "./test-provider";
+export * from "./invitation";
