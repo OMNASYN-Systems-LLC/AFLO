@@ -21,6 +21,18 @@ function seedWithConsentNoReport(): SyntheticDatabase {
   return seed;
 }
 
+/** A seed where c-solomon KEEPS a synthetic report but REVOKES data-processing consent. */
+function seedReportButNoConsent(): SyntheticDatabase {
+  const seed = structuredClone(syntheticDatabase);
+  seed.consentRecords.push({
+    userId: "c-solomon",
+    consentType: "data_processing",
+    granted: false, // latest record wins → consent no longer active
+    recordedAt: "2026-07-17T00:00:00.000Z",
+  });
+  return seed;
+}
+
 describe("creditReportSummaryFor — display-only, consent-gated credit summary", () => {
   it("returns a summarized report for a consented client with a synthetic report", async () => {
     const store = makeStore();
@@ -48,6 +60,17 @@ describe("creditReportSummaryFor — display-only, consent-gated credit summary"
     const summary = await store.creditReportSummaryFor(ORG, "c-bell", NOW);
     expect(summary?.available).toBe(false);
     expect(summary?.reason).toBe("no_report");
+    expect(summary?.facts).toBeNull();
+  });
+
+  it("gates the DATA, not just missing data: a report exists but consent is revoked → no facts", async () => {
+    // The critical leak guard — consent is checked BEFORE the report is fetched,
+    // so a client whose report exists but whose consent is inactive still gets
+    // consent_required and NEVER the facts.
+    const store = makeStore(seedReportButNoConsent());
+    const summary = await store.creditReportSummaryFor(ORG, "c-solomon", NOW);
+    expect(summary?.available).toBe(false);
+    expect(summary?.reason).toBe("consent_required");
     expect(summary?.facts).toBeNull();
   });
 
