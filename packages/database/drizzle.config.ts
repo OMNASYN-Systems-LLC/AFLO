@@ -8,7 +8,11 @@ import { defineConfig } from "drizzle-kit";
  * lands; the URL enters via the provider dashboard, never the repo.
  */
 export default defineConfig({
-  schema: "./src/schema.ts",
+  // Include enums.ts so drizzle-kit discovers every pgEnum definition and
+  // emits its CREATE TYPE (it only registers enums exported from a file in
+  // this glob; schema.ts re-exported just one, so the rest were referenced by
+  // columns but never created — an invalid migration on a clean database).
+  schema: ["./src/schema.ts", "./src/enums.ts"],
   out: "./migrations",
   dialect: "postgresql",
   dbCredentials: {

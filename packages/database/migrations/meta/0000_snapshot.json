@@ -1,5 +1,5 @@
 {
-  "id": "e2637dc2-aed1-4f49-be9f-03e4a6e5ad9d",
+  "id": "c3d4844c-7b9f-4bc6-a51f-9c400036ab4a",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
@@ -1178,6 +1178,135 @@
         "completed",
         "cancelled",
         "no_show"
+      ]
+    },
+    "public.action_status": {
+      "name": "action_status",
+      "schema": "public",
+      "values": [
+        "todo",
+        "in_progress",
+        "done"
+      ]
+    },
+    "public.client_kind": {
+      "name": "client_kind",
+      "schema": "public",
+      "values": [
+        "lead",
+        "client"
+      ]
+    },
+    "public.client_status": {
+      "name": "client_status",
+      "schema": "public",
+      "values": [
+        "active",
+        "paused"
+      ]
+    },
+    "public.communication_status": {
+      "name": "communication_status",
+      "schema": "public",
+      "values": [
+        "sent",
+        "suppressed"
+      ]
+    },
+    "public.consent_type": {
+      "name": "consent_type",
+      "schema": "public",
+      "values": [
+        "terms_of_service",
+        "privacy_policy",
+        "data_processing",
+        "communication",
+        "partner_data_sharing"
+      ]
+    },
+    "public.document_review_status": {
+      "name": "document_review_status",
+      "schema": "public",
+      "values": [
+        "requested",
+        "uploaded",
+        "in_review",
+        "approved",
+        "needs_attention"
+      ]
+    },
+    "public.engagement_status": {
+      "name": "engagement_status",
+      "schema": "public",
+      "values": [
+        "active",
+        "cooling",
+        "at_risk",
+        "dormant"
+      ]
+    },
+    "public.intake_status": {
+      "name": "intake_status",
+      "schema": "public",
+      "values": [
+        "in_progress",
+        "completed"
+      ]
+    },
+    "public.lifecycle_stage": {
+      "name": "lifecycle_stage",
+      "schema": "public",
+      "values": [
+        "recovery",
+        "stabilization",
+        "credit_readiness",
+        "capital_readiness",
+        "acquisition",
+        "maintenance",
+        "growth",
+        "legacy"
+      ]
+    },
+    "public.member_role": {
+      "name": "member_role",
+      "schema": "public",
+      "values": [
+        "organization_owner",
+        "organization_admin",
+        "staff",
+        "client",
+        "partner_viewer"
+      ]
+    },
+    "public.outbox_status": {
+      "name": "outbox_status",
+      "schema": "public",
+      "values": [
+        "pending",
+        "processing",
+        "processed",
+        "failed",
+        "dead_letter"
+      ]
+    },
+    "public.report_status": {
+      "name": "report_status",
+      "schema": "public",
+      "values": [
+        "draft",
+        "ready_for_review",
+        "published"
+      ]
+    },
+    "public.roadmap_status": {
+      "name": "roadmap_status",
+      "schema": "public",
+      "values": [
+        "draft",
+        "staff_review",
+        "approved",
+        "published",
+        "archived"
       ]
     }
   },

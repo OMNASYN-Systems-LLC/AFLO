@@ -1,4 +1,17 @@
 CREATE TYPE "public"."appointment_status" AS ENUM('scheduled', 'completed', 'cancelled', 'no_show');--> statement-breakpoint
+CREATE TYPE "public"."action_status" AS ENUM('todo', 'in_progress', 'done');--> statement-breakpoint
+CREATE TYPE "public"."client_kind" AS ENUM('lead', 'client');--> statement-breakpoint
+CREATE TYPE "public"."client_status" AS ENUM('active', 'paused');--> statement-breakpoint
+CREATE TYPE "public"."communication_status" AS ENUM('sent', 'suppressed');--> statement-breakpoint
+CREATE TYPE "public"."consent_type" AS ENUM('terms_of_service', 'privacy_policy', 'data_processing', 'communication', 'partner_data_sharing');--> statement-breakpoint
+CREATE TYPE "public"."document_review_status" AS ENUM('requested', 'uploaded', 'in_review', 'approved', 'needs_attention');--> statement-breakpoint
+CREATE TYPE "public"."engagement_status" AS ENUM('active', 'cooling', 'at_risk', 'dormant');--> statement-breakpoint
+CREATE TYPE "public"."intake_status" AS ENUM('in_progress', 'completed');--> statement-breakpoint
+CREATE TYPE "public"."lifecycle_stage" AS ENUM('recovery', 'stabilization', 'credit_readiness', 'capital_readiness', 'acquisition', 'maintenance', 'growth', 'legacy');--> statement-breakpoint
+CREATE TYPE "public"."member_role" AS ENUM('organization_owner', 'organization_admin', 'staff', 'client', 'partner_viewer');--> statement-breakpoint
+CREATE TYPE "public"."outbox_status" AS ENUM('pending', 'processing', 'processed', 'failed', 'dead_letter');--> statement-breakpoint
+CREATE TYPE "public"."report_status" AS ENUM('draft', 'ready_for_review', 'published');--> statement-breakpoint
+CREATE TYPE "public"."roadmap_status" AS ENUM('draft', 'staff_review', 'approved', 'published', 'archived');--> statement-breakpoint
 CREATE TABLE "audit_events" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
 	"organization_id" uuid NOT NULL,
