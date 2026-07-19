@@ -40,6 +40,12 @@ export function roleFromMemberRole(memberRole: MemberRole): Role {
       return "organization_admin";
     case "staff":
       return "staff_advisor";
+    default: {
+      // Fail loud on an out-of-enum value (e.g. a bad DB row cast to MemberRole)
+      // rather than silently minting an undefined role.
+      const unexpected: never = memberRole;
+      throw new Error(`unknown member role: ${String(unexpected)}`);
+    }
   }
 }
 

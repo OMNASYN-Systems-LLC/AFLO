@@ -5,3 +5,6 @@ export * from "./permissions";
 export * from "./policies";
 export * from "./denial-reasons";
 export * from "./authorization";
+export * from "./identity";
+export * from "./session-context";
+export * from "./test-provider";
