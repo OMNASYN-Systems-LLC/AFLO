@@ -117,6 +117,7 @@ export default async function ClientDetailPage({
   const intake = store.intakeFor(DEMO_ORG_ID, clientId);
   const intakeDefinition = store.intakeDefinitionFor(DEMO_ORG_ID);
   const resolutionReadout = store.resolutionReadoutFor(DEMO_ORG_ID, clientId, demoNow);
+  const creditReport = await store.creditReportSummaryFor(DEMO_ORG_ID, clientId, demoNow);
   const upcomingAppointments = store
     .database()
     .appointments.filter((ap) => ap.clientId === clientId && new Date(ap.scheduledAt) > demoNow)
@@ -804,6 +805,51 @@ export default async function ClientDetailPage({
                 Request
               </button>
             </form>
+          </SectionCard>
+
+          <SectionCard
+            title="Credit report (synthetic)"
+            subtitle="Mock provider — not bureau data · never changes readiness"
+            action={<Badge tone="neutral" label="Synthetic" />}
+          >
+            {creditReport?.available && creditReport.facts ? (
+              <div className="space-y-3">
+                <div className="grid grid-cols-2 gap-3">
+                  <MiniStat
+                    label="Reported score"
+                    value={creditReport.facts.primaryScore !== null ? String(creditReport.facts.primaryScore) : "—"}
+                    hint={creditReport.facts.primaryScoreModel ?? undefined}
+                  />
+                  <MiniStat
+                    label="Utilization"
+                    value={creditReport.facts.utilizationPct !== null ? fmtPct(creditReport.facts.utilizationPct, 1) : "—"}
+                    hint="revolving"
+                  />
+                  <MiniStat label="Open tradelines" value={String(creditReport.facts.openTradelines)} />
+                  <MiniStat
+                    label="Hard inquiries"
+                    value={String(creditReport.facts.hardInquiriesTrailingYear)}
+                    hint="trailing year"
+                  />
+                </div>
+                <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-ink-soft">
+                  <dt className="text-ink-faint">Derogatory marks</dt>
+                  <dd className="text-right text-ink">{creditReport.facts.derogatoryMarks}</dd>
+                  <dt className="text-ink-faint">On-time rate</dt>
+                  <dd className="text-right text-ink">{fmtPct(creditReport.facts.onTimePaymentRate * 100, 0)}</dd>
+                </dl>
+                <p className="rounded-md border border-line bg-neutral-tint px-3 py-2 text-[11px] leading-relaxed text-ink-soft">
+                  Synthetic mock data ({creditReport.source})
+                  {creditReport.pulledAt ? `, pulled ${fmtDate(creditReport.pulledAt)}` : ""} —{" "}
+                  <span className="font-medium">not a bureau report</span>. Staff must verify; these
+                  figures never auto-update the credit profile or the readiness assessment.
+                </p>
+              </div>
+            ) : creditReport?.reason === "consent_required" ? (
+              <EmptyState message="Data-processing consent required before a credit-report summary can be shown." />
+            ) : (
+              <EmptyState message="No synthetic credit report on file." />
+            )}
           </SectionCard>
 
           <SectionCard title="Appointments">

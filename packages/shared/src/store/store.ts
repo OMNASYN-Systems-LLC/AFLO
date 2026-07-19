@@ -71,8 +71,15 @@ import {
 import { createEvent, type DomainEvent } from "../events";
 import { toOutboxRecord, type OutboxRecord } from "../outbox";
 import { syntheticDatabase, type SyntheticDatabase } from "../data/synthetic";
+import {
+  MockCreditDataProvider,
+  UnknownSubjectError,
+  summarizeCreditReport,
+  type NormalizedCreditReport,
+} from "@aflo/credit-data";
 import { toReadinessFacts } from "../domain/facts";
 import { buildResolutionReadout, type ResolutionReadout } from "../domain/resolution";
+import type { CreditReportSummary } from "../domain/credit";
 import type {
   AdminNote,
   Appointment,
@@ -505,12 +512,21 @@ export class AfloStore {
    */
   private readonly signingKey: SigningKeyPair = generateSigningKey();
   private counter = 0;
+  /**
+   * Provider-neutral credit-data source. In V1 it is ALWAYS the synthetic mock
+   * (`isProduction` false, no bureau). A real bureau adapter would drop in
+   * behind this same interface only under a reviewed contract (ADR-0007 §5).
+   */
+  private readonly creditProvider: MockCreditDataProvider;
 
   constructor(
     seed: SyntheticDatabase = syntheticDatabase,
     private readonly clock: () => Date = () => new Date(),
   ) {
     this.db = structuredClone(seed);
+    this.creditProvider = new MockCreditDataProvider(
+      Object.fromEntries(this.db.creditReports.map((r) => [r.subjectRef, r])),
+    );
   }
 
   /** Live view for repositories — mutations are visible to readers. */
@@ -2112,6 +2128,66 @@ export class AfloStore {
       documents: this.db.documents.filter((d) => d.clientId === record.id),
       now,
     });
+  }
+
+  /**
+   * A DISPLAY-ONLY credit-report summary for staff, from the provider-neutral
+   * credit-data seam. A pure READ that:
+   *   - fails closed on org scope (unknown/foreign-org client → null);
+   *   - is CONSENT-GATED on `data_processing` (absent consent → unavailable,
+   *     not the data);
+   *   - routes through the provider (the synthetic mock in V1 — `isProduction`
+   *     is always false, no bureau) and deterministically summarizes the report;
+   *   - mutates NOTHING, emits no event, writes no audit, and NEVER updates the
+   *     manual `CreditProfile` or the readiness inputs. Reported data here is
+   *     unverified; staff must verify before relying on it.
+   */
+  async creditReportSummaryFor(
+    organizationId: string,
+    clientId: string,
+    now: Date = this.clock(),
+  ): Promise<CreditReportSummary | null> {
+    const record = this.findRecord(organizationId, clientId);
+    if (!record) return null;
+
+    const base = {
+      clientId: record.id,
+      isProduction: false,
+      source: null,
+      pulledAt: null,
+      facts: null,
+      staffVerified: false as const,
+    };
+
+    if (!hasActiveConsent(this.db.consentRecords, record.id, "data_processing")) {
+      return { ...base, available: false, reason: "consent_required" };
+    }
+
+    let report: NormalizedCreditReport;
+    try {
+      report = await this.creditProvider.fetchReport({
+        subjectRef: record.id,
+        purpose: "consumer_disclosure",
+        requestedAt: now.toISOString(),
+      });
+    } catch (error) {
+      if (error instanceof UnknownSubjectError) {
+        return { ...base, available: false, reason: "no_report" };
+      }
+      throw error;
+    }
+
+    return {
+      clientId: record.id,
+      available: true,
+      reason: null,
+      // Mirrors the provider — false for the mock, and for every provider in V1.
+      isProduction: this.creditProvider.info().isProduction,
+      source: report.source,
+      pulledAt: report.pulledAt,
+      facts: summarizeCreditReport(report, now),
+      staffVerified: false,
+    };
   }
 
   /**

@@ -2,6 +2,7 @@ import type { AgentEnvelope } from "@aflo/ai";
 import type { ConsentRecord, NotificationPreferenceRecord } from "@aflo/notifications";
 import type { NeutralityRecord, Partner } from "@aflo/partner-marketplace";
 import type { HandoffPackage } from "@aflo/security";
+import { syntheticCreditReport, type NormalizedCreditReport } from "@aflo/credit-data";
 import {
   DEFAULT_INTAKE,
   INTAKE_RULES_VERSION,
@@ -74,6 +75,8 @@ export interface SyntheticDatabase {
   assessments: ReadinessAssessmentRecord[];
   financialProfiles: FinancialProfile[];
   creditProfiles: CreditProfile[];
+  /** Synthetic normalized credit reports (mock provider). Display-only; never feeds readiness. */
+  creditReports: NormalizedCreditReport[];
   goals: Goal[];
   roadmaps: Roadmap[];
   milestones: RoadmapMilestone[];
@@ -600,6 +603,48 @@ const consentRecords: ConsentRecord[] = [
   // for them fails closed on the consent gate.
   { userId: "c-whitaker", consentType: "partner_data_sharing", granted: true, recordedAt: daysAgo(20) },
   { userId: "c-solomon", consentType: "partner_data_sharing", granted: true, recordedAt: daysAgo(15) },
+  // Data-processing consent gates the (synthetic) credit-report summary. Whitaker
+  // and Solomon have granted it; every other client has not, so the summary
+  // fails closed on the consent gate for them.
+  { userId: "c-whitaker", consentType: "data_processing", granted: true, recordedAt: daysAgo(22) },
+  { userId: "c-solomon", consentType: "data_processing", granted: true, recordedAt: daysAgo(16) },
+];
+
+/**
+ * Synthetic normalized credit reports keyed by client. SYNTHETIC ONLY — the
+ * `source` is the mock provider, never a bureau; `subjectRef` is a client id,
+ * never a real SSN. These drive the staff credit-report summary (display-only,
+ * consent-gated) and never feed the readiness engine.
+ */
+const creditReports: NormalizedCreditReport[] = [
+  syntheticCreditReport({
+    subjectRef: "c-solomon",
+    pulledAt: daysAgo(9),
+    score: 672,
+    scoreModel: "vantagescore_3",
+    onTimePaymentRate: 0.96,
+    tradelines: [
+      { id: "tl-sol-1", type: "revolving", status: "open", balanceCents: 210000, creditLimitCents: 600000, monthlyPaymentCents: 7000, openedOn: daysAgo(1400), pastDueAmountCents: 0, isDerogatory: false },
+      { id: "tl-sol-2", type: "revolving", status: "open", balanceCents: 90000, creditLimitCents: 250000, monthlyPaymentCents: 3500, openedOn: daysAgo(800), pastDueAmountCents: 0, isDerogatory: false },
+      { id: "tl-sol-3", type: "auto", status: "open", balanceCents: 1450000, creditLimitCents: null, monthlyPaymentCents: 39000, openedOn: daysAgo(500), pastDueAmountCents: 0, isDerogatory: false },
+    ],
+    inquiries: [
+      { id: "iq-sol-1", type: "hard", occurredOn: daysAgo(120) },
+      { id: "iq-sol-2", type: "soft", occurredOn: daysAgo(40) },
+    ],
+  }),
+  syntheticCreditReport({
+    subjectRef: "c-whitaker",
+    pulledAt: daysAgo(6),
+    score: 742,
+    scoreModel: "fico_8",
+    onTimePaymentRate: 0.99,
+    tradelines: [
+      { id: "tl-whit-1", type: "revolving", status: "open", balanceCents: 60000, creditLimitCents: 1200000, monthlyPaymentCents: 2500, openedOn: daysAgo(2600), pastDueAmountCents: 0, isDerogatory: false },
+      { id: "tl-whit-2", type: "mortgage", status: "open", balanceCents: 24000000, creditLimitCents: null, monthlyPaymentCents: 165000, openedOn: daysAgo(1900), pastDueAmountCents: 0, isDerogatory: false },
+    ],
+    inquiries: [{ id: "iq-whit-1", type: "hard", occurredOn: daysAgo(300) }],
+  }),
 ];
 
 /**
@@ -948,6 +993,7 @@ export const syntheticDatabase: SyntheticDatabase = {
   assessments,
   financialProfiles,
   creditProfiles,
+  creditReports,
   goals,
   roadmaps,
   milestones,
