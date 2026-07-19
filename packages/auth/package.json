@@ -6,7 +6,8 @@
   "description": "Auth provider adapter (Clerk accepted, ADR-0006; activation founder-gated on credentials). Provider-neutral session contract, fail-closed guards, and the demo provider for the synthetic prototype. Role/membership authority stays with organization_members.",
   "exports": {
     ".": "./src/index.ts",
-    "./webhook": "./src/webhook.ts"
+    "./webhook": "./src/webhook.ts",
+    "./invitation-token": "./src/invitation-token.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
