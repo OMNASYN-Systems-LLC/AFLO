@@ -134,8 +134,11 @@ describe("resolveRuntimeConfig — production fails closed", () => {
     const flagged = resolveRuntimeConfig({ ...PROD_OK, DATABASE_BRANCH: "preview" });
     expect(flagged.ok).toBe(false);
     expect(flagged.problems.join()).toMatch(/preview branch/);
-    // An explicit main branch overrides a preview-looking URL (no false positive).
+    // Any preview-ish branch name fails closed (substring, not exact-match).
+    expect(isPreviewDatabase({ DATABASE_BRANCH: "preview-2" })).toBe(true);
+    // An explicit main/dev branch overrides a preview-looking URL (no false positive).
     expect(isPreviewDatabase({ DATABASE_BRANCH: "main", DATABASE_URL: "postgres://ep-preview-name/db" })).toBe(false);
+    expect(isPreviewDatabase({ DATABASE_BRANCH: "dev" })).toBe(false);
     expect(resolveRuntimeConfig({ ...PROD_OK, DATABASE_BRANCH: "main", DATABASE_URL: "postgres://ep-preview-name/db" }).ok).toBe(true);
     // Absent DATABASE_BRANCH, it falls back to the URL heuristic.
     expect(isPreviewDatabase({ DATABASE_URL: "postgres://ep-preview-x/db" })).toBe(true);

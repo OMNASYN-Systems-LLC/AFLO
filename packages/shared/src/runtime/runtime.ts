@@ -133,7 +133,10 @@ export function isPreviewDatabaseUrl(env: EnvLike): boolean {
  */
 export function isPreviewDatabase(env: EnvLike): boolean {
   const branch = env.DATABASE_BRANCH?.trim().toLowerCase();
-  if (branch) return branch === "preview";
+  // Substring, not exact-match: this fails closed for any preview-ish branch name
+  // (e.g. "preview-2") while the canonical production/dev branches ("main"/"dev")
+  // never contain "preview". An empty/whitespace value falls through to the URL heuristic.
+  if (branch) return branch.includes("preview");
   return isPreviewDatabaseUrl(env);
 }
 

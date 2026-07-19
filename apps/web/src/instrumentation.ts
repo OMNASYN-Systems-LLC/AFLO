@@ -14,6 +14,10 @@
  */
 export async function register(): Promise<void> {
   // Only the Node.js server runtime evaluates the contract (not the edge runtime).
+  // NOTE: the whole request surface is node today (no edge routes, no middleware).
+  // If an edge route or `middleware.ts` is ever added, it runs its own `register()`
+  // with NEXT_RUNTIME="edge" and would bypass this gate — such a route must not
+  // touch demo/mock providers, or the gate must be extended to the edge runtime.
   if (process.env.NEXT_RUNTIME !== "nodejs") return;
 
   const { assertRuntimeReady, RuntimeConfigError } = await import("@aflo/shared");
