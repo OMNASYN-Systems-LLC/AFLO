@@ -146,6 +146,16 @@ describe("authorize — fail-closed denials", () => {
     expect(authorize(req("client.read", p, { clientId: "c-1" })).reason).toBe("not_owner");
   });
 
+  it("fails CLOSED when a client-scoped resource has no clientId (H1 regression)", () => {
+    // Ownership gate must not fall through to ALLOW when clientId is unpopulated.
+    const client = principal({ role: "client", linkedClientId: "c-1" });
+    expect(authorize(req("message.read", client, { clientId: undefined })).reason).toBe("not_owner");
+    expect(authorize(req("document.read", client, { clientId: null })).reason).toBe("not_owner");
+    // Staff with assignment scoping ON must not reach an un-tagged client-scoped resource (M1).
+    const staff = principal({ assignedClientIds: ["c-1"] });
+    expect(authorize(req("message.read", staff, { clientId: undefined })).reason).toBe("not_assigned");
+  });
+
   it("denies unassigned staff when assignment scoping is active", () => {
     const p = principal({ assignedClientIds: ["c-1", "c-2"] });
     expect(authorize(req("client.read", p, { clientId: "c-9" })).reason).toBe("not_assigned");
@@ -197,6 +207,30 @@ describe("authorize — platform admin (cross-tenant, audited)", () => {
 
   it("a disabled platform admin is still denied", () => {
     expect(authorize(req("client.read", { ...pa, accountStatus: "disabled" })).reason).toBe("account_disabled");
+  });
+
+  it("holds only read/download permissions — never a mutation (structural invariant)", () => {
+    // Guards against a future edit granting platform_admin a mutating permission,
+    // which — since PA skips the tenant gate — would be a cross-tenant mutation.
+    for (const perm of permissionsForRole("platform_admin")) {
+      const action = perm.split(".")[1];
+      expect(["read", "download"]).toContain(action);
+    }
+  });
+});
+
+describe("org-scoped permissions are not blocked by per-client gates", () => {
+  it("allows an owner an org-scoped action with no clientId", () => {
+    const owner = principal({ role: "organization_owner" });
+    expect(authorize(req("organization.manage_settings", owner, { clientId: undefined })).allowed).toBe(true);
+    expect(authorize(req("audit.read", owner, { clientId: null })).allowed).toBe(true);
+    expect(authorize(req("lead.read", owner, {})).allowed).toBe(true);
+  });
+
+  it("still applies assignment scoping only to client-scoped permissions", () => {
+    // An org-scoped permission (leads) is unaffected by staff assignment scoping.
+    const staff = principal({ assignedClientIds: ["c-1"] });
+    expect(authorize(req("lead.read", staff, { clientId: undefined })).allowed).toBe(true);
   });
 });
 

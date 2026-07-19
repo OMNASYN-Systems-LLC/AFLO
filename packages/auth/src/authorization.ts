@@ -19,7 +19,7 @@
  */
 
 import { type DenialReason } from "./denial-reasons";
-import { type Permission } from "./permissions";
+import { isClientScopedPermission, type Permission } from "./permissions";
 import { roleHasPermission } from "./policies";
 import { type Role } from "./roles";
 
@@ -106,22 +106,25 @@ export function authorize(request: AuthorizationRequest): AuthorizationDecision 
   // 5. Role must hold the permission (deny-by-default).
   if (!roleHasPermission(p.role, permission)) return deny("permission_denied");
 
-  // 6. Ownership — a client may only act on their own linked records.
+  const clientScoped = isClientScopedPermission(permission);
+
+  // 6. Ownership — a client may only act on their OWN linked records. For a
+  // client-scoped permission the resource MUST carry a clientId matching the
+  // linked client; a missing clientId fails CLOSED (never open).
   if (p.role === "client") {
     if (!p.linkedClientId) return deny("not_owner");
-    if (resource.clientId != null && resource.clientId !== p.linkedClientId) {
+    if (clientScoped && resource.clientId !== p.linkedClientId) {
       return deny("not_owner");
     }
   }
 
-  // 7. Staff assignment scoping — when active, staff are limited to assigned clients.
-  if (
-    p.role === "staff_advisor" &&
-    p.assignedClientIds != null &&
-    resource.clientId != null &&
-    !p.assignedClientIds.includes(resource.clientId)
-  ) {
-    return deny("not_assigned");
+  // 7. Staff assignment scoping — when active, staff are limited to assigned
+  // clients. For a client-scoped permission the resource MUST carry a clientId in
+  // the assignment set; a missing clientId fails CLOSED.
+  if (p.role === "staff_advisor" && p.assignedClientIds != null && clientScoped) {
+    if (resource.clientId == null || !p.assignedClientIds.includes(resource.clientId)) {
+      return deny("not_assigned");
+    }
   }
 
   // 8. Consent gate.

@@ -95,12 +95,18 @@ const ROLE_PERMISSIONS: Readonly<Record<Role, ReadonlySet<Permission>>> = {
   partner_viewer: new Set(PARTNER_VIEWER),
 };
 
-/** The permissions a role can ever hold, before contextual gates. */
+/**
+ * The permissions a role can ever hold, before contextual gates. Returns a fresh
+ * copy so a caller cannot mutate the internal policy map by reference (a
+ * `ReadonlySet` is only a compile-time promise; the underlying `Set` is mutable).
+ */
 export function permissionsForRole(role: Role): ReadonlySet<Permission> {
-  return ROLE_PERMISSIONS[role];
+  const set = ROLE_PERMISSIONS[role];
+  return new Set(set ?? []);
 }
 
-/** Pure role→permission check (no context). */
+/** Pure role→permission check (no context). Fails closed on an unknown role. */
 export function roleHasPermission(role: Role, permission: Permission): boolean {
-  return ROLE_PERMISSIONS[role].has(permission);
+  const set = ROLE_PERMISSIONS[role];
+  return set ? set.has(permission) : false;
 }

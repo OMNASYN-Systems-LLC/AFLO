@@ -74,3 +74,42 @@ Add a pure, deterministic authorization core to `@aflo/auth`:
   powers (org provisioning, rule-version publishing) live on a separate platform
   surface, not in these tokens — noted so a future reader does not expect
   `platform_admin` to mutate through this map.
+
+## Post-review hardening
+
+An adversarial security review of the first cut found a fail-open in the
+ownership gate; the following are folded in before this ADR is considered done:
+
+- **Client-scoped vs org-scoped permissions (the fix).** Each permission is now
+  classified: `CLIENT_SCOPED_PERMISSIONS` (client/intake/roadmap/task/document/
+  appointment/message/report — the resource carries a `clientId`) vs org-scoped
+  (leads, billing, `organization.*`, `audit.read`). For a client-scoped
+  permission the ownership gate (client) and the assignment gate (staff) require
+  `resource.clientId` to be **present and matching** — a missing `clientId` now
+  fails **closed** (`not_owner` / `not_assigned`), not open. Org-scoped
+  permissions are unaffected so org-level actions with no `clientId` still work.
+  This is the layer-2 half of matrix §6 "no layer trusts the one above it."
+- **Policy map is copy-on-read + fail-closed lookup.** `permissionsForRole`
+  returns a fresh `Set` (a `ReadonlySet` is only a compile-time promise), so a
+  caller cannot poison the process-wide map by reference; `roleHasPermission`
+  returns `false` for an unknown role instead of throwing.
+- **Matrix fidelity.** `AUTHORIZATION_MATRIX §4` gained explicit **Secure
+  messaging** and **Billing** rows (footnotes †, ‡) so every one of the 34
+  permissions is traceable to the source-of-truth matrix.
+
+## Contracts the wiring layer (PHASE 2) MUST honor
+
+`authorize()` trusts the resolved `Principal` — that trust is only sound if the
+session-context resolver enforces:
+
+- **`role: "platform_admin"` may be set ONLY from the verified
+  `users.is_platform_admin` flag** — never from a Clerk claim, session value, or
+  anything client-influenced. Platform admin skips the membership + tenant gates,
+  so a spoofable source here would be a cross-tenant bypass.
+- **Every platform-admin cross-tenant access (read included) must emit an audit
+  event** (matrix §7 row 2). The decision object does not carry an audit signal;
+  the enforcement layer infers it from `role === "platform_admin"` and a
+  tenant mismatch and must not forget it.
+- The resolver populates `resource.clientId` for every client-owned resource;
+  the engine now fails closed if it is omitted, but correctness still wants it
+  populated so legitimate access is not denied.

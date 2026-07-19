@@ -60,3 +60,46 @@ export type Permission = (typeof PERMISSIONS)[number];
 export function isPermission(value: string): value is Permission {
   return (PERMISSIONS as readonly string[]).includes(value);
 }
+
+/**
+ * Permissions that operate on a SPECIFIC client's records (the resource carries a
+ * `clientId`). For these, the ownership gate (client role) and the assignment
+ * gate (staff scoping) require `resource.clientId` to be present AND matching — a
+ * missing `clientId` fails CLOSED, never open.
+ *
+ * Org-scoped permissions are deliberately absent: leads (no client yet), billing,
+ * `organization.*`, and `audit.read` legitimately carry no `clientId` and must
+ * not be blocked by the per-client gates. Keeping this an explicit allow-list
+ * means a new permission is org-scoped (the safe default) until listed here.
+ */
+export const CLIENT_SCOPED_PERMISSIONS: ReadonlySet<Permission> = new Set<Permission>([
+  "client.read",
+  "client.update",
+  "client.assign",
+  "intake.read",
+  "intake.review",
+  "intake.approve",
+  "roadmap.create",
+  "roadmap.review",
+  "roadmap.approve",
+  "roadmap.publish",
+  "task.assign",
+  "task.verify",
+  "document.request",
+  "document.read",
+  "document.review",
+  "document.download",
+  "appointment.manage",
+  "appointment.book",
+  "message.send",
+  "message.read",
+  "message.assign",
+  "message.close",
+  "report.generate",
+  "report.review",
+  "report.publish",
+]);
+
+export function isClientScopedPermission(permission: Permission): boolean {
+  return CLIENT_SCOPED_PERMISSIONS.has(permission);
+}
