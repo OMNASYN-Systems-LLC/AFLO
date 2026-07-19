@@ -1,10 +1,13 @@
 import { sql } from "drizzle-orm";
 import {
+  bigint,
   boolean,
   customType,
+  date,
   index,
   integer,
   jsonb,
+  numeric,
   pgTable,
   text,
   timestamp,
@@ -13,20 +16,35 @@ import {
   varchar,
 } from "drizzle-orm/pg-core";
 import {
+  actionStatusEnum,
+  appointmentChannelEnum,
   appointmentStatusEnum,
   clientKindEnum,
   clientStatusEnum,
   consentTypeEnum,
+  creditScoreSourceEnum,
+  documentReviewStatusEnum,
+  documentTypeEnum,
+  goalCategoryEnum,
+  incomeStabilityEnum,
   intakeStatusEnum,
+  lifecycleStageEnum,
   memberRoleEnum,
+  milestoneStatusEnum,
+  monthlyActionCategoryEnum,
   outboxStatusEnum,
+  reportStatusEnum,
+  roadmapStatusEnum,
 } from "./enums";
 
 /**
- * AFLO core schema (Drizzle, ADR-0005) — identity, tenancy, governance, and
- * CRM. Reconciled to the implemented model (slices C–M). Workflow tables
- * (readiness_assessments, roadmaps, monthly_actions, documents, appointments,
- * quarterly_reports, notes, communications) land in the follow-up slice; the
+ * AFLO core schema (Drizzle, ADR-0005) — identity, tenancy, governance, CRM,
+ * and the client-workflow tables. Reconciled to the implemented model. Phase A1
+ * added the workflow tables for the already-implemented domains (readiness,
+ * financial/credit profiles, goals, roadmaps + milestones, monthly actions,
+ * documents, appointments, quarterly reports, notes, round-up simulator). The
+ * sibling-package tables (partners, referrals, education, notifications,
+ * communications, ai_runs, handoff packages) land in the follow-up slice; the
  * Neon connection and repository swap are gated on DATABASE_URL.
  *
  * AFLO never stores raw PII: phone and date-of-birth columns are
@@ -232,6 +250,343 @@ export const intakes = pgTable(
     uniqueIndex("uq_intakes_client").on(t.clientId),
     index("idx_intakes_org_status").on(t.organizationId, t.status),
   ],
+);
+
+// ===========================================================================
+// Phase A1 — workflow tables for the already-implemented domains. Every
+// tenant-owned row carries organization_id (RLS enforcement point). Money is
+// integer cents (bigint) to match the domain *Cents fields. `ai_run_id`
+// columns are plain nullable uuids for now; their FK to the `ai_runs` table
+// lands with the AI/sibling tables in the follow-up slice.
+// ===========================================================================
+
+/**
+ * Append-only recorded readiness assessments (readiness.v1.0.0). The latest
+ * row per client is the standing assessment; history is never mutated. AI never
+ * writes this table — deterministic rule output only.
+ */
+export const readinessAssessments = pgTable(
+  "readiness_assessments",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "restrict" }),
+    clientId: uuid("client_id")
+      .notNull()
+      .references(() => clients.id, { onDelete: "cascade" }),
+    stage: lifecycleStageEnum("stage").notNull(),
+    previousStage: lifecycleStageEnum("previous_stage"),
+    ruleVersion: text("rule_version").notNull(),
+    factsUsed: jsonb("facts_used").notNull().default(sql`'[]'::jsonb`),
+    reasonCodes: jsonb("reason_codes").notNull().default(sql`'[]'::jsonb`),
+    proposedNextAction: text("proposed_next_action").notNull().default(""),
+    requiresHumanReview: boolean("requires_human_review").notNull().default(false),
+    reviewReasonCodes: jsonb("review_reason_codes").notNull().default(sql`'[]'::jsonb`),
+    assessedByMemberId: uuid("assessed_by_member_id").references(() => organizationMembers.id, {
+      onDelete: "set null",
+    }),
+    assessedAt: timestamp("assessed_at", { withTimezone: true }).notNull().defaultNow(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("idx_readiness_org_client_assessed").on(t.organizationId, t.clientId, t.assessedAt)],
+);
+
+/** Self-/staff-reported financial facts (one per client). Money is integer cents. */
+export const financialProfiles = pgTable(
+  "financial_profiles",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    clientId: uuid("client_id")
+      .notNull()
+      .references(() => clients.id, { onDelete: "cascade" }),
+    monthlyIncomeCents: bigint("monthly_income_cents", { mode: "number" }).notNull(),
+    monthlyDebtPaymentsCents: bigint("monthly_debt_payments_cents", { mode: "number" }).notNull(),
+    liquidSavingsCents: bigint("liquid_savings_cents", { mode: "number" }).notNull(),
+    monthlyEssentialExpensesCents: bigint("monthly_essential_expenses_cents", { mode: "number" }).notNull(),
+    incomeStability: incomeStabilityEnum("income_stability").notNull(),
+    ...timestamps,
+  },
+  (t) => [uniqueIndex("uq_financial_profiles_client").on(t.clientId)],
+);
+
+/**
+ * Credit profile — manual score entry or uploaded report only, no bureau pull
+ * (charter). No SSN or raw bureau data is stored. One per client.
+ */
+export const creditProfiles = pgTable(
+  "credit_profiles",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    clientId: uuid("client_id")
+      .notNull()
+      .references(() => clients.id, { onDelete: "cascade" }),
+    score: integer("score"),
+    scoreSource: creditScoreSourceEnum("score_source").notNull(),
+    scoreAsOf: date("score_as_of"),
+    revolvingBalanceCents: bigint("revolving_balance_cents", { mode: "number" }).notNull(),
+    revolvingLimitCents: bigint("revolving_limit_cents", { mode: "number" }).notNull(),
+    openTradelines: integer("open_tradelines").notNull(),
+    derogatoryMarks: integer("derogatory_marks").notNull(),
+    /** 0..1 over trailing 24 months. */
+    onTimePaymentRate: numeric("on_time_payment_rate", { precision: 4, scale: 3 }).notNull(),
+    ...timestamps,
+  },
+  (t) => [uniqueIndex("uq_credit_profiles_client").on(t.clientId)],
+);
+
+/** Client goals (staff-maintained). At most one primary goal per client. */
+export const goals = pgTable(
+  "goals",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    clientId: uuid("client_id")
+      .notNull()
+      .references(() => clients.id, { onDelete: "cascade" }),
+    title: text("title").notNull(),
+    category: goalCategoryEnum("category").notNull(),
+    targetDate: date("target_date").notNull(),
+    /** 0..100, staff-maintained (range enforced by the rules layer). */
+    progressPct: integer("progress_pct").notNull().default(0),
+    isPrimary: boolean("is_primary").notNull().default(false),
+    ...timestamps,
+  },
+  (t) => [
+    index("idx_goals_org_client").on(t.organizationId, t.clientId),
+    // At most one primary goal per client.
+    uniqueIndex("uq_goals_client_primary").on(t.clientId).where(sql`${t.isPrimary}`),
+  ],
+);
+
+/**
+ * Client roadmap moving through the approval workflow (roadmap.v1.0.0). Status
+ * transitions are governed by the rules; `approved`/`published` carry the
+ * approving member and timestamp.
+ */
+export const roadmaps = pgTable(
+  "roadmaps",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    clientId: uuid("client_id")
+      .notNull()
+      .references(() => clients.id, { onDelete: "cascade" }),
+    title: text("title").notNull(),
+    status: roadmapStatusEnum("status").notNull().default("draft"),
+    stageAtCreation: lifecycleStageEnum("stage_at_creation").notNull(),
+    /** Provenance when drafted by the roadmap-agent; FK to ai_runs added in the AI-tables slice. */
+    aiRunId: uuid("ai_run_id"),
+    createdByMemberId: uuid("created_by_member_id")
+      .notNull()
+      .references(() => organizationMembers.id, { onDelete: "restrict" }),
+    approvedByMemberId: uuid("approved_by_member_id").references(() => organizationMembers.id, {
+      onDelete: "set null",
+    }),
+    approvedAt: timestamp("approved_at", { withTimezone: true }),
+    publishedAt: timestamp("published_at", { withTimezone: true }),
+    ...timestamps,
+  },
+  (t) => [index("idx_roadmaps_org_client_status").on(t.organizationId, t.clientId, t.status)],
+);
+
+/** Ordered roadmap milestones (strict children of a roadmap). */
+export const roadmapMilestones = pgTable(
+  "roadmap_milestones",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    clientId: uuid("client_id")
+      .notNull()
+      .references(() => clients.id, { onDelete: "cascade" }),
+    roadmapId: uuid("roadmap_id")
+      .notNull()
+      .references(() => roadmaps.id, { onDelete: "cascade" }),
+    sortOrder: integer("sort_order").notNull().default(0),
+    title: text("title").notNull(),
+    description: text("description").notNull().default(""),
+    status: milestoneStatusEnum("status").notNull().default("upcoming"),
+    targetMonth: text("target_month").notNull(),
+    ...timestamps,
+  },
+  (t) => [index("idx_milestones_org_roadmap_order").on(t.organizationId, t.roadmapId, t.sortOrder)],
+);
+
+/** Monthly action-plan items (action.v1.0.0). */
+export const monthlyActions = pgTable(
+  "monthly_actions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    clientId: uuid("client_id")
+      .notNull()
+      .references(() => clients.id, { onDelete: "cascade" }),
+    month: text("month").notNull(),
+    title: text("title").notNull(),
+    category: monthlyActionCategoryEnum("category").notNull(),
+    status: actionStatusEnum("status").notNull().default("todo"),
+    dueDate: date("due_date"),
+    ...timestamps,
+  },
+  (t) => [index("idx_monthly_actions_org_client_month").on(t.organizationId, t.clientId, t.month)],
+);
+
+/**
+ * Document metadata and review state (document.v1.0.0). File bytes live in
+ * Blob/S3 (encrypted storage key only); never the DB. No card/SSN/bank data.
+ */
+export const documents = pgTable(
+  "documents",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "restrict" }),
+    clientId: uuid("client_id")
+      .notNull()
+      .references(() => clients.id, { onDelete: "restrict" }),
+    name: text("name").notNull(),
+    docType: documentTypeEnum("doc_type").notNull(),
+    reviewStatus: documentReviewStatusEnum("review_status").notNull().default("requested"),
+    /** App-encrypted Blob/S3 key (ciphertext only), never the file bytes. */
+    storagePathEncrypted: encrypted("storage_path_encrypted"),
+    checksumSha256: varchar("checksum_sha256", { length: 64 }),
+    reviewedByMemberId: uuid("reviewed_by_member_id").references(() => organizationMembers.id, {
+      onDelete: "set null",
+    }),
+    reviewedAt: timestamp("reviewed_at", { withTimezone: true }),
+    uploadedByUserId: uuid("uploaded_by_user_id").references(() => users.id, { onDelete: "set null" }),
+    ...timestamps,
+  },
+  (t) => [index("idx_documents_org_client_status").on(t.organizationId, t.clientId, t.reviewStatus)],
+);
+
+/** Appointments and reminders. The domain has no status field — none modeled. */
+export const appointments = pgTable(
+  "appointments",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    clientId: uuid("client_id")
+      .notNull()
+      .references(() => clients.id, { onDelete: "cascade" }),
+    memberId: uuid("member_id").references(() => organizationMembers.id, { onDelete: "set null" }),
+    purpose: text("purpose").notNull(),
+    scheduledAt: timestamp("scheduled_at", { withTimezone: true }).notNull(),
+    channel: appointmentChannelEnum("channel").notNull(),
+    reminderSentAt: timestamp("reminder_sent_at", { withTimezone: true }),
+    ...timestamps,
+  },
+  (t) => [
+    index("idx_appointments_org_scheduled").on(t.organizationId, t.scheduledAt),
+    index("idx_appointments_org_client").on(t.organizationId, t.clientId),
+  ],
+);
+
+/** Quarterly progress reports (report.v1.0.0). One per client per quarter. */
+export const quarterlyReports = pgTable(
+  "quarterly_reports",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "restrict" }),
+    clientId: uuid("client_id")
+      .notNull()
+      .references(() => clients.id, { onDelete: "restrict" }),
+    quarter: text("quarter").notNull(),
+    status: reportStatusEnum("status").notNull().default("draft"),
+    stageAtGeneration: lifecycleStageEnum("stage_at_generation").notNull(),
+    highlights: jsonb("highlights").notNull().default(sql`'[]'::jsonb`),
+    focusForNextQuarter: text("focus_for_next_quarter").notNull().default(""),
+    /** Provenance when drafted by the report-agent; FK to ai_runs added in the AI-tables slice. */
+    aiRunId: uuid("ai_run_id"),
+    approvedByMemberId: uuid("approved_by_member_id").references(() => organizationMembers.id, {
+      onDelete: "set null",
+    }),
+    approvedAt: timestamp("approved_at", { withTimezone: true }),
+    generatedAt: timestamp("generated_at", { withTimezone: true }).notNull().defaultNow(),
+    ...timestamps,
+  },
+  (t) => [uniqueIndex("uq_reports_client_quarter").on(t.clientId, t.quarter)],
+);
+
+/** Internal admin notes — never surfaced in the client portal. Insert-only. */
+export const notes = pgTable(
+  "notes",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    clientId: uuid("client_id")
+      .notNull()
+      .references(() => clients.id, { onDelete: "cascade" }),
+    authorMemberId: uuid("author_member_id")
+      .notNull()
+      .references(() => organizationMembers.id, { onDelete: "restrict" }),
+    body: text("body").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("idx_notes_org_client_created").on(t.organizationId, t.clientId, t.createdAt)],
+);
+
+/** Round-up simulator config (SIMULATION ONLY — never moves money). One per client. */
+export const simulationSettings = pgTable(
+  "simulation_settings",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    clientId: uuid("client_id")
+      .notNull()
+      .references(() => clients.id, { onDelete: "cascade" }),
+    roundToCents: integer("round_to_cents").notNull().default(100),
+    multiplier: numeric("multiplier", { precision: 4, scale: 2 }).notNull().default("1.00"),
+    enabled: boolean("enabled").notNull().default(true),
+    ...timestamps,
+  },
+  (t) => [uniqueIndex("uq_simulation_settings_client").on(t.clientId)],
+);
+
+/**
+ * Hypothetical round-up transactions (SIMULATION ONLY — never a real purchase).
+ * `round_up_amount_cents` is the deterministic calculator output.
+ */
+export const virtualTransactions = pgTable(
+  "virtual_transactions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    clientId: uuid("client_id")
+      .notNull()
+      .references(() => clients.id, { onDelete: "cascade" }),
+    label: text("label").notNull(),
+    amountCents: bigint("amount_cents", { mode: "number" }).notNull(),
+    roundUpAmountCents: bigint("round_up_amount_cents", { mode: "number" }).notNull(),
+    occurredOn: date("occurred_on").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("idx_vtx_org_client_occurred").on(t.organizationId, t.clientId, t.occurredOn)],
 );
 
 // Referenced by later-slice tables; exported so migrations stay append-only.
