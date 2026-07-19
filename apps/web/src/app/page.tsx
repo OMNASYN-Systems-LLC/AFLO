@@ -11,7 +11,7 @@ export default function SignInPage() {
       <div className="w-full max-w-md">
         <div className="rounded-xl border border-charcoal-soft bg-ivory p-10 shadow-2xl">
           <div className="flex flex-col items-center text-center">
-            <OrganizationBrand surface="light" headingLevel={1} />
+            <OrganizationBrand surface="light" headingLevel={1} showTagline />
 
             <p className="mt-4 text-sm leading-relaxed text-ink-soft">
               Financial readiness, retention, and trusted progress — one workspace for

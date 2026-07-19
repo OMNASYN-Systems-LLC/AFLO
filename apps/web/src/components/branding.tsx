@@ -15,13 +15,27 @@ import { PoweredByAflo } from "@/components/brand";
  * `OrganizationBrand`, so that relocation won't touch call sites.
  */
 
-/** Golden Key Wealth's approved palette (founder brand tokens). Source of truth. */
+/**
+ * Golden Key Wealth's approved palette — the five official swatches from the
+ * founder brand guide (2026-07-19). Source of truth for the tenant brand; kept
+ * separate from the ΛFLO platform tokens in globals.css. `softGray` is a derived
+ * light surface (not one of the five), retained for backgrounds.
+ */
 export const GOLDEN_KEY_THEME = {
-  onyx: "#0A0A0A",
-  charcoal: "#1A1A1A",
   gold: "#D4AF37",
   white: "#FFFFFF",
-  softGray: "#F5F5F3",
+  onyx: "#0A0A0A", // black
+  charcoal: "#1E1E1E", // dark
+  gray: "#6B6B6B",
+  softGray: "#F5F5F3", // derived
+} as const;
+
+/** Golden Key Wealth brand voice (founder brand guide). */
+export const GOLDEN_KEY_VOICE = {
+  tagline: "Strategy. Clarity. Freedom.",
+  positioning:
+    "Modern wealth management built on strategy, clarity, and generational impact. We unlock financial freedom through intelligent solutions and unwavering guidance.",
+  values: ["Strategic", "Trusted", "Innovative", "Empowering"] as const,
 } as const;
 
 export interface OrganizationBrandConfig {
@@ -43,6 +57,8 @@ export interface OrganizationBrandConfig {
     height: number;
   };
   theme: typeof GOLDEN_KEY_THEME;
+  /** Short brand tagline (e.g. "Strategy. Clarity. Freedom."). */
+  tagline?: string;
 }
 
 export const GOLDEN_KEY_BRAND: OrganizationBrandConfig = {
@@ -53,6 +69,7 @@ export const GOLDEN_KEY_BRAND: OrganizationBrandConfig = {
   // (or their final SVGs) are supplied. See that folder's README.
   logo: { onDark: null, onLight: null, width: 208, height: 44 },
   theme: GOLDEN_KEY_THEME,
+  tagline: GOLDEN_KEY_VOICE.tagline,
 };
 
 /** Which background the mark sits on — picks the logo variant and fallback colors. */
@@ -65,6 +82,8 @@ export interface OrganizationBrandProps {
   headingLevel?: 1 | 2;
   /** Show the "Powered by ΛFLO" platform lockup beneath the tenant mark. */
   showPoweredBy?: boolean;
+  /** Show the tenant tagline (e.g. "Strategy. Clarity. Freedom.") beneath the mark. */
+  showTagline?: boolean;
   className?: string;
 }
 
@@ -80,6 +99,7 @@ export function OrganizationBrand({
   surface = "light",
   headingLevel,
   showPoweredBy = true,
+  showTagline = false,
   className,
 }: OrganizationBrandProps) {
   const src = surface === "dark" ? brand.logo.onDark : brand.logo.onLight;
@@ -106,6 +126,9 @@ export function OrganizationBrand({
           <NameTag className={`m-0 font-display text-2xl leading-none ${nameColor}`}>{brand.name}</NameTag>
         </span>
       )}
+      {showTagline && brand.tagline ? (
+        <span className="text-[11px] font-medium uppercase tracking-[0.24em] text-gold-deep">{brand.tagline}</span>
+      ) : null}
       {showPoweredBy ? (
         <PoweredByAflo className="text-[11px] font-medium uppercase tracking-[0.28em] text-gold-deep" />
       ) : null}
