@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { PoweredByAflo } from "@/components/brand";
+import { OrganizationBrand } from "@/components/branding";
 
 /**
  * Staff sign-in shell — visual only. Real authentication (Clerk or Auth.js)
@@ -11,11 +11,7 @@ export default function SignInPage() {
       <div className="w-full max-w-md">
         <div className="rounded-xl border border-charcoal-soft bg-ivory p-10 shadow-2xl">
           <div className="flex flex-col items-center text-center">
-            <div className="flex h-12 w-12 items-center justify-center rounded-md border border-gold bg-ivory font-display text-lg tracking-tight text-gold-deep">
-              GK
-            </div>
-            <h1 className="mt-5 font-display text-3xl text-ink">Golden Key Wealth</h1>
-            <PoweredByAflo className="mt-2 text-[11px] font-medium uppercase tracking-[0.28em] text-gold-deep" />
+            <OrganizationBrand surface="light" headingLevel={1} />
 
             <p className="mt-4 text-sm leading-relaxed text-ink-soft">
               Financial readiness, retention, and trusted progress — one workspace for
