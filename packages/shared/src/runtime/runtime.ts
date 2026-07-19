@@ -113,14 +113,28 @@ function encryptionConfigured(env: EnvLike): boolean {
 }
 
 /**
- * Best-effort detection that a database URL points at a preview branch. We can't
- * see the Neon branch from the URL with certainty, so this is a conservative
- * substring heuristic; production must use the production branch. Treated as a
- * signal, not a proof — an explicit branch identifier can tighten it later.
+ * Heuristic: does the database URL *look* like a preview branch? Neon endpoint
+ * hostnames are randomly generated and NOT derived from the branch name, so a
+ * real preview-branch URL often contains no "preview" substring at all — this
+ * is a weak fallback signal only, never a proof.
  */
 export function isPreviewDatabaseUrl(env: EnvLike): boolean {
   const url = env.DATABASE_URL?.toLowerCase() ?? "";
   return url.length > 0 && url.includes("preview");
+}
+
+/**
+ * Is the configured database a preview branch? An explicit `DATABASE_BRANCH` is
+ * authoritative (the reliable signal — set it in the deployment); absent that we
+ * fall back to the weak URL heuristic. This lets a deployment prove
+ * "this is the production branch" (`DATABASE_BRANCH=main`) even when the Neon
+ * host string is opaque, and prevents a false positive when a production host
+ * legitimately contains "preview".
+ */
+export function isPreviewDatabase(env: EnvLike): boolean {
+  const branch = env.DATABASE_BRANCH?.trim().toLowerCase();
+  if (branch) return branch === "preview";
+  return isPreviewDatabaseUrl(env);
 }
 
 /**
@@ -204,8 +218,8 @@ export function resolveRuntimeConfig(env: EnvLike): RuntimeConfigResult {
     if (!readiness.databaseConfigured) {
       problems.push("DATABASE_URL and DIRECT_DATABASE_URL are required in production.");
     }
-    if (isPreviewDatabaseUrl(env)) {
-      problems.push("DATABASE_URL appears to reference a preview branch — production must use the production database branch.");
+    if (isPreviewDatabase(env)) {
+      problems.push("The database looks like a preview branch (DATABASE_BRANCH=preview or a preview-looking URL) — production must use the production database branch.");
     }
     if (!readiness.authConfigured) {
       problems.push("Clerk keys (CLERK_SECRET_KEY, NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY, CLERK_WEBHOOK_SECRET) are required in production.");

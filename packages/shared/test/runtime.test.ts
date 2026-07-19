@@ -3,6 +3,7 @@ import {
   RuntimeConfigError,
   assertRuntimeReady,
   describeRuntimeReadiness,
+  isPreviewDatabase,
   isPreviewDatabaseUrl,
   resolveRuntimeConfig,
   resolveRuntimeMode,
@@ -116,7 +117,7 @@ describe("resolveRuntimeConfig — production fails closed", () => {
     expect(email.problems.join()).toMatch(/mock delivery is forbidden/);
   });
 
-  it("rejects a preview database branch in production", () => {
+  it("rejects a preview database branch in production (URL heuristic fallback)", () => {
     const preview = resolveRuntimeConfig({
       ...PROD_OK,
       DATABASE_URL: "postgres://u:p@ep-preview-branch.host/db",
@@ -125,6 +126,19 @@ describe("resolveRuntimeConfig — production fails closed", () => {
     expect(preview.problems.join()).toMatch(/preview branch/);
     expect(isPreviewDatabaseUrl({ DATABASE_URL: "postgres://ep-preview-x/db" })).toBe(true);
     expect(isPreviewDatabaseUrl({ DATABASE_URL: "postgres://ep-prod-x/db" })).toBe(false);
+  });
+
+  it("uses DATABASE_BRANCH as the authoritative preview signal", () => {
+    // A real Neon preview URL need not contain "preview" — the explicit branch catches it.
+    expect(isPreviewDatabase({ DATABASE_BRANCH: "preview", DATABASE_URL: "postgres://ep-random-xyz/db" })).toBe(true);
+    const flagged = resolveRuntimeConfig({ ...PROD_OK, DATABASE_BRANCH: "preview" });
+    expect(flagged.ok).toBe(false);
+    expect(flagged.problems.join()).toMatch(/preview branch/);
+    // An explicit main branch overrides a preview-looking URL (no false positive).
+    expect(isPreviewDatabase({ DATABASE_BRANCH: "main", DATABASE_URL: "postgres://ep-preview-name/db" })).toBe(false);
+    expect(resolveRuntimeConfig({ ...PROD_OK, DATABASE_BRANCH: "main", DATABASE_URL: "postgres://ep-preview-name/db" }).ok).toBe(true);
+    // Absent DATABASE_BRANCH, it falls back to the URL heuristic.
+    expect(isPreviewDatabase({ DATABASE_URL: "postgres://ep-preview-x/db" })).toBe(true);
   });
 
   it("requires Resend credentials when EMAIL_MODE=resend", () => {
