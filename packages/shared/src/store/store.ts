@@ -8,6 +8,7 @@ import {
   REASON_CODE_NEXT_ACTIONS,
   REPORT_RULES_VERSION,
   actionTransition,
+  assessEngagement,
   assessReadiness,
   assessmentReviewGate,
   documentTransition,
@@ -71,6 +72,7 @@ import { createEvent, type DomainEvent } from "../events";
 import { toOutboxRecord, type OutboxRecord } from "../outbox";
 import { syntheticDatabase, type SyntheticDatabase } from "../data/synthetic";
 import { toReadinessFacts } from "../domain/facts";
+import { buildResolutionReadout, type ResolutionReadout } from "../domain/resolution";
 import type {
   AdminNote,
   Appointment,
@@ -2080,6 +2082,36 @@ export class AfloStore {
     const record = this.findRecord(organizationId, clientId);
     if (!record) return [];
     return this.db.assessments.filter((a) => a.clientId === clientId);
+  }
+
+  /**
+   * The governed Financial Resolution Concierge readout (understand → diagnose
+   * → organize) for one client. A pure READ: it composes already-recorded
+   * facts via `buildResolutionReadout` and mutates nothing, emits no event, and
+   * writes no audit. Fail-closed org scope — an unknown or foreign-org client
+   * returns null. The diagnosis mirrors the latest *recorded* assessment
+   * verbatim; it is never re-run here.
+   */
+  resolutionReadoutFor(
+    organizationId: string,
+    clientId: string,
+    now: Date = this.clock(),
+  ): ResolutionReadout | null {
+    const record = this.findRecord(organizationId, clientId);
+    if (!record) return null;
+
+    const intake = this.db.intakes.find((i) => i.clientId === record.id);
+    return buildResolutionReadout({
+      clientId: record.id,
+      financial: this.db.financialProfiles.find((p) => p.clientId === record.id) ?? null,
+      credit: this.db.creditProfiles.find((p) => p.clientId === record.id) ?? null,
+      latestAssessment: this.db.assessments.filter((a) => a.clientId === record.id).at(-1) ?? null,
+      intakeComplete: intake?.status === "completed",
+      engagement: assessEngagement(record.lastActivityAt, now),
+      primaryGoal: this.db.goals.find((g) => g.clientId === record.id && g.isPrimary) ?? null,
+      documents: this.db.documents.filter((d) => d.clientId === record.id),
+      now,
+    });
   }
 
   /**
