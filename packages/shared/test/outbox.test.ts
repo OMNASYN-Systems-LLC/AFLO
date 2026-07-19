@@ -5,9 +5,11 @@ import {
   claim,
   complete,
   DEFAULT_MAX_ATTEMPTS,
+  expireLock,
   fail,
   OUTBOX_RULES_VERSION,
   toOutboxRecord,
+  VISIBILITY_TIMEOUT_MS,
   type OutboxRecord,
 } from "../src/outbox";
 
@@ -109,6 +111,41 @@ describe("fail", () => {
     expect(r.attempts).toBe(DEFAULT_MAX_ATTEMPTS);
     expect(claim(r, LATER, "w").reasonCode).toBe("OB_TERMINAL_STATE");
     expect(fail(r, LATER, "x").reasonCode).toBe("OB_TERMINAL_STATE");
+  });
+});
+
+describe("expireLock (crash recovery)", () => {
+  it("leaves a lock that is still inside the visibility window untouched", () => {
+    const processing = claim(record(), NOW, "w").record!;
+    const withinWindow = new Date(NOW.getTime() + VISIBILITY_TIMEOUT_MS - 1);
+    expect(expireLock(processing, withinWindow, VISIBILITY_TIMEOUT_MS).reasonCode).toBe("OB_LOCK_HELD");
+  });
+
+  it("returns an abandoned lock to the retry path, immediately due", () => {
+    const processing = claim(record(), NOW, "w").record!;
+    const expired = new Date(NOW.getTime() + VISIBILITY_TIMEOUT_MS);
+    const res = expireLock(processing, expired, VISIBILITY_TIMEOUT_MS);
+    expect(res.reasonCode).toBe("OB_LOCK_EXPIRED");
+    expect(res.record).toMatchObject({ status: "failed", lockedBy: null, lockedAt: null });
+    expect(res.record!.nextAttemptAt).toBe(expired.toISOString()); // reclaimable now, not after backoff
+    // A subsequent claim picks it up and counts the retry.
+    expect(claim(res.record!, expired, "w2").record?.attempts).toBe(2);
+  });
+
+  it("dead-letters a poison record instead of reclaiming it forever", () => {
+    // A record already at maxAttempts whose worker crashed must not loop.
+    const r = { ...record(), maxAttempts: 1 };
+    const processing = claim(r, NOW, "w").record!; // attempts -> 1 == maxAttempts
+    const expired = new Date(NOW.getTime() + VISIBILITY_TIMEOUT_MS);
+    const res = expireLock(processing, expired, VISIBILITY_TIMEOUT_MS);
+    expect(res.reasonCode).toBe("OB_DEAD_LETTERED");
+    expect(res.record?.status).toBe("dead_letter");
+  });
+
+  it("refuses to expire anything not processing", () => {
+    expect(expireLock(record(), LATER, VISIBILITY_TIMEOUT_MS).reasonCode).toBe("OB_ILLEGAL_TRANSITION");
+    const processed = complete(claim(record(), NOW, "w").record!, NOW).record!;
+    expect(expireLock(processed, LATER, VISIBILITY_TIMEOUT_MS).reasonCode).toBe("OB_TERMINAL_STATE");
   });
 });
 

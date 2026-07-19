@@ -19,7 +19,17 @@ export type OutboxReasonCode =
   | "OB_TERMINAL_STATE"
   | "OB_DEAD_LETTERED"
   | "OB_MISSING_FAILURE_REASON"
-  | "OB_MISSING_WORKER_ID";
+  | "OB_MISSING_WORKER_ID"
+  | "OB_LOCK_EXPIRED"
+  | "OB_LOCK_HELD";
+
+/**
+ * Default worker visibility timeout. A record left `processing` with a lock
+ * older than this is treated as abandoned (the worker crashed between claim and
+ * complete) and returned to the retry path — this is what makes delivery
+ * at-least-once ACROSS worker crashes, not just handler failures.
+ */
+export const VISIBILITY_TIMEOUT_MS = 300_000; // 5 minutes
 
 export interface OutboxTransitionResult {
   allowed: boolean;
@@ -95,4 +105,35 @@ export function fail(record: OutboxRecord, now: Date, reason: string): OutboxTra
     status: "failed",
     nextAttemptAt: new Date(now.getTime() + backoffMs(record.attempts)).toISOString(),
   });
+}
+
+/**
+ * processing → failed (or dead_letter) when the worker lock has EXPIRED — the
+ * worker crashed between `claim` and `complete`, so its lock lingers. The reaper
+ * calls this to return the record to the retry path (immediately due) so an
+ * idempotent handler re-runs it; a perpetually-crashing (poison) record still
+ * dead-letters once its attempts are exhausted, so it cannot be reclaimed
+ * forever. A record still inside its visibility window is left untouched
+ * (`OB_LOCK_HELD`) — only genuinely abandoned locks are reclaimed.
+ */
+export function expireLock(record: OutboxRecord, now: Date, visibilityTimeoutMs: number): OutboxTransitionResult {
+  if (record.status !== "processing") {
+    return deny(
+      record.status === "processed" || record.status === "dead_letter" ? "OB_TERMINAL_STATE" : "OB_ILLEGAL_TRANSITION",
+    );
+  }
+  if (record.lockedAt === null) return deny("OB_ILLEGAL_TRANSITION"); // a processing row always holds a lock
+  if (new Date(record.lockedAt).getTime() + visibilityTimeoutMs > now.getTime()) {
+    return deny("OB_LOCK_HELD");
+  }
+  const base = {
+    ...record,
+    lastError: record.lastError ?? "worker lock expired before completion",
+    lockedBy: null,
+    lockedAt: null,
+  };
+  if (record.attempts >= record.maxAttempts) {
+    return allow({ ...base, status: "dead_letter" }, "OB_DEAD_LETTERED");
+  }
+  return allow({ ...base, status: "failed", nextAttemptAt: now.toISOString() }, "OB_LOCK_EXPIRED");
 }
