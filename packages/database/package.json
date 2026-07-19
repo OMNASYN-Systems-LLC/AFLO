@@ -19,10 +19,10 @@
     "@aflo/notifications": "workspace:*",
     "@aflo/partner-marketplace": "workspace:*",
     "@aflo/rules": "workspace:*",
+    "@aflo/shared": "workspace:*",
     "drizzle-orm": "^0.45.2"
   },
   "devDependencies": {
-    "@aflo/shared": "workspace:*",
     "@electric-sql/pglite": "^0.5.4",
     "@eslint/js": "^10.0.1",
     "@types/node": "^22.10.2",
