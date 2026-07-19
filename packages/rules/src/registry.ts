@@ -2,6 +2,7 @@ import { ACTION_RULES_VERSION } from "./action";
 import { DOCUMENT_RULES_VERSION } from "./document";
 import { ENGAGEMENT_RULES_VERSION } from "./engagement";
 import { INTAKE_RULES_VERSION } from "./intake";
+import { MESSAGING_RULES_VERSION } from "./messaging";
 import { PIPELINE_RULES_VERSION } from "./pipeline";
 import { REPORT_RULES_VERSION } from "./report";
 import { ROUNDUP_RULES_VERSION } from "./roundup";
@@ -286,6 +287,20 @@ export const RULE_REGISTRY: readonly RuleDefinition[] = [
     sources: [],
     changeHistory: [
       { version: "resolution.v1.0.0", date: "2026-07-19", note: "Initial understand-stage completeness primitive (Financial Resolution Concierge substrate)." },
+    ],
+  },
+  {
+    id: "messaging.thread",
+    version: MESSAGING_RULES_VERSION,
+    effectiveDate: "2026-07-19",
+    description:
+      "Deterministic validation for staff↔client secure-messaging threads: a message draft is well-formed only with a sender, an open thread, and a non-empty body within the length cap; thread status moves open⇄closed only by the legal action. Governs message well-formedness and thread state, never visibility — client-facing visibility is a structural property of the domain projection (a client thread is built only from Messages, so internal AdminNotes cannot appear).",
+    inputs: ["MessageDraft (senderId, senderRole, body)", "ThreadStatus", "ThreadAction (close | reopen)"],
+    output: "MessageValidation { ok, reasonCode, ruleVersion, normalizedBody } | ThreadTransition { ok, reasonCode, ruleVersion, status }",
+    reasonCodes: ["MSG_OK", "MSG_EMPTY_BODY", "MSG_BODY_TOO_LONG", "MSG_MISSING_SENDER", "MSG_THREAD_CLOSED", "MSG_ILLEGAL_THREAD_TRANSITION"],
+    sources: [],
+    changeHistory: [
+      { version: "messaging.v1.0.0", date: "2026-07-19", note: "Initial secure-messaging validation + thread-status transitions." },
     ],
   },
   {

@@ -3,6 +3,7 @@ export * from "./domain/facts";
 export * from "./domain/resolution";
 export * from "./domain/credit";
 export * from "./domain/opportunity";
+export * from "./domain/messaging";
 export * from "./events";
 export * from "./outbox";
 export * from "./store";
