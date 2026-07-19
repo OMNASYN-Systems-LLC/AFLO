@@ -9,8 +9,11 @@ import {
   getVendor,
   isVendorEnabled,
   listVendors,
+  toPublicVendorView,
   validateVendorRegistry,
+  validateVendors,
 } from "../src";
+import type { VendorRecord } from "../src";
 
 /**
  * The registry is the mechanical form of AFLO's central commercial-safety
@@ -88,5 +91,75 @@ describe("registry access helpers fail closed", () => {
     expect(cardVendors).toContain("highnote");
     expect(cardVendors).not.toContain("acorns");
     expect(listVendors().length).toBe(VENDOR_REGISTRY.length);
+  });
+});
+
+/**
+ * The validator is the linchpin CI guard, so prove it DETECTS the regressions
+ * it exists to block — not merely that the clean seed passes. `validateVendors`
+ * is pure, so it can be fed deliberately-violating fixtures.
+ */
+describe("validateVendors detects violations (not just passes the clean seed)", () => {
+  const ok: VendorRecord = {
+    id: "ok-vendor",
+    displayName: "OK",
+    domain: "credit_data",
+    status: "discovery",
+    isEnabled: false,
+    requiresAgreement: true,
+    trademarkOwner: "OK",
+    notes: "n",
+  };
+
+  it("passes a clean fixture", () => {
+    expect(validateVendors([ok])).toEqual([]);
+  });
+
+  it("flags an enabled vendor", () => {
+    const v = validateVendors([{ ...ok, isEnabled: true, status: "production" }]);
+    expect(v.some((m) => m.includes("is enabled"))).toBe(true);
+  });
+
+  it("flags a production vendor", () => {
+    const v = validateVendors([{ ...ok, status: "production" }]);
+    expect(v.some((m) => m.includes("is production"))).toBe(true);
+  });
+
+  it("flags an enabled-without-production vendor", () => {
+    const v = validateVendors([{ ...ok, isEnabled: true }]);
+    expect(v.some((m) => m.includes("enabled without production status"))).toBe(true);
+  });
+
+  it("flags an agreement-free vendor", () => {
+    const v = validateVendors([{ ...ok, requiresAgreement: false }]);
+    expect(v.some((m) => m.includes("must require an agreement"))).toBe(true);
+  });
+
+  it("flags duplicate ids", () => {
+    const v = validateVendors([ok, { ...ok }]);
+    expect(v.some((m) => m.includes("duplicate vendor id"))).toBe(true);
+  });
+});
+
+describe("runtime immutability + client-safe projection", () => {
+  const first = VENDOR_REGISTRY[0];
+  if (!first) throw new Error("registry must not be empty");
+
+  it("registry records are frozen (a runtime write to isEnabled throws)", () => {
+    expect(Object.isFrozen(VENDOR_REGISTRY)).toBe(true);
+    expect(Object.isFrozen(first)).toBe(true);
+    expect(() => {
+      // Defeating the boundary at runtime must fail, not silently flip a vendor live.
+      (first as { isEnabled: boolean }).isEnabled = true;
+    }).toThrow();
+    expect(first.isEnabled).toBe(false);
+  });
+
+  it("toPublicVendorView drops the name, trademark owner, and notes", () => {
+    const view = toPublicVendorView(first);
+    expect(Object.keys(view).sort()).toEqual(["domain", "id", "status"]);
+    expect(view).not.toHaveProperty("displayName");
+    expect(view).not.toHaveProperty("trademarkOwner");
+    expect(view).not.toHaveProperty("notes");
   });
 });

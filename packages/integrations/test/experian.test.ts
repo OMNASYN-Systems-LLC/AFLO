@@ -27,12 +27,12 @@ describe("disabled Experian credit-data adapter", () => {
     expect(getVendor(EXPERIAN_VENDOR_ID)).toBeDefined();
   });
 
-  it("reports isProduction: false (mirrors the disabled registry entry)", () => {
+  it("reports isProduction: false (self-consistent with the unconditional reject)", () => {
     expect(provider.info().isProduction).toBe(false);
   });
 
-  it("declares supported score models for interface conformance", () => {
-    expect(provider.info().supportedScoreModels.length).toBeGreaterThan(0);
+  it("declares NO supported score models while disabled (never invents capabilities)", () => {
+    expect(provider.info().supportedScoreModels).toEqual([]);
   });
 
   it("rejects every fetchReport with ProviderNotContractedError (never fabricates data)", async () => {

@@ -23,7 +23,7 @@ import type {
   NormalizedCreditReport,
 } from "@aflo/credit-data";
 import { ProviderNotContractedError } from "./errors";
-import { getVendor, isVendorEnabled } from "./registry";
+import { getVendor } from "./registry";
 
 /** Registry id this adapter is bound to. */
 export const EXPERIAN_VENDOR_ID = "experian-partner-solutions" as const;
@@ -34,10 +34,16 @@ export class ExperianCreditDataProvider implements CreditDataProvider {
     return {
       id: EXPERIAN_VENDOR_ID,
       displayName: vendor?.displayName ?? "Experian Partner Solutions (disabled)",
-      // Declared for interface conformance only — no report is ever served.
-      supportedScoreModels: ["vantagescore_3", "vantagescore_4", "fico_8", "fico_9"],
-      // Mirrors the registry: false unless the vendor is production + enabled.
-      isProduction: isVendorEnabled(EXPERIAN_VENDOR_ID),
+      // Empty by design: this disabled skeleton has NO verified knowledge of the
+      // real Experian surface, and "never invent API capabilities" forbids
+      // asserting what the vendor would deliver. The real implementation that
+      // replaces this adapter once contracted declares the models the executed
+      // agreement/API actually supports.
+      supportedScoreModels: [],
+      // Hardcoded false to stay self-consistent with fetchReport, which rejects
+      // unconditionally. This skeleton is never "production" in place — a real
+      // implementation is swapped in behind the same interface when contracted.
+      isProduction: false,
     };
   }
 

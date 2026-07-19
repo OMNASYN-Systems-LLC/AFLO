@@ -18,7 +18,10 @@
  * partnerships, endorsements, or claims of availability, and this registry
  * MUST NOT be surfaced to clients or marketed as a partner list. Presenting a
  * `discovery`/`contract_pending`/`sandbox` vendor as an active partner would
- * violate the "never imply nonexistent partnerships" rule.
+ * violate the "never imply nonexistent partnerships" rule. If a surface ever
+ * needs vendor data, project through `toPublicVendorView` (id/domain/status
+ * only) — never hand a raw `VendorRecord` (with its display name / trademark
+ * owner / notes) to anything client-facing.
  */
 
 import { VendorNotEnabledError } from "./errors";
@@ -90,7 +93,7 @@ export interface VendorRecord {
  * agreement and compliance review land, that vendor's record advances under a
  * reviewed change, never silently.
  */
-export const VENDOR_REGISTRY: readonly VendorRecord[] = Object.freeze([
+const VENDOR_RECORDS: readonly VendorRecord[] = [
   {
     id: "experian-partner-solutions",
     displayName: "Experian Partner Solutions",
@@ -157,7 +160,38 @@ export const VENDOR_REGISTRY: readonly VendorRecord[] = Object.freeze([
     notes:
       "Prospective issuer-processor (alternative to Marqeta). Same sponsor-bank/program-build requirements. Discovery only.",
   },
-]);
+];
+
+/**
+ * The public registry. Each record is frozen (its fields are primitives, so a
+ * single freeze fully immutabilizes it) and the array is frozen, so the
+ * safety-critical `status`/`isEnabled` fields cannot be flipped at RUNTIME —
+ * `readonly` is a compile-time modifier only and would not stop a plain JS or
+ * `as any` write like `VENDOR_REGISTRY[0].isEnabled = true`. With the records
+ * frozen, such a write throws in strict mode (all modules are ESM/strict)
+ * instead of silently switching a vendor live.
+ */
+export const VENDOR_REGISTRY: readonly VendorRecord[] = Object.freeze(
+  VENDOR_RECORDS.map((r) => Object.freeze(r)),
+);
+
+/**
+ * Client-safe projection: identity + lifecycle status ONLY. It deliberately
+ * drops `displayName`, `trademarkOwner`, and `notes`, so a discovery vendor can
+ * never reach a client surface as a named partner or endorsement (file header).
+ * Any client-facing code MUST project through this — never hand out a raw
+ * `VendorRecord`.
+ */
+export interface PublicVendorView {
+  readonly id: string;
+  readonly domain: VendorCapabilityDomain;
+  readonly status: VendorLifecycleStatus;
+}
+
+/** Redact a vendor record down to the client-safe view. */
+export function toPublicVendorView(vendor: VendorRecord): PublicVendorView {
+  return { id: vendor.id, domain: vendor.domain, status: vendor.status };
+}
 
 /** Look up a vendor by id, or `undefined` if not registered. */
 export function getVendor(vendorId: string): VendorRecord | undefined {
@@ -192,16 +226,17 @@ export function assertVendorEnabled(vendorId: string): void {
 }
 
 /**
- * Deterministic self-check of the registry's safety invariants. Returns the
- * list of violations (empty ⇒ sound). The test suite asserts this is empty, so
- * a future edit that enables a vendor without also flipping it to `production`
- * — or that ships an entry not requiring an agreement — fails CI.
+ * Deterministic self-check of the safety invariants for an ARBITRARY set of
+ * vendor records. Returns the list of violations (empty ⇒ sound). Pure and
+ * exported so the test suite can feed it deliberately-violating fixtures and
+ * prove the guard actually DETECTS regressions (not just that the live seed
+ * happens to pass).
  */
-export function validateVendorRegistry(): string[] {
+export function validateVendors(records: readonly VendorRecord[]): string[] {
   const violations: string[] = [];
   const seen = new Set<string>();
 
-  for (const v of VENDOR_REGISTRY) {
+  for (const v of records) {
     if (seen.has(v.id)) violations.push(`duplicate vendor id: ${v.id}`);
     seen.add(v.id);
 
@@ -222,4 +257,13 @@ export function validateVendorRegistry(): string[] {
   }
 
   return violations;
+}
+
+/**
+ * Validate the LIVE registry — the CI guard. The test suite asserts this is
+ * empty, so a future edit that enables a vendor without flipping it to
+ * `production`, ships an agreement-free entry, or duplicates an id fails CI.
+ */
+export function validateVendorRegistry(): string[] {
+  return validateVendors(VENDOR_REGISTRY);
 }
