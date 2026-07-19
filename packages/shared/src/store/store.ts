@@ -22,6 +22,11 @@ import {
   roundUpAmountCents,
   ROUNDUP_RULES_VERSION,
   sectionCompletion,
+  validateMessageDraft,
+  transitionThread,
+  MESSAGING_RULES_VERSION,
+  type MessageSenderRole,
+  type ThreadAction,
   type ActionStatusId,
   type ActionTransitionResult,
   type DocumentReviewStatusId,
@@ -86,6 +91,12 @@ import { toReadinessFacts } from "../domain/facts";
 import { buildResolutionReadout, type ResolutionReadout } from "../domain/resolution";
 import type { CreditReportSummary } from "../domain/credit";
 import type { ClientOpportunity } from "../domain/opportunity";
+import {
+  toClientThreadView,
+  type ClientThreadView,
+  type ConversationThread,
+  type Message,
+} from "../domain/messaging";
 import type {
   AdminNote,
   Appointment,
@@ -390,6 +401,56 @@ export interface AddNoteInput {
   organizationId: string;
   clientId: string;
   body: string;
+  actorStaffId: string;
+}
+
+export type MessagingDenialCode =
+  | "CLIENT_NOT_FOUND"
+  | "THREAD_NOT_FOUND"
+  | "ACTOR_NOT_IN_ORG"
+  | "NOT_THREAD_CLIENT"
+  | "INVALID_INPUT";
+
+export interface OpenThreadInput {
+  organizationId: string;
+  clientId: string;
+  subject: string;
+  /** The staff member's opening message. */
+  body: string;
+  actorStaffId: string;
+}
+
+export interface PostReplyInput {
+  organizationId: string;
+  threadId: string;
+  senderRole: MessageSenderRole;
+  /** Staff member id when senderRole="staff"; the thread's own client id when "client". */
+  senderId: string;
+  body: string;
+}
+
+export interface ThreadResult {
+  ok: boolean;
+  denialCode?: MessagingDenialCode;
+  /** Kernel reason code when the message body/thread state was rejected. */
+  reasonCode?: string;
+  inputErrors?: string[];
+  thread?: ConversationThread;
+  message?: Message;
+  emittedEventIds: string[];
+}
+
+export interface MessageResult {
+  ok: boolean;
+  denialCode?: MessagingDenialCode;
+  reasonCode?: string;
+  message?: Message;
+  emittedEventIds: string[];
+}
+
+export interface ThreadStatusInput {
+  organizationId: string;
+  threadId: string;
   actorStaffId: string;
 }
 
@@ -1692,6 +1753,197 @@ export class AfloStore {
     });
 
     return { ok: true, note };
+  }
+
+  // --- Secure messaging (messaging.v1.0.0) ------------------------------------
+  // Threads and messages are tenant-scoped: every read verifies the thread's
+  // organization, and every write authorizes the sender. Internal staff notes
+  // live in `notes` (a separate model) and never enter a thread.
+
+  /** Conversation threads for one client, newest-active first. Org-verified. */
+  conversationsFor(organizationId: string, clientId: string): ConversationThread[] {
+    const record = this.findRecord(organizationId, clientId);
+    if (!record) return [];
+    return this.db.conversationThreads
+      .filter((t) => t.organizationId === organizationId && t.clientId === clientId)
+      .sort((a, b) => (b.lastMessageAt ?? b.createdAt).localeCompare(a.lastMessageAt ?? a.createdAt));
+  }
+
+  /** Raw messages of one thread (staff view), oldest first. Org-verified via the thread. */
+  messagesForThread(organizationId: string, threadId: string): Message[] {
+    const thread = this.db.conversationThreads.find(
+      (t) => t.id === threadId && t.organizationId === organizationId,
+    );
+    if (!thread) return [];
+    return this.db.messages
+      .filter((m) => m.threadId === threadId && m.organizationId === organizationId)
+      .sort((a, b) => a.sentAt.localeCompare(b.sentAt));
+  }
+
+  /** Client-portal projection: every thread the client can see, client-safe. */
+  clientConversationsFor(organizationId: string, clientId: string): ClientThreadView[] {
+    return this.conversationsFor(organizationId, clientId).map((thread) =>
+      toClientThreadView(thread, this.db.messages.filter((m) => m.threadId === thread.id)),
+    );
+  }
+
+  /** Staff opens a new thread with an initial message. Rules-gated; audited; emits MessagePosted. */
+  openThread(input: OpenThreadInput): ThreadResult {
+    const now = this.clock();
+    const record = this.findRecord(input.organizationId, input.clientId);
+    if (!record) return { ok: false, denialCode: "CLIENT_NOT_FOUND", emittedEventIds: [] };
+    const actor = this.findActor(input.organizationId, input.actorStaffId);
+    if (!actor) return { ok: false, denialCode: "ACTOR_NOT_IN_ORG", emittedEventIds: [] };
+
+    const subject = input.subject.trim();
+    if (subject.length === 0) {
+      return { ok: false, denialCode: "INVALID_INPUT", inputErrors: ["subject is required"], emittedEventIds: [] };
+    }
+    const validation = validateMessageDraft({ senderId: actor.id, senderRole: "staff", body: input.body }, "open");
+    if (!validation.ok || validation.normalizedBody === null) {
+      return { ok: false, reasonCode: validation.reasonCode, emittedEventIds: [] };
+    }
+
+    this.counter += 1;
+    const thread: ConversationThread = {
+      id: `th-${record.id}-${this.counter}`,
+      organizationId: input.organizationId,
+      clientId: record.id,
+      subject,
+      status: "open",
+      createdAt: now.toISOString(),
+      lastMessageAt: now.toISOString(),
+    };
+    this.db.conversationThreads.push(thread);
+    const { message, eventId } = this.appendMessage(thread, "staff", actor.id, validation.normalizedBody, now);
+    return { ok: true, thread, message, emittedEventIds: [eventId] };
+  }
+
+  /** Post a reply to an existing thread (staff or the thread's own client). Rules-gated; audited; emits MessagePosted. */
+  postReply(input: PostReplyInput): MessageResult {
+    const now = this.clock();
+    const thread = this.db.conversationThreads.find(
+      (t) => t.id === input.threadId && t.organizationId === input.organizationId,
+    );
+    if (!thread) return { ok: false, denialCode: "THREAD_NOT_FOUND", emittedEventIds: [] };
+
+    if (input.senderRole === "staff") {
+      if (!this.findActor(input.organizationId, input.senderId)) {
+        return { ok: false, denialCode: "ACTOR_NOT_IN_ORG", emittedEventIds: [] };
+      }
+    } else {
+      // A client may only post to their OWN thread, and must be a real client of the org.
+      if (input.senderId !== thread.clientId) {
+        return { ok: false, denialCode: "NOT_THREAD_CLIENT", emittedEventIds: [] };
+      }
+      if (!this.findRecord(input.organizationId, thread.clientId)) {
+        return { ok: false, denialCode: "CLIENT_NOT_FOUND", emittedEventIds: [] };
+      }
+    }
+
+    const validation = validateMessageDraft(
+      { senderId: input.senderId, senderRole: input.senderRole, body: input.body },
+      thread.status,
+    );
+    if (!validation.ok || validation.normalizedBody === null) {
+      return { ok: false, reasonCode: validation.reasonCode, emittedEventIds: [] };
+    }
+
+    const { message, eventId } = this.appendMessage(thread, input.senderRole, input.senderId, validation.normalizedBody, now);
+    return { ok: true, message, emittedEventIds: [eventId] };
+  }
+
+  /** Staff closes a thread (open→closed). Rules-gated; audited. */
+  closeThread(input: ThreadStatusInput): ThreadResult {
+    return this.changeThreadStatus(input, "close");
+  }
+
+  /** Staff reopens a thread (closed→open). Rules-gated; audited. */
+  reopenThread(input: ThreadStatusInput): ThreadResult {
+    return this.changeThreadStatus(input, "reopen");
+  }
+
+  private changeThreadStatus(input: ThreadStatusInput, action: ThreadAction): ThreadResult {
+    const now = this.clock();
+    const thread = this.db.conversationThreads.find(
+      (t) => t.id === input.threadId && t.organizationId === input.organizationId,
+    );
+    if (!thread) return { ok: false, denialCode: "THREAD_NOT_FOUND", emittedEventIds: [] };
+    const actor = this.findActor(input.organizationId, input.actorStaffId);
+    if (!actor) return { ok: false, denialCode: "ACTOR_NOT_IN_ORG", emittedEventIds: [] };
+
+    const transition = transitionThread(thread.status, action);
+    if (!transition.ok) return { ok: false, reasonCode: transition.reasonCode, thread, emittedEventIds: [] };
+    thread.status = transition.status;
+
+    this.audit({
+      organizationId: input.organizationId,
+      actorStaffId: actor.id,
+      action: `message.thread_${action}`,
+      targetType: "conversation",
+      targetId: thread.id,
+      detail: `thread ${thread.id} ${action}d`,
+      reasonCode: transition.reasonCode,
+      ruleVersion: MESSAGING_RULES_VERSION,
+      occurredAt: now.toISOString(),
+    });
+    return { ok: true, thread, emittedEventIds: [] };
+  }
+
+  /**
+   * Append a validated message to a thread: persist it, advance thread + client
+   * activity, emit MessagePosted (no body in the payload), and audit. Shared by
+   * openThread and postReply so both paths behave identically.
+   */
+  private appendMessage(
+    thread: ConversationThread,
+    senderRole: MessageSenderRole,
+    senderId: string,
+    body: string,
+    now: Date,
+  ): { message: Message; eventId: string } {
+    this.counter += 1;
+    const iso = now.toISOString();
+    const message: Message = {
+      id: `msg-${thread.id}-${this.counter}`,
+      threadId: thread.id,
+      organizationId: thread.organizationId,
+      clientId: thread.clientId,
+      senderRole,
+      senderId,
+      body,
+      sentAt: iso,
+      readByClientAt: senderRole === "client" ? iso : null,
+      readByStaffAt: senderRole === "staff" ? iso : null,
+    };
+    this.db.messages.push(message);
+    thread.lastMessageAt = iso;
+    const record = this.findRecord(thread.organizationId, thread.clientId);
+    if (record) record.lastActivityAt = iso;
+
+    const event = createEvent({
+      eventType: "MessagePosted",
+      organizationId: thread.organizationId,
+      aggregateId: thread.id,
+      actorId: senderRole === "staff" ? senderId : null, // a client is not a member actor
+      occurredAt: iso,
+      payload: { threadId: thread.id, messageId: message.id, clientId: thread.clientId, senderRole },
+    });
+    this.outbox.push(toOutboxRecord(event, { now }));
+
+    this.audit({
+      organizationId: thread.organizationId,
+      actorStaffId: senderId, // records who acted (staff member id, or the client id)
+      action: "message.posted",
+      targetType: "conversation",
+      targetId: thread.id,
+      detail: `thread ${thread.id}: ${senderRole} posted ${message.id}`,
+      reasonCode: "MESSAGE_POSTED",
+      ruleVersion: MESSAGING_RULES_VERSION,
+      occurredAt: iso,
+    });
+
+    return { message, eventId: event.eventId };
   }
 
   /** Goals for one client, primary first, org-verified. */

@@ -32,6 +32,7 @@ import type {
   StaffMember,
   VirtualTransaction,
 } from "../domain/types";
+import type { ConversationThread, Message } from "../domain/messaging";
 import { roundUpAmountCents } from "@aflo/rules";
 
 /**
@@ -110,6 +111,10 @@ export interface SyntheticDatabase {
    * signed by the running store's key to verify.
    */
   handoffPackages: HandoffPackage[];
+  /** Secure staff↔client conversation threads (messaging.v1.0.0). */
+  conversationThreads: ConversationThread[];
+  /** Messages within those threads — client-facing content only (internal notes stay in `notes`). */
+  messages: Message[];
 }
 
 const ORG_ID = "org-golden-key";
@@ -983,6 +988,45 @@ const aiSuggestions: AgentEnvelope[] = [
   },
 ];
 
+const conversationThreads: ConversationThread[] = [
+  {
+    id: "th-solomon-docs",
+    organizationId: ORG_ID,
+    clientId: "c-solomon",
+    subject: "Mortgage document checklist",
+    status: "open",
+    createdAt: daysAgo(6),
+    lastMessageAt: daysAgo(4),
+  },
+];
+
+const messages: Message[] = [
+  {
+    id: "msg-solomon-1",
+    threadId: "th-solomon-docs",
+    organizationId: ORG_ID,
+    clientId: "c-solomon",
+    senderRole: "staff",
+    senderId: "s-lin",
+    body: "Hi Marcus — to keep your mortgage readiness on track, could you upload your two most recent pay stubs when you have a moment?",
+    sentAt: daysAgo(6),
+    readByClientAt: daysAgo(5),
+    readByStaffAt: daysAgo(6),
+  },
+  {
+    id: "msg-solomon-2",
+    threadId: "th-solomon-docs",
+    organizationId: ORG_ID,
+    clientId: "c-solomon",
+    senderRole: "client",
+    senderId: "c-solomon",
+    body: "Just uploaded both. Let me know if the format works.",
+    sentAt: daysAgo(4),
+    readByClientAt: daysAgo(4),
+    readByStaffAt: null,
+  },
+];
+
 export const syntheticDatabase: SyntheticDatabase = {
   organization,
   pipeline: GOLDEN_KEY_PIPELINE,
@@ -1011,4 +1055,6 @@ export const syntheticDatabase: SyntheticDatabase = {
   partners,
   partnerReferrals,
   handoffPackages: [],
+  conversationThreads,
+  messages,
 };

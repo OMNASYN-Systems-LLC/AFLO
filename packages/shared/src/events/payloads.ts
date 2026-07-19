@@ -223,6 +223,18 @@ export interface ConsentRevokedPayload {
   revokesConsentEventId: string;
 }
 
+/**
+ * A message was posted to a conversation thread. Deliberately carries NO body —
+ * downstream consumers (e.g. a "new message" notification) key on ids and the
+ * sender role, never the content, so sensitive text never lands in the outbox.
+ */
+export interface MessagePostedPayload {
+  threadId: string;
+  messageId: string;
+  clientId: string;
+  senderRole: "staff" | "client";
+}
+
 /** Compile-time map from event type to payload shape (exhaustive). */
 export interface EventPayloadMap {
   LeadCreated: LeadCreatedPayload;
@@ -253,6 +265,7 @@ export interface EventPayloadMap {
   PartnerReferralCreated: PartnerReferralCreatedPayload;
   ConsentGranted: ConsentGrantedPayload;
   ConsentRevoked: ConsentRevokedPayload;
+  MessagePosted: MessagePostedPayload;
 }
 
 // Exhaustiveness guarantee: if EventPayloadMap ever misses an EventType (or
