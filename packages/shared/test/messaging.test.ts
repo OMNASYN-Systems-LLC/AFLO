@@ -63,7 +63,19 @@ describe("toClientThreadView — client-safe projection", () => {
     expect(toClientThreadView(thread, [])).toEqual({
       subject: "Mortgage paperwork",
       status: "open",
+      unreadCount: 0,
       messages: [],
     });
+  });
+
+  it("counts unread advisor messages only (client's own messages never count)", () => {
+    // Two unread advisor messages + one read + one from the client.
+    const view = toClientThreadView(thread, [
+      msg({ id: "a", senderRole: "staff", readByClientAt: null }),
+      msg({ id: "b", senderRole: "staff", readByClientAt: null }),
+      msg({ id: "c", senderRole: "staff", readByClientAt: "2026-07-12T00:00:00.000Z" }),
+      msg({ id: "d", senderRole: "client", senderId: "c-solomon", readByClientAt: null }),
+    ]);
+    expect(view.unreadCount).toBe(2);
   });
 });

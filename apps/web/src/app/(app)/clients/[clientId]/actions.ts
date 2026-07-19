@@ -164,6 +164,24 @@ export async function openThreadAction(clientId: string, formData: FormData): Pr
 }
 
 /**
+ * Staff marks a thread's client messages read (read receipts, messaging.v1.0.0).
+ * Identity comes only from the session; the store re-verifies org membership,
+ * marks only the counterparty's unread messages, emits MessageRead, and audits.
+ * Idempotent — marking an already-read thread is a traceless no-op.
+ */
+export async function markThreadReadAction(clientId: string, threadId: string): Promise<void> {
+  const session = await getStaffSession();
+  store.markThreadRead({
+    organizationId: session.organizationId,
+    threadId,
+    readerRole: "staff",
+    readerId: session.staffId,
+  });
+  revalidatePath(`/clients/${clientId}`);
+  revalidatePath("/dashboard");
+}
+
+/**
  * Goal workflow actions. Goals are staff-maintained; the store validates,
  * enforces a single primary, emits GoalCreated, and audits.
  */

@@ -50,6 +50,14 @@ test("staff can start a new conversation", async ({ page }) => {
   await expect(card.getByText(body)).toBeVisible();
 });
 
+test("staff see an unread indicator + mark-read control on a thread with new client messages", async ({ page }) => {
+  // Seed leaves one client message unread by staff on this thread.
+  await page.goto("/clients/c-solomon");
+  const card = page.locator("section").filter({ has: page.getByRole("heading", { name: "Secure messages" }) });
+  await expect(card.getByText("1 new")).toBeVisible();
+  await expect(card.getByRole("button", { name: "Mark as read" })).toBeVisible();
+});
+
 test("the client can reply from the portal and sees it as their own", async ({ page }) => {
   const body = "Great, thank you! I have a question about my next steps.";
   await page.goto("/portal");

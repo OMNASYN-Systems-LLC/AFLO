@@ -47,6 +47,8 @@ export interface ClientThreadMessage {
 export interface ClientThreadView {
   subject: string;
   status: ThreadStatus;
+  /** Advisor messages this client hasn't read yet. A count only — client-safe. */
+  unreadCount: number;
   messages: ClientThreadMessage[];
 }
 
@@ -61,9 +63,12 @@ export function toClientThreadView(thread: ConversationThread, messages: Message
     .filter((m) => m.threadId === thread.id)
     .slice()
     .sort((a, b) => a.sentAt.localeCompare(b.sentAt));
+  // Unread from the client's perspective: advisor (staff) messages not yet read.
+  const unreadCount = ordered.filter((m) => m.senderRole === "staff" && m.readByClientAt === null).length;
   return {
     subject: thread.subject,
     status: thread.status,
+    unreadCount,
     messages: ordered.map((m) => ({
       from: m.senderRole === "client" ? "you" : "advisor",
       body: m.body,

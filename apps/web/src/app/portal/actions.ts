@@ -42,3 +42,25 @@ export async function sendClientMessageAction(
 
   revalidatePath("/portal");
 }
+
+/**
+ * Client marks a thread's advisor messages read (read receipts). Same id-free
+ * targeting as replies: the thread is resolved by its position in the client's
+ * own conversation list, server-side from the session, so the browser never
+ * holds an internal thread id. The store re-verifies ownership and is idempotent.
+ */
+export async function markClientThreadReadAction(threadIndex: number): Promise<void> {
+  const session = await getClientSession();
+  const threads = store.conversationsFor(session.organizationId, session.clientId);
+  const thread = threads[threadIndex];
+  if (!thread) return;
+
+  store.markThreadRead({
+    organizationId: session.organizationId,
+    threadId: thread.id,
+    readerRole: "client",
+    readerId: session.clientId,
+  });
+
+  revalidatePath("/portal");
+}

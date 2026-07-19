@@ -36,6 +36,7 @@ export const EVENT_TYPES = [
   "ConsentGranted",
   "ConsentRevoked",
   "MessagePosted",
+  "MessageRead",
 ] as const;
 
 export type EventType = (typeof EVENT_TYPES)[number];
@@ -93,6 +94,7 @@ export const EVENT_AGGREGATE: Record<EventType, AggregateType> = {
   ConsentGranted: "consent",
   ConsentRevoked: "consent",
   MessagePosted: "conversation",
+  MessageRead: "conversation",
 };
 
 /**
@@ -130,4 +132,5 @@ export const EVENT_VERSIONS: Record<EventType, number> = {
   ConsentGranted: 1,
   ConsentRevoked: 1,
   MessagePosted: 1,
+  MessageRead: 1,
 };
