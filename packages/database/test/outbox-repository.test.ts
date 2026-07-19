@@ -3,18 +3,18 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { PGlite } from "@electric-sql/pglite";
 import { drizzle, type PgliteDatabase } from "drizzle-orm/pglite";
-import { and, asc, inArray, lte } from "drizzle-orm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
   createEvent,
   toOutboxRecord,
+  VISIBILITY_TIMEOUT_MS,
   type OutboxRecord,
 } from "@aflo/shared";
-import * as schema from "../src/schema";
 import {
   DrizzleOutboxRepository,
   OutboxRecordNotFoundError,
   OutboxTransitionError,
+  selectDueForClaim,
 } from "../src/repositories/outbox";
 
 /**
@@ -211,17 +211,80 @@ describe("DrizzleOutboxRepository (PGlite)", () => {
     );
   });
 
-  it("the claim query carries FOR UPDATE SKIP LOCKED (concurrency control)", () => {
-    // Structural proof of the lock clause; simultaneous multi-worker behaviour
-    // is verified on real Postgres (PGlite is single-connection).
-    const sql = db
-      .select()
-      .from(schema.outbox)
-      .where(and(inArray(schema.outbox.status, ["pending", "failed"]), lte(schema.outbox.nextAttemptAt, T0)))
-      .orderBy(asc(schema.outbox.nextAttemptAt))
-      .limit(10)
-      .for("update", { skipLocked: true })
-      .toSQL().sql;
-    expect(sql.toLowerCase()).toContain("for update skip locked");
+  it("the repository's own claim query carries FOR UPDATE SKIP LOCKED", () => {
+    // Asserts the EXACT query claimBatch runs (selectDueForClaim), not a
+    // re-derived lookalike — deleting `.for(...)` from the repo fails this test.
+    // Simultaneous multi-worker behaviour is verified on real Postgres (PGlite
+    // is single-connection).
+    const sql = selectDueForClaim(db, T0, 10).toSQL().sql.toLowerCase();
+    expect(sql).toContain("for update skip locked");
+  });
+});
+
+describe("DrizzleOutboxRepository crash recovery (reapExpired)", () => {
+  it("reclaims a record stranded in processing by a crashed worker, and redelivers it", async () => {
+    const rec = makeRecord({ id: "11111111-1111-1111-1111-111111111111", eventId: "aaaaaaaa-0000-0000-0000-000000000001", at: T0 });
+    await repo.enqueue(rec);
+    await repo.claimBatch("worker-1", T0, 10); // -> processing, locked by worker-1
+    // worker-1 dies before markProcessed/markFailed.
+
+    // Before the visibility window elapses, nothing is reclaimed.
+    const stillLocked = new Date(T0.getTime() + VISIBILITY_TIMEOUT_MS - 1);
+    expect(await repo.reapExpired(stillLocked, VISIBILITY_TIMEOUT_MS, 10)).toHaveLength(0);
+
+    // After it elapses, the stranded row is returned to the retry path...
+    const expired = new Date(T0.getTime() + VISIBILITY_TIMEOUT_MS);
+    const reaped = await repo.reapExpired(expired, VISIBILITY_TIMEOUT_MS, 10);
+    expect(reaped.map((r) => r.id)).toEqual([rec.id]);
+    expect(reaped[0]!.status).toBe("failed");
+
+    // ...and a live worker redelivers it (attempts now 2 — the retry is counted).
+    const redelivered = await repo.claimBatch("worker-2", expired, 10);
+    expect(redelivered.map((r) => r.id)).toEqual([rec.id]);
+    expect(redelivered[0]!.attempts).toBe(2);
+  });
+
+  it("dead-letters a poison record whose worker keeps crashing (bounded reclaim)", async () => {
+    const rec = makeRecord({ id: "11111111-1111-1111-1111-111111111111", eventId: "aaaaaaaa-0000-0000-0000-000000000001", at: T0, maxAttempts: 1 });
+    await repo.enqueue(rec);
+    await repo.claimBatch("worker-1", T0, 10); // attempts -> 1 == maxAttempts, then crash
+
+    const expired = new Date(T0.getTime() + VISIBILITY_TIMEOUT_MS);
+    const reaped = await repo.reapExpired(expired, VISIBILITY_TIMEOUT_MS, 10);
+    expect(reaped[0]!.status).toBe("dead_letter"); // not reclaimed forever
+    expect(await repo.claimBatch("worker-2", new Date(expired.getTime() + 3_600_000), 10)).toHaveLength(0);
+  });
+});
+
+describe("DrizzleOutboxRepository under RLS (deployment contract)", () => {
+  it("a non-privileged role without org context drains NOTHING — the worker MUST bypass RLS", async () => {
+    // Seed a due record as the (superuser) owner, which bypasses RLS.
+    const seeded = makeRecord({ id: "11111111-1111-1111-1111-111111111111", eventId: "aaaaaaaa-0000-0000-0000-000000000001", at: T0 });
+    await repo.enqueue(seeded);
+
+    // Become the kind of least-privilege role an ops team might hand the worker
+    // by mistake: a plain role with no BYPASSRLS and no app.current_org_id set.
+    await client.exec(`
+      CREATE ROLE app_worker_norls NOLOGIN;
+      GRANT USAGE ON SCHEMA public TO app_worker_norls;
+      GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO app_worker_norls;
+      SET ROLE app_worker_norls;
+    `);
+    const blocked = makeRecord({ id: "22222222-2222-2222-2222-222222222222", eventId: "aaaaaaaa-0000-0000-0000-000000000002", at: T0 });
+    try {
+      // The FORCEd org_isolation policy hides every row (USING is false)...
+      expect(await repo.claimBatch("worker-1", T0, 10)).toHaveLength(0);
+      // ...and rejects inserts (WITH CHECK is false) — a silent no-op drain in production.
+      await expect(repo.enqueue(blocked)).rejects.toThrow();
+    } finally {
+      await client.exec("RESET ROLE");
+    }
+
+    // Back as the privileged owner (the worker's REQUIRED config): the seeded
+    // row is visible and drainable, and the blocked insert wrote NOTHING —
+    // RLS was the only thing hiding the seed and rejecting the insert.
+    expect(await repo.get(blocked.id)).toBeNull();
+    expect(await repo.get(seeded.id)).not.toBeNull();
+    expect(await repo.claimBatch("worker-1", T0, 10)).toHaveLength(1);
   });
 });

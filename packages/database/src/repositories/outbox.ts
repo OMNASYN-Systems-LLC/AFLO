@@ -3,6 +3,7 @@ import type { PgDatabase, PgQueryResultHKT } from "drizzle-orm/pg-core";
 import {
   claim,
   complete,
+  expireLock,
   fail,
   serializeEvent,
   type DomainEvent,
@@ -16,15 +17,38 @@ import { outbox } from "../schema";
 /**
  * PostgreSQL transactional outbox (Drizzle), behind the @aflo/shared
  * OutboxRepository contract. All state changes are driven through the shared
- * outbox.v1.0.0 transitions, so retry/backoff/dead-letter behaviour is
- * identical to any other implementation — this class only adds durable storage
- * and the `FOR UPDATE SKIP LOCKED` concurrency control the worker relies on.
+ * outbox.v1.0.0 transitions, so retry/backoff/dead-letter/crash-recovery
+ * behaviour is identical to any other implementation — this class only adds
+ * durable storage and the `FOR UPDATE SKIP LOCKED` concurrency control the
+ * worker relies on.
  *
  * The handle is driver-agnostic (PGlite in tests, node-postgres/Neon in the
  * worker), so the same code path proven credential-free on PGlite runs in
  * production.
+ *
+ * DEPLOYMENT: the worker drains every organization, so it MUST connect under an
+ * RLS-BYPASSING role — migration 0003 FORCE-enables org_isolation on the outbox,
+ * and a non-privileged role without `app.current_org_id` set would see zero due
+ * rows and have its inserts rejected (see OutboxRepository docs). The
+ * `rls-runtime.test.ts` proves that failure mode is real.
  */
 export type OutboxDrizzleDb = PgDatabase<PgQueryResultHKT>;
+
+/**
+ * The due-claim query: `pending`/`failed` records past their `next_attempt_at`,
+ * oldest-due first, locked `FOR UPDATE SKIP LOCKED` so two workers polling at
+ * once never receive the same row. Extracted so the concurrency test asserts
+ * the SAME query the repository runs (not a re-derived lookalike).
+ */
+export function selectDueForClaim(qb: OutboxDrizzleDb, now: Date, limit: number) {
+  return qb
+    .select()
+    .from(outbox)
+    .where(and(inArray(outbox.status, ["pending", "failed"]), lte(outbox.nextAttemptAt, now)))
+    .orderBy(asc(outbox.nextAttemptAt))
+    .limit(limit)
+    .for("update", { skipLocked: true });
+}
 
 /** A `select().from(outbox)` row — Date columns, jsonb payload object. */
 type OutboxRow = typeof outbox.$inferSelect;
@@ -120,16 +144,7 @@ export class DrizzleOutboxRepository implements OutboxRepository {
 
   async claimBatch(workerId: string, now: Date, limit: number): Promise<OutboxRecord[]> {
     return this.db.transaction(async (tx) => {
-      const due = await tx
-        .select()
-        .from(outbox)
-        .where(and(inArray(outbox.status, ["pending", "failed"]), lte(outbox.nextAttemptAt, now)))
-        .orderBy(asc(outbox.nextAttemptAt))
-        .limit(limit)
-        // Two workers polling at once never receive the same row: the second
-        // skips rows the first has locked rather than blocking on them.
-        .for("update", { skipLocked: true });
-
+      const due = await selectDueForClaim(tx, now, limit);
       const claimed: OutboxRecord[] = [];
       for (const row of due) {
         const result = claim(toRecord(row), now, workerId);
@@ -138,6 +153,28 @@ export class DrizzleOutboxRepository implements OutboxRepository {
         claimed.push(result.record);
       }
       return claimed;
+    });
+  }
+
+  async reapExpired(now: Date, visibilityTimeoutMs: number, limit: number): Promise<OutboxRecord[]> {
+    return this.db.transaction(async (tx) => {
+      const cutoff = new Date(now.getTime() - visibilityTimeoutMs);
+      const stale = await tx
+        .select()
+        .from(outbox)
+        .where(and(eq(outbox.status, "processing"), lte(outbox.lockedAt, cutoff)))
+        .orderBy(asc(outbox.lockedAt))
+        .limit(limit)
+        .for("update", { skipLocked: true });
+
+      const reaped: OutboxRecord[] = [];
+      for (const row of stale) {
+        const result = expireLock(toRecord(row), now, visibilityTimeoutMs);
+        if (!result.allowed || !result.record) continue; // WHERE already filtered; belt-and-suspenders
+        await tx.update(outbox).set(toStateColumns(result.record)).where(eq(outbox.id, result.record.id));
+        reaped.push(result.record);
+      }
+      return reaped;
     });
   }
 

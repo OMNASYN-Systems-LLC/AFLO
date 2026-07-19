@@ -10,11 +10,17 @@ import type { OutboxRecord } from "./record";
  * outcome via `markProcessed` / `markFailed`.
  *
  * Every implementation MUST drive its state changes through the shared
- * outbox.v1.0.0 transitions (`claim` / `complete` / `fail`), so retry, backoff,
- * and dead-lettering are deterministic and identical regardless of the backing
- * store. The worker drains events across all organizations, so it runs under a
- * privileged (RLS-bypassing) database role; the org_isolation RLS policy still
- * protects the outbox from ordinary app-layer roles.
+ * outbox.v1.0.0 transitions (`claim` / `complete` / `fail` / `expireLock`), so
+ * retry, backoff, dead-lettering, and crash recovery are deterministic and
+ * identical regardless of the backing store.
+ *
+ * DEPLOYMENT REQUIREMENT — the worker drains events across ALL organizations,
+ * so it MUST connect under a privileged, RLS-BYPASSING database role. Migration
+ * 0003 FORCE-enables the `org_isolation` RLS policy on the outbox; a worker on
+ * an ordinary role WITHOUT `app.current_org_id` set sees zero due rows (the
+ * USING clause is false) and its inserts are rejected (WITH CHECK) — it would
+ * silently drain nothing. The RLS policy still protects the outbox from
+ * ordinary app-layer (web) roles; the worker is the sole privileged consumer.
  */
 export interface OutboxRepository {
   /**
@@ -46,6 +52,16 @@ export interface OutboxRepository {
    * `processing`.
    */
   markFailed(id: string, now: Date, reason: string): Promise<void>;
+
+  /**
+   * Recover records stranded in `processing` by a crashed worker: any whose
+   * lock is older than `visibilityTimeoutMs` is returned to the retry path
+   * (immediately due), or dead-lettered once attempts are exhausted. The worker
+   * MUST call this each poll (before `claimBatch`) — without it, a crash
+   * between claim and complete strands the event forever and breaks the
+   * at-least-once guarantee. Returns the reclaimed records.
+   */
+  reapExpired(now: Date, visibilityTimeoutMs: number, limit: number): Promise<OutboxRecord[]>;
 
   /** Fetch a record by id (diagnostics / dead-letter review); null when absent. */
   get(id: string): Promise<OutboxRecord | null>;
