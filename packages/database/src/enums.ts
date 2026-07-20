@@ -180,3 +180,40 @@ export const aiReviewStatusEnum = pgEnum("ai_review_status", [
   "rejected",
   "auto_published",
 ]);
+
+// --- Auth persistence (Production Cutover PHASE 2) ---
+
+/** External identity provider (Clerk owns identity; extend by migration). */
+export const identityProviderEnum = pgEnum("identity_provider", ["clerk"]);
+
+/** Invitation lifecycle (@aflo/auth InvitationStatus). */
+export const invitationStatusEnum = pgEnum("invitation_status", [
+  "pending",
+  "accepted",
+  "revoked",
+  "expired",
+]);
+
+/** Which side an invitation onboards (staff membership vs client link). */
+export const invitationTypeEnum = pgEnum("invitation_type", ["staff", "client"]);
+
+/**
+ * The role an invitation grants — the @aflo/auth authorization Role vocabulary of
+ * the four INVITABLE roles (platform_admin / partner_viewer are never invited).
+ */
+export const invitedRoleEnum = pgEnum("invited_role", [
+  "organization_owner",
+  "organization_admin",
+  "staff_advisor",
+  "client",
+]);
+
+/** Client↔user link lifecycle (@aflo/auth: a client is linked to exactly one active user). */
+export const clientUserLinkStatusEnum = pgEnum("client_user_link_status", ["active", "revoked"]);
+
+/** Provider webhook receipt processing status (@aflo/auth WebhookProcessingStatus). */
+export const webhookEventStatusEnum = pgEnum("webhook_event_status", [
+  "received",
+  "processed",
+  "failed",
+]);

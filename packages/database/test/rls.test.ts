@@ -31,21 +31,40 @@ function hasOrgId(table: Table): boolean {
 const tenantTables = tables.filter(hasOrgId).map(getTableName);
 const globalTables = tables.filter((t) => !hasOrgId(t)).map(getTableName);
 
+/**
+ * Tables that carry an organization_id yet are intentionally NOT org-RLS-scoped.
+ * `session_revocations` has a NULLABLE org and is read by the auth resolver
+ * before/across an org context (like users) — RLS-scoping it would hide
+ * null-org rows from the resolver and break disable/revoke. Access is via the
+ * privileged auth-resolver/service path.
+ */
+const RLS_EXEMPT_TENANT_TABLES = new Set(["session_revocations"]);
+
 describe("RLS org isolation", () => {
   it("covers every tenant table (derived from the schema)", () => {
     expect(tenantTables.length).toBeGreaterThanOrEqual(26);
-    const missing = tenantTables.filter(
-      (name) =>
-        !migrationSql.includes(`ALTER TABLE "${name}" ENABLE ROW LEVEL SECURITY`) ||
-        !migrationSql.includes(`ALTER TABLE "${name}" FORCE ROW LEVEL SECURITY`) ||
-        !migrationSql.includes(`CREATE POLICY "org_isolation" ON "${name}"`),
-    );
+    const missing = tenantTables
+      .filter((name) => !RLS_EXEMPT_TENANT_TABLES.has(name))
+      .filter(
+        (name) =>
+          !migrationSql.includes(`ALTER TABLE "${name}" ENABLE ROW LEVEL SECURITY`) ||
+          !migrationSql.includes(`ALTER TABLE "${name}" FORCE ROW LEVEL SECURITY`) ||
+          !migrationSql.includes(`CREATE POLICY "org_isolation" ON "${name}"`),
+      );
     expect(missing).toEqual([]);
   });
 
-  it("does not force RLS on the global tables (organizations, users, rule_versions)", () => {
-    expect(globalTables.sort()).toEqual(["organizations", "rule_versions", "users"]);
-    for (const name of globalTables) {
+  it("does not force RLS on global / auth-resolver tables", () => {
+    // No-org tables: tenant roots (organizations/users/rule_versions) + the
+    // auth-resolver identity/webhook tables read outside an org context.
+    expect(globalTables.sort()).toEqual([
+      "identity_provider_accounts",
+      "organizations",
+      "provider_webhook_events",
+      "rule_versions",
+      "users",
+    ]);
+    for (const name of [...globalTables, ...RLS_EXEMPT_TENANT_TABLES]) {
       expect(migrationSql).not.toContain(`ALTER TABLE "${name}" ENABLE ROW LEVEL SECURITY`);
     }
   });
