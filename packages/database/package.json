@@ -19,6 +19,7 @@
     "@aflo/notifications": "workspace:*",
     "@aflo/partner-marketplace": "workspace:*",
     "@aflo/rules": "workspace:*",
+    "@aflo/security": "workspace:*",
     "@aflo/shared": "workspace:*",
     "drizzle-orm": "^0.45.2"
   },
