@@ -198,6 +198,9 @@ importers:
       '@aflo/rules':
         specifier: workspace:*
         version: link:../rules
+      '@aflo/security':
+        specifier: workspace:*
+        version: link:../security
       '@aflo/shared':
         specifier: workspace:*
         version: link:../shared

@@ -22,7 +22,8 @@ import type {
   StaffMember,
 } from "../domain/types";
 import type { EngagementAssessment, ReadinessAssessment } from "@aflo/rules";
-import type { ClientThreadView } from "../domain/messaging";
+import type { MessageSenderRole, ThreadStatus } from "@aflo/rules";
+import type { ClientThreadView, ConversationThread, Message } from "../domain/messaging";
 
 /**
  * Repository contracts for the first vertical slice.
@@ -182,4 +183,64 @@ export interface DashboardRepository {
 export interface ClientRepository {
   list(organizationId: string, now: Date): Promise<ClientSummary[]>;
   getDetail(organizationId: string, clientId: string, now: Date): Promise<ClientDetail | null>;
+}
+
+export interface CreateThreadInput {
+  clientId: string;
+  subject: string;
+}
+
+export interface PostMessageInput {
+  threadId: string;
+  senderRole: MessageSenderRole;
+  /** A staff member id, or the thread's client id when the client posts. */
+  senderId: string;
+  /** Plaintext — the repository encrypts it; the DB only ever holds ciphertext. */
+  body: string;
+}
+
+/**
+ * Persistence contract for secure staff↔client messaging (the Neon-backed
+ * implementation is org-scoped via RLS + `withOrgContext` and encrypts every
+ * body at rest). Callers work in PLAINTEXT `Message.body`; encryption is entirely
+ * below this boundary. Every method takes `organizationId` from the verified
+ * session, never the browser. Deterministic well-formedness (empty/too-long body,
+ * closed thread) is re-checked against the messaging kernel, so an invalid write
+ * is rejected even if a caller skipped validation.
+ */
+export interface MessagingRepository {
+  /** Open a new thread (status `open`, no messages yet). */
+  createThread(organizationId: string, input: CreateThreadInput, now: Date): Promise<ConversationThread>;
+  /** Null for unknown ids and foreign-org ids (RLS scopes the read to the current org). */
+  getThread(organizationId: string, threadId: string): Promise<ConversationThread | null>;
+  /** All of a client's threads, most-recently-active first. */
+  listThreads(organizationId: string, clientId: string): Promise<ConversationThread[]>;
+  /**
+   * Append a message to a thread and bump its `lastMessageAt`. The message's
+   * `clientId` is DERIVED from the loaded thread (not caller-supplied), so a
+   * message can never be mis-filed to another client; a client sender may only
+   * post to their own thread. Throws on a missing/foreign thread or a rejected
+   * body (closed thread / empty / too long).
+   */
+  postMessage(organizationId: string, input: PostMessageInput, now: Date): Promise<Message>;
+  /** A thread's messages oldest-first, bodies DECRYPTED to plaintext. */
+  listMessages(organizationId: string, threadId: string): Promise<Message[]>;
+  /**
+   * Mark the COUNTERPARTY's unread messages read (read receipts): a staff reader
+   * marks client messages, a client reader marks staff messages. Returns the
+   * count transitioned (0 = idempotent no-op).
+   */
+  markThreadRead(
+    organizationId: string,
+    threadId: string,
+    readerRole: MessageSenderRole,
+    now: Date,
+  ): Promise<number>;
+  /** Close or reopen a thread; returns the resulting status (kernel-validated). */
+  setThreadStatus(
+    organizationId: string,
+    threadId: string,
+    action: "close" | "reopen",
+    now: Date,
+  ): Promise<ThreadStatus>;
 }
