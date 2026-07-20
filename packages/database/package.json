@@ -16,6 +16,7 @@
   },
   "dependencies": {
     "@aflo/ai": "workspace:*",
+    "@aflo/auth": "workspace:*",
     "@aflo/notifications": "workspace:*",
     "@aflo/partner-marketplace": "workspace:*",
     "@aflo/rules": "workspace:*",

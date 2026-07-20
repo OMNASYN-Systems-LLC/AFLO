@@ -9,5 +9,6 @@ export * from "./identity";
 export * from "./session-context";
 export * from "./test-provider";
 export * from "./invitation";
+export * from "./identity-repositories";
 export * from "./membership";
 export * from "./account";
