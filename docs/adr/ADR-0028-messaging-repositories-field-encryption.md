@@ -77,7 +77,18 @@ Safety properties, proven on PGlite under a **non-superuser** role:
 well-formedness. Cross-CLIENT authorization within an org (which staff/clients
 may act on which client) is the authorization engine's job (ADR-0018
 `CLIENT_SCOPED_PERMISSIONS` + the session's `linkedClientId`), not the
-repository's — the same separation the rest of the system uses.
+repository's — the same separation the rest of the system uses (e.g.
+`ClientRepository.getDetail` also takes a `clientId` it does not itself
+authorize). Note the deliberate asymmetry: `postMessage` additionally checks
+`senderId === thread.clientId` (cheap defense-in-depth, since it has the sender),
+but the read/receipt/status methods take no actor id and so **cannot** gate on
+client ownership. **Wiring requirement (enforced before the client portal reaches
+this repository):** the caller MUST gate `getThread`, `listThreads`,
+`listMessages`, `markThreadRead`, and `setThreadStatus` through the authorization
+engine so a client can only reach their own threads — otherwise, within one org,
+a client id substituted for another's `threadId` would read that thread's
+decrypted messages. There is no live exploit today (the repository is not yet
+wired to any request path).
 
 ## Consequences
 

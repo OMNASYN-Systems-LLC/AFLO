@@ -211,7 +211,7 @@ export interface PostMessageInput {
 export interface MessagingRepository {
   /** Open a new thread (status `open`, no messages yet). */
   createThread(organizationId: string, input: CreateThreadInput, now: Date): Promise<ConversationThread>;
-  /** Null for unknown ids and foreign-org ids (RLS + explicit org filter). */
+  /** Null for unknown ids and foreign-org ids (RLS scopes the read to the current org). */
   getThread(organizationId: string, threadId: string): Promise<ConversationThread | null>;
   /** All of a client's threads, most-recently-active first. */
   listThreads(organizationId: string, clientId: string): Promise<ConversationThread[]>;
