@@ -80,11 +80,18 @@ export interface WebhookEventRepository {
 
 export interface RevokeSessionsInput {
   userId: string;
-  /** Optional org scope (null = platform-wide for this user). */
+  /**
+   * AUDIT/CONTEXT only — which org's action initiated the revocation (recorded,
+   * never used as a read filter). Revocation is evaluated USER-scoped: a session
+   * is one identity's session, not tied to an org at issue time, so a revocation
+   * always applies to the whole user (this matches the account.ts cutoff model).
+   */
   organizationId?: string | null;
   /** A specific provider session digest, or null/omitted to revoke ALL the user's sessions. */
   providerSessionIdDigest?: string | null;
   reasonCode: string;
+  /** Who initiated the revocation (audit — `created_by_user_id`); null if system/unknown. */
+  revokedByUserId?: string | null;
   /** Optional expiry after which the revocation no longer applies. */
   expiresAt?: Date | null;
 }
@@ -94,10 +101,12 @@ export interface SessionRevocationRepository {
   revoke(input: RevokeSessionsInput, now: Date): Promise<void>;
   /**
    * Is a session — issued at `sessionIssuedAt`, with optional `providerSessionIdDigest`
-   * — revoked for this user? USER-SCOPED (`WHERE user_id = userId`). A revocation
-   * applies when it was recorded AFTER the session was issued
-   * (`revoked_at > sessionIssuedAt`), targets this session (digest null = all, or
-   * an exact match), and has not expired. Fails closed on a bad timestamp.
+   * — revoked for this user? USER-SCOPED (`WHERE user_id = userId`; org is NOT a
+   * filter, per `RevokeSessionsInput.organizationId`). A revocation applies when it
+   * was recorded AFTER the session was issued (`revoked_at > sessionIssuedAt`),
+   * targets this session (digest null = all, or an exact match), and has not
+   * expired. Timestamps are `Date`s supplied by the server (the string-parsing
+   * fail-closed check lives in the pure `isSessionRevoked` in account.ts).
    */
   isSessionRevoked(
     userId: string,

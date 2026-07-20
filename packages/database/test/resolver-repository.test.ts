@@ -166,8 +166,16 @@ describe("DrizzleSessionRevocationRepository (user-scoped)", () => {
   });
 
   it("is user-scoped: revoking user A does not revoke user B", async () => {
-    await revRepo.revoke({ userId: u.a!, reasonCode: "disabled" }, T_REVOKE);
+    await revRepo.revoke({ userId: u.a!, reasonCode: "disabled", revokedByUserId: u.b! }, T_REVOKE);
     expect(await revRepo.isSessionRevoked(u.a!, T_BEFORE, "sess-x", T_CHECK)).toBe(true);
     expect(await revRepo.isSessionRevoked(u.b!, T_BEFORE, "sess-x", T_CHECK)).toBe(false);
+  });
+
+  it("records who initiated the revocation (created_by_user_id) for audit", async () => {
+    const row = await pg.query<{ created_by_user_id: string | null }>(
+      `SELECT created_by_user_id FROM session_revocations WHERE user_id = $1 LIMIT 1`,
+      [u.a!],
+    );
+    expect(row.rows[0]!.created_by_user_id).toBe(u.b);
   });
 });

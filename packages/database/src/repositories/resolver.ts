@@ -163,6 +163,7 @@ export class DrizzleSessionRevocationRepository implements SessionRevocationRepo
       reasonCode: input.reasonCode,
       revokedAt: now,
       expiresAt: input.expiresAt ?? null,
+      createdByUserId: input.revokedByUserId ?? null,
       createdAt: now,
     });
   }

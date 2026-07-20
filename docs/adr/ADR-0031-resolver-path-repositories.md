@@ -67,3 +67,23 @@ server-only `@aflo/auth/webhook` subpath.
   invitation accepted, spanning the resolver read and the org-scoped writes. Plus
   the webhook route (verify → `recordReceipt` → reconcile) and the session-context
   wiring that consults `isSessionRevoked`.
+
+## Post-review clarifications
+
+An adversarial review (SAFE TO MERGE; all invariants mutation-tested) surfaced
+three LOW items, all folded in:
+
+- **Revocation is user-scoped; org is audit-context (not a read filter).** A
+  session is one identity's session and isn't tied to an org at issue time, so
+  `isSessionRevoked` is deliberately user-scoped — `RevokeSessionsInput.organizationId`
+  records which org initiated the revocation and is never used to filter reads
+  (documented on both the input and the method, matching the account.ts cutoff
+  model). This closes the "org stored but not enforced" mismatch (which was
+  over-revocation / fail-closed, not a leak).
+- **Actor attribution (CLAUDE.md rule 7).** `revoke` now persists
+  `RevokeSessionsInput.revokedByUserId` → `session_revocations.created_by_user_id`
+  (a forced sign-out is a material state change), proven by a test.
+- **Doc accuracy.** The repository `isSessionRevoked` takes server-supplied `Date`s;
+  the string-parsing fail-closed guard lives in the pure `isSessionRevoked`
+  (account.ts). The comment was corrected to not overstate a fail-closed path the
+  `Date`-typed method doesn't implement.
