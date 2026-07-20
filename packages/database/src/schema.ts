@@ -24,8 +24,14 @@ import {
   appointmentStatusEnum,
   clientKindEnum,
   clientStatusEnum,
+  clientUserLinkStatusEnum,
   communicationStatusEnum,
   consentTypeEnum,
+  identityProviderEnum,
+  invitationStatusEnum,
+  invitationTypeEnum,
+  invitedRoleEnum,
+  webhookEventStatusEnum,
   creditScoreSourceEnum,
   documentReviewStatusEnum,
   documentTypeEnum,
@@ -831,3 +837,150 @@ export const handoffPackages = pgTable(
 
 // Referenced by later-slice tables; exported so migrations stay append-only.
 export { appointmentStatusEnum };
+
+// ============================================================================
+// Auth persistence (Production Cutover PHASE 2)
+//
+// The identity bridge: Clerk identity → AFLO user → membership / client link,
+// plus invitations, verified webhook receipts, and session revocation. Three of
+// these are read by the auth resolver BEFORE an org context exists (a user's
+// identity mapping, their revocations) or across orgs (provider webhook
+// receipts), so — like `organizations`/`users`/`rule_versions` — they are NOT
+// org-RLS-scoped; access is via the privileged auth-resolver/service path. The
+// tenant-owned ones (`invitations`, `client_user_links`) carry `organization_id`
+// and get FORCE RLS in the same migration. Tokens/secrets are stored as digests
+// only, never plaintext.
+// ============================================================================
+
+/** Maps an external provider identity (Clerk subject) to an AFLO user. NOT org-scoped. */
+export const identityProviderAccounts = pgTable(
+  "identity_provider_accounts",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    provider: identityProviderEnum("provider").notNull(),
+    providerUserId: text("provider_user_id").notNull(),
+    afloUserId: uuid("aflo_user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    ...timestamps,
+  },
+  (t) => [
+    uniqueIndex("uq_idp_provider_user").on(t.provider, t.providerUserId),
+    index("idx_idp_aflo_user").on(t.afloUserId),
+  ],
+);
+
+/** Staff/client invitations. Org-scoped (RLS). Token stored as a digest only. */
+export const invitations = pgTable(
+  "invitations",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    /** Normalized (lowercase) invitee email. */
+    email: text("email").notNull(),
+    invitationType: invitationTypeEnum("invitation_type").notNull(),
+    intendedRole: invitedRoleEnum("intended_role").notNull(),
+    /** The reserved client record for a client invitation (null for staff). */
+    intendedClientId: uuid("intended_client_id").references(() => clients.id, { onDelete: "cascade" }),
+    /** SHA-256 hex of the raw invite token — never the raw token. */
+    tokenDigest: varchar("token_digest", { length: 64 }).notNull(),
+    status: invitationStatusEnum("status").notNull().default("pending"),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    acceptedAt: timestamp("accepted_at", { withTimezone: true }),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    /** The member who issued it (null if that membership is later removed). */
+    createdByMemberId: uuid("created_by_member_id").references(() => organizationMembers.id, {
+      onDelete: "set null",
+    }),
+    /** The user who accepted it. */
+    acceptedByUserId: uuid("accepted_by_user_id").references(() => users.id, { onDelete: "set null" }),
+    ...timestamps,
+  },
+  (t) => [
+    // Idempotency: the token digest is unique per org (a redelivered issue is a no-op).
+    uniqueIndex("uq_invitations_org_token").on(t.organizationId, t.tokenDigest),
+    // At most one PENDING invitation per (org, email).
+    uniqueIndex("uq_invitations_pending_email")
+      .on(t.organizationId, t.email)
+      .where(sql`status = 'pending'`),
+    index("idx_invitations_org_status").on(t.organizationId, t.status),
+  ],
+);
+
+/** Links a Clerk-authenticated user to exactly one active client record. Org-scoped (RLS). */
+export const clientUserLinks = pgTable(
+  "client_user_links",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    clientId: uuid("client_id")
+      .notNull()
+      .references(() => clients.id, { onDelete: "cascade" }),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    status: clientUserLinkStatusEnum("status").notNull().default("active"),
+    linkedAt: timestamp("linked_at", { withTimezone: true }).notNull().defaultNow(),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    ...timestamps,
+  },
+  (t) => [
+    // A client has at most one ACTIVE user; a user maps to at most one ACTIVE client per org.
+    uniqueIndex("uq_client_links_active_client")
+      .on(t.organizationId, t.clientId)
+      .where(sql`status = 'active'`),
+    uniqueIndex("uq_client_links_active_user")
+      .on(t.organizationId, t.userId)
+      .where(sql`status = 'active'`),
+  ],
+);
+
+/** Verified provider webhook receipts (idempotency + audit). NOT org-scoped. */
+export const providerWebhookEvents = pgTable(
+  "provider_webhook_events",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    provider: identityProviderEnum("provider").notNull(),
+    /** The provider/Svix message id — the idempotency key. */
+    providerEventId: text("provider_event_id").notNull(),
+    eventType: text("event_type").notNull(),
+    /** SHA-256 hex of the raw payload (never the payload or the signing secret). */
+    payloadDigest: varchar("payload_digest", { length: 64 }).notNull(),
+    receivedAt: timestamp("received_at", { withTimezone: true }).notNull().defaultNow(),
+    processedAt: timestamp("processed_at", { withTimezone: true }),
+    status: webhookEventStatusEnum("status").notNull().default("received"),
+    attempts: integer("attempts").notNull().default(0),
+    lastErrorCode: text("last_error_code"),
+    ...timestamps,
+  },
+  (t) => [uniqueIndex("uq_webhook_provider_event").on(t.provider, t.providerEventId)],
+);
+
+/** Session-revocation records (disable / sign-out-everywhere). User-scoped, org optional. NOT org-RLS. */
+export const sessionRevocations = pgTable(
+  "session_revocations",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    /** Optional org scope (null = platform-wide for this user). */
+    organizationId: uuid("organization_id").references(() => organizations.id, { onDelete: "set null" }),
+    /** SHA-256 hex of a specific provider session id, or null to revoke all sessions. */
+    providerSessionIdDigest: varchar("provider_session_id_digest", { length: 64 }),
+    reasonCode: text("reason_code").notNull(),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }).notNull().defaultNow(),
+    /** Optional expiry after which the revocation no longer applies. */
+    expiresAt: timestamp("expires_at", { withTimezone: true }),
+    createdByUserId: uuid("created_by_user_id").references(() => users.id, { onDelete: "set null" }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index("idx_session_revocations_user").on(t.userId),
+    index("idx_session_revocations_user_revoked").on(t.userId, t.revokedAt),
+  ],
+);
