@@ -114,8 +114,11 @@ describe("invitations RLS", () => {
     ).rejects.toThrow(/row-level security/i);
   });
 
-  it("fails closed with no org context", async () => {
+  it("fails closed with no org context (unset) and with an empty-string context", async () => {
     await db.exec("RESET app.current_org_id");
+    expect((await db.query("SELECT id FROM invitations")).rows).toHaveLength(0);
+    // nullif('') → NULL, so a cleared '' context also exposes zero rows (not an error).
+    await useOrg("");
     expect((await db.query("SELECT id FROM invitations")).rows).toHaveLength(0);
   });
 });
@@ -157,6 +160,22 @@ describe("uniqueness / idempotency constraints", () => {
       db.query(
         `INSERT INTO client_user_links (organization_id, client_id, user_id, status) VALUES ($1,$2,$3,'active')`,
         [ORG_A, clientIdA, otherUser.rows[0]!.id],
+      ),
+    ).rejects.toThrow(/duplicate key|unique/i);
+  });
+
+  it("rejects a user claiming a second active client link (the active-user direction)", async () => {
+    await useOrg(ORG_A);
+    // userIdA already has an active link (to clientIdA) from the test above; a
+    // second active link to a different client must be rejected.
+    const otherClient = await db.query<{ id: string }>(
+      `INSERT INTO clients (organization_id, pipeline_stage_id, first_name, last_name) VALUES ($1,'stage-new','Al2','A') RETURNING id`,
+      [ORG_A],
+    );
+    await expect(
+      db.query(
+        `INSERT INTO client_user_links (organization_id, client_id, user_id, status) VALUES ($1,$2,$3,'active')`,
+        [ORG_A, otherClient.rows[0]!.id, userIdA],
       ),
     ).rejects.toThrow(/duplicate key|unique/i);
   });

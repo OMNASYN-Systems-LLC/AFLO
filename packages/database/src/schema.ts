@@ -899,8 +899,11 @@ export const invitations = pgTable(
     ...timestamps,
   },
   (t) => [
-    // Idempotency: the token digest is unique per org (a redelivered issue is a no-op).
-    uniqueIndex("uq_invitations_org_token").on(t.organizationId, t.tokenDigest),
+    // GLOBAL unique: a token identifies exactly ONE invitation. The accept-by-token
+    // lookup reads by token_digest alone (before an org context exists), so per-org
+    // uniqueness would be ambiguous. Tokens are 32 random bytes — collision is
+    // cryptographically infeasible; this makes the token→invitation invariant explicit.
+    uniqueIndex("uq_invitations_token").on(t.tokenDigest),
     // At most one PENDING invitation per (org, email).
     uniqueIndex("uq_invitations_pending_email")
       .on(t.organizationId, t.email)

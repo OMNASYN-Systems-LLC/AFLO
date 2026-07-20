@@ -1,5 +1,5 @@
 {
-  "id": "1accc578-c6de-43c0-a914-6bdb90e08d13",
+  "id": "3396ec50-fc81-4b0c-ad0d-05fd26c92278",
   "prevId": "d48abb57-fe61-4f8f-8596-d9dad66da9ea",
   "version": "7",
   "dialect": "postgresql",
@@ -2428,15 +2428,9 @@
         }
       },
       "indexes": {
-        "uq_invitations_org_token": {
-          "name": "uq_invitations_org_token",
+        "uq_invitations_token": {
+          "name": "uq_invitations_token",
           "columns": [
-            {
-              "expression": "organization_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
             {
               "expression": "token_digest",
               "isExpression": false,

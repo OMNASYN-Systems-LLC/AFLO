@@ -85,7 +85,7 @@ CREATE UNIQUE INDEX "uq_client_links_active_client" ON "client_user_links" USING
 CREATE UNIQUE INDEX "uq_client_links_active_user" ON "client_user_links" USING btree ("organization_id","user_id") WHERE status = 'active';--> statement-breakpoint
 CREATE UNIQUE INDEX "uq_idp_provider_user" ON "identity_provider_accounts" USING btree ("provider","provider_user_id");--> statement-breakpoint
 CREATE INDEX "idx_idp_aflo_user" ON "identity_provider_accounts" USING btree ("aflo_user_id");--> statement-breakpoint
-CREATE UNIQUE INDEX "uq_invitations_org_token" ON "invitations" USING btree ("organization_id","token_digest");--> statement-breakpoint
+CREATE UNIQUE INDEX "uq_invitations_token" ON "invitations" USING btree ("token_digest");--> statement-breakpoint
 CREATE UNIQUE INDEX "uq_invitations_pending_email" ON "invitations" USING btree ("organization_id","email") WHERE status = 'pending';--> statement-breakpoint
 CREATE INDEX "idx_invitations_org_status" ON "invitations" USING btree ("organization_id","status");--> statement-breakpoint
 CREATE UNIQUE INDEX "uq_webhook_provider_event" ON "provider_webhook_events" USING btree ("provider","provider_event_id");--> statement-breakpoint

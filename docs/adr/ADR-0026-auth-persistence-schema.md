@@ -66,3 +66,26 @@ not an oversight.
   accept-by-token read precedes org context) are follow-ups.
 - **Messaging persistence** (`conversation_threads`, `messages`) is the very next
   migration (0006), kept separate for reviewability.
+
+## Post-review hardening / required follow-ups
+
+An adversarial review (SAFE TO MERGE) surfaced these:
+
+- **Invitation token is now GLOBALLY unique** (`uq_invitations_token` on
+  `token_digest` alone, not `(org, token_digest)`). The accept-by-token lookup
+  reads by token before an org context exists, so a per-org unique left a latent
+  (cryptographically-infeasible but real) cross-tenant mis-bind. A token now
+  identifies exactly one invitation.
+- **Un-scoped-tables enforcement is a HARD PHASE-5 requirement (MEDIUM).** The
+  three un-scoped tables (`identity_provider_accounts`, `provider_webhook_events`,
+  `session_revocations`) are correct to exempt from org-RLS (read before/across
+  org context), but the compensating "privileged service path" is currently only
+  asserted, not enforced. Under a single `aflo_app` non-BYPASSRLS role, that role
+  can read these tables table-wide with no RLS backstop. **Before the resolver is
+  wired (PHASE 5), the deployment MUST** either (a) use a distinct
+  least-privileged resolver role with the tenant-request role `REVOKE`d off these
+  three tables, or (b) commit an explicit grant matrix — and the
+  `session_revocations` check MUST read `WHERE user_id = <resolved user>`, never
+  a table-wide scan. This is the same "make the deployment invariant real and
+  testable" bar ADR-0025 set for the non-superuser runtime role. Tracked as a
+  blocking prerequisite for the resolver slice.
