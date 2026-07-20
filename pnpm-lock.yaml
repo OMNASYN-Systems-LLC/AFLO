@@ -189,6 +189,9 @@ importers:
       '@aflo/ai':
         specifier: workspace:*
         version: link:../ai
+      '@aflo/auth':
+        specifier: workspace:*
+        version: link:../auth
       '@aflo/notifications':
         specifier: workspace:*
         version: link:../notifications
