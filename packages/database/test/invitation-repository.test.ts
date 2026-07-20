@@ -18,6 +18,7 @@ import { generateInvitationToken } from "@aflo/auth/invitation-token";
 import {
   ClientAlreadyLinkedError,
   ClientLinkNotFoundError,
+  ClientNotInOrganizationError,
   DrizzleClientUserLinkRepository,
   DrizzleInvitationRepository,
   InvitationNotFoundError,
@@ -56,6 +57,7 @@ let invRepo: DrizzleInvitationRepository;
 let linkRepo: DrizzleClientUserLinkRepository;
 let clientA1 = "";
 let clientA2 = "";
+let clientB1 = "";
 let userA1 = "";
 let userA2 = "";
 
@@ -107,6 +109,11 @@ beforeAll(async () => {
   );
   clientA1 = rows.rows[0]!.id;
   clientA2 = rows.rows[1]!.id;
+  const cb = await pg.query<{ id: string }>(
+    `INSERT INTO clients (organization_id, pipeline_stage_id, first_name, last_name) VALUES ($1,'stage-new','Bo','B') RETURNING id`,
+    [ORG_B],
+  );
+  clientB1 = cb.rows[0]!.id;
   const users = await pg.query<{ id: string }>(
     `INSERT INTO users (email, display_name) VALUES ('u1@x.co','U1'), ('u2@x.co','U2') RETURNING id`,
   );
@@ -208,6 +215,13 @@ describe("DrizzleInvitationRepository — org-scoped, digest-only", () => {
     expect(persisted.acceptedAtIso).toBe(NOW.toISOString());
   });
 
+  it("rejects a client invitation reserving a client from ANOTHER org (FK bypasses RLS)", async () => {
+    const { invitation } = buildInvitation(ORG_A, "client", clientB1, "foreign-client@x.co");
+    await expect(invRepo.issue(ORG_A, invitation, null, NOW)).rejects.toBeInstanceOf(
+      ClientNotInOrganizationError,
+    );
+  });
+
   it("save throws for an unknown/foreign invitation id", async () => {
     const ghost: Invitation = {
       id: randomUUID(),
@@ -256,5 +270,11 @@ describe("DrizzleClientUserLinkRepository — one active link each way", () => {
   it("isolates by org and throws on an unknown link id", async () => {
     expect(await linkRepo.getActiveByClient(ORG_B, clientA1)).toBeNull();
     await expect(linkRepo.revoke(ORG_A, randomUUID(), NOW)).rejects.toBeInstanceOf(ClientLinkNotFoundError);
+  });
+
+  it("rejects linking a client from ANOTHER org (FK bypasses RLS)", async () => {
+    await expect(linkRepo.link(ORG_A, clientB1, userA2, NOW)).rejects.toBeInstanceOf(
+      ClientNotInOrganizationError,
+    );
   });
 });

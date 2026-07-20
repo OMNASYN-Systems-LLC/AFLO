@@ -6,7 +6,7 @@ import type {
   InvitationRepository,
   InvitationStatus,
 } from "@aflo/auth";
-import { invitations, clientUserLinks } from "../schema";
+import { invitations, clientUserLinks, clients } from "../schema";
 import { withOrgContext, type TenantScopedDb } from "../request-context";
 
 /**
@@ -45,6 +45,26 @@ export class ClientLinkNotFoundError extends Error {
     super(`client-user link not found: ${linkId}`);
     this.name = "ClientLinkNotFoundError";
   }
+}
+
+/**
+ * Thrown when a referenced client is not in the current org. The client FK
+ * bypasses RLS, so — like the messaging repository's createThread guard — we
+ * verify the referenced client is visible under the org context before creating
+ * a row that references it (a foreign client id would otherwise dangle-reference
+ * across tenants inside this org's own data).
+ */
+export class ClientNotInOrganizationError extends Error {
+  constructor(public readonly clientId: string) {
+    super(`client not found in organization: ${clientId}`);
+    this.name = "ClientNotInOrganizationError";
+  }
+}
+
+/** Verify `clientId` is visible under the current org context (RLS-scoped). */
+async function assertClientInOrg(tx: TenantScopedDb, clientId: string): Promise<void> {
+  const rows = await tx.select({ id: clients.id }).from(clients).where(eq(clients.id, clientId)).limit(1);
+  if (!rows[0]) throw new ClientNotInOrganizationError(clientId);
 }
 
 /**
@@ -108,6 +128,11 @@ export class DrizzleInvitationRepository implements InvitationRepository {
     now: Date,
   ): Promise<Invitation> {
     return withOrgContext(this.db, organizationId, async (tx) => {
+      // A client invitation reserves a client — verify it is in THIS org (the FK
+      // bypasses RLS), so an invitation can't dangle-reference a foreign client.
+      if (invitation.reservedClientId !== null) {
+        await assertClientInOrg(tx, invitation.reservedClientId);
+      }
       const inserted = await tx
         .insert(invitations)
         .values({
@@ -180,6 +205,9 @@ export class DrizzleClientUserLinkRepository implements ClientUserLinkRepository
     now: Date,
   ): Promise<ClientUserLinkRecord> {
     return withOrgContext(this.db, organizationId, async (tx) => {
+      // The client must be in THIS org (the FK bypasses RLS). The user is a global
+      // record (no org column), so it is not org-checked here.
+      await assertClientInOrg(tx, clientId);
       try {
         const inserted = await tx
           .insert(clientUserLinks)

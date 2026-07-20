@@ -51,6 +51,17 @@ be written into the current org, and RLS `WITH CHECK` is the backstop. The
 `Invitation.organizationId` field carried in the domain object is not trusted for
 the write (the parameter wins), so a mismatched domain object can't cross tenants.
 
+### Referenced clients are verified in-org (FK bypasses RLS)
+
+FK validation bypasses RLS, so a client invitation's `intended_client_id` or a
+link's `clientId` could otherwise dangle-reference a client in another org. Both
+`issue` (for a client invitation) and `link` therefore run the messaging
+repository's `createThread`-style guard — a `withOrgContext`-scoped `SELECT` on
+`clients` that is RLS-invisible for a foreign client — and reject with
+`ClientNotInOrganizationError`. (The `client_user_links.userId` references the
+global, non-org-scoped `users` table, so it is not org-checked here.) This
+adopts the ADR-0028 precedent uniformly rather than deferring it.
+
 ### Authorization boundary
 
 Same separation as the rest of the system: these repositories enforce **org
