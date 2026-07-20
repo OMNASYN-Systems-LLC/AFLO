@@ -3,8 +3,10 @@ import {
   ACTION_STATUSES,
   DOCUMENT_REVIEW_STATUSES,
   LIFECYCLE_STAGES,
+  MESSAGE_SENDER_ROLES,
   REPORT_STATUSES,
   ROADMAP_STATUSES,
+  THREAD_STATUSES,
 } from "@aflo/rules";
 import { CONSENT_TYPES, NOTIFICATION_CHANNELS, NOTIFICATION_TYPES } from "@aflo/notifications";
 import { AGENT_NAMES, type AgentStatus, type ReviewStatus } from "@aflo/ai";
@@ -43,8 +45,10 @@ import {
   aiReviewStatusEnum,
   educationReviewStatusEnum,
   memberRoleEnum,
+  messageSenderRoleEnum,
   milestoneStatusEnum,
   monthlyActionCategoryEnum,
+  threadStatusEnum,
   notificationChannelEnum,
   notificationTypeEnum,
   partnerCategoryEnum,
@@ -87,6 +91,16 @@ describe("kernel-owned enums are the kernel arrays", () => {
 
   it("consent_type == CONSENT_TYPES", () => {
     expect(consentTypeEnum.enumValues).toEqual([...CONSENT_TYPES]);
+  });
+
+  it("thread_status == THREAD_STATUSES (messaging kernel)", () => {
+    expect(threadStatusEnum.enumValues).toEqual([...THREAD_STATUSES]);
+    expect(threadStatusEnum.enumValues).toEqual(["open", "closed"]);
+  });
+
+  it("message_sender_role == MESSAGE_SENDER_ROLES (messaging kernel)", () => {
+    expect(messageSenderRoleEnum.enumValues).toEqual([...MESSAGE_SENDER_ROLES]);
+    expect(messageSenderRoleEnum.enumValues).toEqual(["staff", "client"]);
   });
 });
 

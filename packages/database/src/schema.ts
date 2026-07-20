@@ -31,6 +31,8 @@ import {
   invitationStatusEnum,
   invitationTypeEnum,
   invitedRoleEnum,
+  messageSenderRoleEnum,
+  threadStatusEnum,
   webhookEventStatusEnum,
   creditScoreSourceEnum,
   documentReviewStatusEnum,
@@ -985,5 +987,81 @@ export const sessionRevocations = pgTable(
   (t) => [
     index("idx_session_revocations_user").on(t.userId),
     index("idx_session_revocations_user_revoked").on(t.userId, t.revokedAt),
+  ],
+);
+
+// ============================================================================
+// Secure messaging persistence (Production Cutover PHASE 10)
+//
+// Durable staff↔client conversation threads and their messages. Both are
+// tenant-owned (carry organization_id) and get FORCE RLS in the same migration.
+//
+// SAFETY BOUNDARIES:
+//  - Message bodies are stored ONLY as application-layer ciphertext
+//    (`body_encrypted` bytea) — there is NO plaintext body column. The repository
+//    encrypts on write and decrypts on read; the DB never holds a readable body.
+//  - Internal staff notes are a SEPARATE table (`notes`) and are NOT modeled
+//    here, so an internal note can never leak into a client thread view — the
+//    same structural boundary the domain projection (`toClientThreadView`) keeps.
+//  - Message bodies must never be copied into the outbox payload (outbox rows are
+//    delivery metadata only); enforced by the producer/repository, not this DDL.
+// ============================================================================
+
+/** A staff↔client conversation thread. Org-scoped (RLS). */
+export const conversationThreads = pgTable(
+  "conversation_threads",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    clientId: uuid("client_id")
+      .notNull()
+      .references(() => clients.id, { onDelete: "cascade" }),
+    subject: text("subject").notNull(),
+    status: threadStatusEnum("status").notNull().default("open"),
+    /** ISO datetime of the most recent message; null for an empty thread. */
+    lastMessageAt: timestamp("last_message_at", { withTimezone: true }),
+    ...timestamps,
+  },
+  (t) => [
+    index("idx_threads_org_client").on(t.organizationId, t.clientId),
+    index("idx_threads_org_status").on(t.organizationId, t.status),
+  ],
+);
+
+/** One message within a thread. Org-scoped (RLS). Body is ciphertext only. */
+export const messages = pgTable(
+  "messages",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    threadId: uuid("thread_id")
+      .notNull()
+      .references(() => conversationThreads.id, { onDelete: "cascade" }),
+    clientId: uuid("client_id")
+      .notNull()
+      .references(() => clients.id, { onDelete: "cascade" }),
+    senderRole: messageSenderRoleEnum("sender_role").notNull(),
+    /**
+     * Polymorphic sender: an organization_members.id when a staff member sent it,
+     * or the clients.id when the client did (discriminated by sender_role). No FK
+     * because it references two tables — same pattern as the nullable ai_run_id
+     * columns before their table landed.
+     */
+    senderId: uuid("sender_id").notNull(),
+    /** Application-layer ciphertext of the body — NEVER plaintext. */
+    bodyEncrypted: encrypted("body_encrypted").notNull(),
+    /** The domain send time (may differ from the DB insert time). */
+    sentAt: timestamp("sent_at", { withTimezone: true }).notNull().defaultNow(),
+    readByClientAt: timestamp("read_by_client_at", { withTimezone: true }),
+    readByStaffAt: timestamp("read_by_staff_at", { withTimezone: true }),
+    ...timestamps,
+  },
+  (t) => [
+    index("idx_messages_org_thread_sent").on(t.organizationId, t.threadId, t.sentAt),
+    index("idx_messages_org_client").on(t.organizationId, t.clientId),
   ],
 );
