@@ -4,12 +4,14 @@ import {
   aiRuns,
   appointments,
   communications,
+  conversationThreads,
   creditProfiles,
   documents,
   educationAssignments,
   financialProfiles,
   goals,
   handoffPackages,
+  messages,
   monthlyActions,
   notes,
   notificationPreferences,
@@ -78,7 +80,7 @@ const A1_CLIENT_TABLES = {
   handoff_packages: handoffPackages,
 } as const;
 
-function columnNames(table: (typeof A1_TENANT_TABLES)[keyof typeof A1_TENANT_TABLES]): string[] {
+function columnNames(table: Parameters<typeof getTableColumns>[0]): string[] {
   return Object.values(getTableColumns(table)).map((c) => c.name);
 }
 
@@ -126,5 +128,33 @@ describe("Phase A1 table invariants", () => {
   it("goals.target_date is NOT NULL (matches non-null Goal.targetDate)", () => {
     const targetDate = Object.values(getTableColumns(goals)).find((c) => c.name === "target_date");
     expect(targetDate?.notNull).toBe(true);
+  });
+});
+
+describe("secure-messaging table invariants (PHASE 10)", () => {
+  it("both messaging tables carry organization_id (RLS enforcement point) and client_id", () => {
+    for (const table of [conversationThreads, messages]) {
+      expect(columnNames(table)).toContain("organization_id");
+      expect(columnNames(table)).toContain("client_id");
+    }
+  });
+
+  it("messages store the body ONLY as bytea ciphertext — no plaintext body column", () => {
+    const cols = Object.values(getTableColumns(messages));
+    const names = cols.map((c) => c.name);
+    // The single body column is the encrypted bytea one; a plaintext `body` must not exist.
+    expect(names).toContain("body_encrypted");
+    expect(names).not.toContain("body");
+    const body = cols.find((c) => c.name === "body_encrypted");
+    expect(body?.getSQLType()).toBe("bytea");
+    expect(body?.notNull).toBe(true);
+  });
+
+  it("messages record sender + read receipts for both sides", () => {
+    const names = columnNames(messages);
+    expect(names).toContain("sender_role");
+    expect(names).toContain("sender_id");
+    expect(names).toContain("read_by_client_at");
+    expect(names).toContain("read_by_staff_at");
   });
 });

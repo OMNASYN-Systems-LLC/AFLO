@@ -3,8 +3,10 @@ import {
   ACTION_STATUSES,
   DOCUMENT_REVIEW_STATUSES,
   LIFECYCLE_STAGES,
+  MESSAGE_SENDER_ROLES,
   REPORT_STATUSES,
   ROADMAP_STATUSES,
+  THREAD_STATUSES,
 } from "@aflo/rules";
 import { CONSENT_TYPES, NOTIFICATION_CHANNELS, NOTIFICATION_TYPES } from "@aflo/notifications";
 import { AGENT_NAMES } from "@aflo/ai";
@@ -217,3 +219,13 @@ export const webhookEventStatusEnum = pgEnum("webhook_event_status", [
   "processed",
   "failed",
 ]);
+
+// --- Secure messaging (Production Cutover PHASE 10) ---
+// Kernel-owned: built from the @aflo/rules messaging constants, so the DB enum
+// and the deterministic messaging kernel can never disagree.
+
+/** Secure-thread lifecycle (@aflo/rules THREAD_STATUSES: open | closed). */
+export const threadStatusEnum = pgEnum("thread_status", tuple(THREAD_STATUSES));
+
+/** Which side authored a message (@aflo/rules MESSAGE_SENDER_ROLES: staff | client). */
+export const messageSenderRoleEnum = pgEnum("message_sender_role", tuple(MESSAGE_SENDER_ROLES));

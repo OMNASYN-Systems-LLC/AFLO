@@ -17,8 +17,13 @@ export const MESSAGING_RULES_VERSION = "messaging.v1.0.0";
 /** Upper bound on a single message body (post-trim), in characters. */
 export const MAX_MESSAGE_BODY_CHARS = 5000;
 
-export type MessageSenderRole = "staff" | "client";
-export type ThreadStatus = "open" | "closed";
+/** The two sides of a secure thread. Kernel-owned so the DB enum can't drift. */
+export const MESSAGE_SENDER_ROLES = ["staff", "client"] as const;
+export type MessageSenderRole = (typeof MESSAGE_SENDER_ROLES)[number];
+
+/** Thread lifecycle states. Kernel-owned so the DB enum can't drift. */
+export const THREAD_STATUSES = ["open", "closed"] as const;
+export type ThreadStatus = (typeof THREAD_STATUSES)[number];
 
 export type MessageReasonCode =
   | "MSG_OK"
