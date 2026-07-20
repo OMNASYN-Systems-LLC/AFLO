@@ -164,7 +164,9 @@ describe("messages RLS", () => {
       [msgIdB],
     );
     // The foreign message is invisible under org A, so zero rows are updated.
-    expect(res.affectedRows ?? 0).toBe(0);
+    // (PGlite populates affectedRows — asserted directly, not `?? 0`, so an
+    // undefined would FAIL rather than pass vacuously.)
+    expect(res.affectedRows).toBe(0);
     // And it remains unread when read under its own org.
     await useOrg(ORG_B);
     const b = await db.query<{ read_by_staff_at: string | null }>(
