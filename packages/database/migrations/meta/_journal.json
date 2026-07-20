@@ -50,6 +50,13 @@
       "when": 1784513641572,
       "tag": "0006_dry_omega_red",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1784518287956,
+      "tag": "0007_resolver_grant_matrix",
+      "breakpoints": true
     }
   ]
 }
