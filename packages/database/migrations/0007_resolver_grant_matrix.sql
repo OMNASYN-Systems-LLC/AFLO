@@ -23,14 +23,17 @@
 -- where the roles are not (yet) provisioned this migration is a safe no-op for
 -- those statements rather than an error.
 
+-- SECURITY DEFINER hardening: an EMPTY search_path (so nothing — not even a
+-- caller-created pg_temp object — can shadow the reference) with every object
+-- fully schema-qualified.
 CREATE OR REPLACE FUNCTION find_invitation_by_token(p_token_digest varchar)
-RETURNS SETOF invitations
+RETURNS SETOF public.invitations
 LANGUAGE sql
 STABLE
 SECURITY DEFINER
-SET search_path = public
+SET search_path = ''
 AS $$
-  SELECT * FROM invitations WHERE token_digest = p_token_digest;
+  SELECT * FROM public.invitations WHERE token_digest = p_token_digest;
 $$;
 --> statement-breakpoint
 -- No ambient caller may execute the resolver lookup or read the un-scoped tables.
@@ -54,7 +57,20 @@ BEGIN
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'aflo_app') THEN
     -- The tenant-request role must NOT reach the un-scoped tables directly (no
     -- org-RLS backstop) and cannot resolve an invitation by token — that is the
-    -- resolver connection's job only.
+    -- resolver connection's job only. Revoke EXPLICITLY from aflo_app (symmetric
+    -- with the table revokes) so an accidental `GRANT EXECUTE ON ALL FUNCTIONS …
+    -- TO aflo_app` — which survives `REVOKE … FROM PUBLIC` — cannot let a tenant
+    -- connection call the BYPASSRLS resolver function and read any invitation.
     REVOKE ALL ON identity_provider_accounts, provider_webhook_events, session_revocations FROM aflo_app;
+    REVOKE ALL ON FUNCTION find_invitation_by_token(varchar) FROM aflo_app;
   END IF;
 END $$;
+
+-- DEPLOY DISCIPLINE (the REVOKE wall degrades silently if these are violated):
+--   * Do NOT re-run `GRANT … ON ALL TABLES/FUNCTIONS … TO aflo_app` AFTER this
+--     migration — it would re-open what 0007 revoked. Grant aflo_app its baseline
+--     BEFORE migrations, or grant per-object excluding these three tables + the
+--     resolver function.
+--   * Do NOT grant the three un-scoped tables (or the function) to aflo_app via an
+--     inherited GROUP role — `REVOKE … FROM aflo_app` cannot remove a privilege
+--     held through a parent role.

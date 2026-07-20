@@ -82,3 +82,26 @@ the three tables applies unconditionally as a floor.
   user_id = <resolved user>`), plus the accept-by-token orchestration that calls
   `find_invitation_by_token` and applies the binding. This migration is their
   prerequisite.
+
+## Post-review hardening
+
+An adversarial Postgres-security review (all controls real + non-vacuously
+tested; no CRITICAL/HIGH/MEDIUM) surfaced three defense-in-depth items, all
+folded in:
+
+- **Symmetric function REVOKE (LOW-1).** The three tables were revoked from both
+  `PUBLIC` and `aflo_app`, but the far more sensitive SECURITY DEFINER function
+  was revoked only from `PUBLIC`. A stray `GRANT EXECUTE ON ALL FUNCTIONS … TO
+  aflo_app` survives a `REVOKE … FROM PUBLIC`, which would let a tenant
+  connection call the BYPASSRLS function and read any invitation across orgs. Now
+  the migration also `REVOKE`s `EXECUTE` on the function from `aflo_app`
+  explicitly, and a test proves the drift (grant → cross-org read) and that the
+  explicit revoke closes it.
+- **Empty `search_path` (LOW-3).** Hardened `SET search_path = public` →
+  `SET search_path = ''` with `public.invitations` fully qualified, so no
+  caller-created `pg_temp` object can shadow the reference.
+- **Deploy-discipline note (LOW-2).** The `REVOKE` wall degrades silently if the
+  deploy re-grants `ON ALL TABLES/FUNCTIONS` to `aflo_app` *after* this migration,
+  or grants the tables/function to `aflo_app` via an inherited GROUP role
+  (`REVOKE FROM aflo_app` can't remove a privilege held through a parent). Both
+  are called out in the migration header as deploy requirements.

@@ -152,4 +152,21 @@ describe("resolver grant matrix — the resolver role is the privileged path", (
       expect(rows).toHaveLength(1);
     });
   });
+
+  it("the aflo_app function REVOKE closes a convenience-grant drift (defense-in-depth)", async () => {
+    // A deploy that accidentally runs `GRANT EXECUTE ON ALL FUNCTIONS … TO aflo_app`
+    // hands the tenant role the BYPASSRLS resolver function — a cross-tenant read.
+    await pg.exec(`GRANT EXECUTE ON FUNCTION find_invitation_by_token(varchar) TO aflo_app`);
+    await asRole("aflo_app", async () => {
+      const drift = await pg.query(`SELECT organization_id FROM find_invitation_by_token($1)`, [TOKEN_DIGEST]);
+      expect(drift.rows).toHaveLength(1); // the escalation the symmetric REVOKE guards against
+    });
+    // The migration's EXPLICIT `REVOKE … FROM aflo_app` (not just FROM PUBLIC) closes it.
+    await pg.exec(`REVOKE ALL ON FUNCTION find_invitation_by_token(varchar) FROM aflo_app`);
+    await asRole("aflo_app", async () => {
+      await expect(
+        pg.query(`SELECT * FROM find_invitation_by_token($1)`, [TOKEN_DIGEST]),
+      ).rejects.toThrow(/permission denied/i);
+    });
+  });
 });
