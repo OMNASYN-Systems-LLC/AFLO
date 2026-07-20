@@ -67,3 +67,24 @@ build stays green).
   write (this ADR). What remains is credential-gated wiring (the Clerk-backed
   provider, the webhook + accept routes, the two Neon role connections) and the
   route-level authz gating already tracked (messaging authz, task #61).
+
+## Post-review hardening / notes
+
+An adversarial security review (SAFE TO MERGE; the identity-binding invariant,
+atomic claim, org-context and RLS alignment all verified enforced, not vacuous):
+
+- **Typed `already_bound` denial (folded in).** A pre-existing uniqueness conflict
+  on the link/membership insert (the accepter already holds an active link for the
+  reserved client, or is already a member) previously rethrew as a raw error.
+  It now rolls the claim back (invitation stays `pending`) and returns
+  `{ ok: false, reason: "already_bound" }`, proven by a test.
+- **Wiring preconditions (deferred, documented).** The route MUST derive BOTH
+  `afloUserId` and `email` from the one verified session — the service checks the
+  email against the invitation but cannot verify the email belongs to the user.
+  And the binding should emit an audit/outbox event at the route/`commitWithOutbox`
+  layer (the invitation row already records `acceptedByUserId`/`acceptedAt`). Both
+  belong to the credential-gated wiring PR.
+- **Claim-conflict branch** (the `InvitationClaimConflict` → `already_accepted`
+  mapping for a true concurrent double-accept) is correct by construction
+  (claim-then-insert in one transaction, conditional on `status='pending'`); the
+  sequential re-accept test exercises the equivalent kernel guard.

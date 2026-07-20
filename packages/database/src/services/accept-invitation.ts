@@ -50,7 +50,7 @@ export interface AcceptInvitationByTokenInput {
 export type AcceptInvitationByTokenOutcome =
   | { ok: true; kind: "membership"; organizationId: string; membershipId: string }
   | { ok: true; kind: "client_link"; organizationId: string; clientId: string; linkId: string }
-  | { ok: false; reason: "invalid_token" | InvitationDenial | MembershipDenial };
+  | { ok: false; reason: "invalid_token" | "already_bound" | InvitationDenial | MembershipDenial };
 
 /** Raw row shape from `SELECT * FROM find_invitation_by_token(...)`. */
 interface InvitationRow {
@@ -93,6 +93,30 @@ class InvitationClaimConflict extends Error {
     super("invitation is no longer pending");
     this.name = "InvitationClaimConflict";
   }
+}
+
+/**
+ * Thrown inside the accept transaction (rolling it back, so the invitation stays
+ * pending) when the link/membership insert hits a unique constraint — the
+ * accepter already holds an active link for the reserved client, or is already a
+ * member of the org.
+ */
+class AlreadyBoundError extends Error {
+  constructor() {
+    super("identity is already bound to this org/client");
+    this.name = "AlreadyBoundError";
+  }
+}
+
+/** Postgres unique-violation (23505), inspecting the drizzle wrapper and its `.cause`. */
+function isUniqueViolation(err: unknown): boolean {
+  for (const candidate of [err, (err as { cause?: unknown } | null)?.cause]) {
+    if (!candidate) continue;
+    if ((candidate as { code?: string }).code === "23505") return true;
+    const message = candidate instanceof Error ? candidate.message : String(candidate);
+    if (/duplicate key|unique constraint|23505/i.test(message)) return true;
+  }
+  return false;
 }
 
 export async function acceptInvitationByToken(
@@ -146,49 +170,57 @@ export async function acceptInvitationByToken(
         .returning({ id: invitations.id });
       if (!claimed[0]) throw new InvitationClaimConflict();
 
-      if (application.kind === "client_link") {
-        const link = await tx
-          .insert(clientUserLinks)
-          .values({
+      try {
+        if (application.kind === "client_link") {
+          const link = await tx
+            .insert(clientUserLinks)
+            .values({
+              organizationId: binding.organizationId,
+              clientId: application.clientLink.clientId,
+              userId: input.afloUserId,
+              status: "active",
+              linkedAt: input.now,
+              createdAt: input.now,
+              updatedAt: input.now,
+            })
+            .returning({ id: clientUserLinks.id });
+          return {
+            ok: true as const,
+            kind: "client_link" as const,
             organizationId: binding.organizationId,
             clientId: application.clientLink.clientId,
+            linkId: link[0]!.id,
+          };
+        }
+
+        const member = await tx
+          .insert(organizationMembers)
+          .values({
+            id: application.membership.membershipId,
+            organizationId: binding.organizationId,
             userId: input.afloUserId,
-            status: "active",
-            linkedAt: input.now,
+            role: application.membership.memberRole,
+            isActive: true,
             createdAt: input.now,
             updatedAt: input.now,
           })
-          .returning({ id: clientUserLinks.id });
+          .returning({ id: organizationMembers.id });
         return {
           ok: true as const,
-          kind: "client_link" as const,
+          kind: "membership" as const,
           organizationId: binding.organizationId,
-          clientId: application.clientLink.clientId,
-          linkId: link[0]!.id,
+          membershipId: member[0]!.id,
         };
+      } catch (insertErr) {
+        // An active-link / membership uniqueness violation → roll back the claim
+        // too (the invitation stays pending) and surface a typed denial.
+        if (isUniqueViolation(insertErr)) throw new AlreadyBoundError();
+        throw insertErr;
       }
-
-      const member = await tx
-        .insert(organizationMembers)
-        .values({
-          id: application.membership.membershipId,
-          organizationId: binding.organizationId,
-          userId: input.afloUserId,
-          role: application.membership.memberRole,
-          isActive: true,
-          createdAt: input.now,
-          updatedAt: input.now,
-        })
-        .returning({ id: organizationMembers.id });
-      return {
-        ok: true as const,
-        kind: "membership" as const,
-        organizationId: binding.organizationId,
-        membershipId: member[0]!.id,
-      };
     });
   } catch (err) {
     if (err instanceof InvitationClaimConflict) return { ok: false, reason: "already_accepted" };
+    if (err instanceof AlreadyBoundError) return { ok: false, reason: "already_bound" };
     throw err;
   }
 }

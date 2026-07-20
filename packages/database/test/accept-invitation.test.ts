@@ -71,17 +71,23 @@ beforeAll(async () => {
     [ORG_A],
   );
   clientA = c.rows[0]!.id;
-  for (const key of ["client", "staff", "email", "expired", "other"]) {
+  for (const key of ["client", "staff", "email", "expired", "other", "member"]) {
     const r = await pg.query<{ id: string }>(
       `INSERT INTO users (email, display_name) VALUES ($1,$2) RETURNING id`,
       [`${key}@u.co`, key],
     );
     users[key] = r.rows[0]!.id;
   }
+  // `member` is ALREADY a member of ORG_A — accepting a staff invite must fail closed.
+  await pg.query(`INSERT INTO organization_members (organization_id, user_id, role) VALUES ($1,$2,'staff')`, [
+    ORG_A,
+    users.member,
+  ]);
   await seedInvitation("staff", { email: "staff@x.co", role: "staff_advisor" });
   await seedInvitation("client", { email: "client@x.co", role: "client", clientId: clientA });
   await seedInvitation("email", { email: "em@x.co", role: "staff_advisor" });
   await seedInvitation("expired", { email: "exp@x.co", role: "staff_advisor", expiresAt: PAST });
+  await seedInvitation("bound", { email: "bound@x.co", role: "staff_advisor" });
 
   db = drizzle(pg);
 });
@@ -184,5 +190,19 @@ describe("acceptInvitationByToken — rejections (no write)", () => {
       newMembershipId: randomUUID(),
     });
     expect(outcome).toEqual({ ok: false, reason: "already_accepted" });
+  });
+
+  it("fails closed (already_bound) when the accepter is already a member; invitation stays pending", async () => {
+    const outcome = await acceptInvitationByToken(db, db, {
+      rawToken: tokens.bound!,
+      afloUserId: users.member!, // already an ORG_A member → uq_org_members_org_user
+      email: "bound@x.co",
+      now: NOW,
+      newMembershipId: randomUUID(),
+    });
+    expect(outcome).toEqual({ ok: false, reason: "already_bound" });
+    // The claim rolled back with the failed insert — the invitation is still pending.
+    const inv = await pg.query<{ status: string }>(`SELECT status FROM invitations WHERE email = 'bound@x.co'`);
+    expect(inv.rows[0]!.status).toBe("pending");
   });
 });
