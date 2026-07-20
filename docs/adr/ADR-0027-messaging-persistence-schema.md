@@ -82,3 +82,17 @@ if it were missing.
   `withOrgContext` (ADR-0025), encrypting the body, and keeping message bodies
   out of the outbox — are the follow-up slice, alongside the auth-resolver
   repositories (0005's PHASE-5 prerequisites in ADR-0026 still apply).
+
+## Post-review note / repository-slice follow-up
+
+An adversarial review (SAFE TO MERGE; no CRITICAL/HIGH/MEDIUM) flagged one
+LOW/informational item to carry into the repository slice: there is no DB-level
+`CHECK` that a `messages` row's `organization_id` (and `client_id`) matches its
+referenced `conversation_threads` row's. This is **not** a cross-tenant leak — a
+message carries its own `organization_id`, so RLS scopes it to the inserting org
+regardless, and a foreign thread is invisible to that org; the only possible
+effect is a dangling reference *inside a single org's own data*. It matches the
+repo-wide pattern (no cross-table org-consistency constraints anywhere) and is
+correctly a repository responsibility: the `withOrgContext`-scoped
+`MessageRepository` MUST verify the target thread belongs to the current org (and
+the same client) before inserting, since FK validation bypasses RLS.
