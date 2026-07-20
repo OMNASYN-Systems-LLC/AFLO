@@ -52,3 +52,18 @@ Add `withOrgContext(db, organizationId, work)` to `@aflo/database`:
   credentials land.
 - The wrapper takes a driver-agnostic Drizzle handle, so the same code path
   proven on PGlite runs against Neon in production.
+
+## Wiring constraints (from the adversarial review)
+
+- **Use an interactive-transaction driver.** node-postgres `Pool` or
+  `@neondatabase/serverless` WebSocket `Pool`. The `neon-http` driver *throws*
+  on `.transaction()` — fail-safe (it would reject every tenant request), but
+  unusable here. The runtime connection must also be a **non-superuser,
+  non-`BYPASSRLS`, non-owner role**, or `FORCE`-enabled RLS would be bypassed and
+  the fail-closed guarantee lost (deployment invariant).
+- **One `withOrgContext` per request; never nest with a different org.**
+  `SET LOCAL` survives savepoint `RELEASE`, so a nested-different-org call would
+  leave the inner org set for the rest of the outer transaction (a within-request
+  cross-tenant read; it still reverts at the outer COMMIT so there is no
+  cross-request leak). Documented in the helper header; a cross-org unit of work
+  must be two separate top-level calls.

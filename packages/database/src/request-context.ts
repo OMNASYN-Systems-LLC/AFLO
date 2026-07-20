@@ -18,6 +18,20 @@ import type { PgDatabase, PgQueryResultHKT } from "drizzle-orm/pg-core";
  * under an RLS-bypassing role instead (see the outbox repository docs), and
  * platform-admin cross-tenant access goes through a separate, audited surface.
  * Never widen this helper to skip the org set.
+ *
+ * DO NOT NEST with a different organization. Exactly one `withOrgContext` per
+ * request. Passing the transaction handle into a second `withOrgContext` with a
+ * DIFFERENT org opens a savepoint and re-sets the GUC — and because `SET LOCAL`
+ * survives savepoint RELEASE, the inner org stays set for the rest of the outer
+ * transaction, so later outer queries would read the wrong tenant. (It still
+ * reverts at the outer COMMIT, so there is no cross-request leak; same-org
+ * nesting is harmless.) A cross-org unit of work must be two separate top-level
+ * `withOrgContext` calls.
+ *
+ * WIRING NOTE: the runtime handle must support interactive transactions —
+ * node-postgres `Pool` or `@neondatabase/serverless` WebSocket `Pool`. The
+ * `neon-http` driver throws on `.transaction()` (fail-safe, but it would reject
+ * every tenant request), so it is unsuitable here.
  */
 
 export type TenantScopedDb = PgDatabase<PgQueryResultHKT>;
