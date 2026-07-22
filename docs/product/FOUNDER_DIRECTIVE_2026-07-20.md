@@ -280,7 +280,84 @@ ship as **editable drafts** with a workflow-discovery queue capturing every
 unresolved decision for the founder/staff — ΛFLO must not fabricate Natalia's
 actual process.
 
-## 9. Interaction with standing constraints (unchanged)
+## 9. Continuation directive (founder, 2026-07-22): parallel workstreams + architecture constraints
+
+**Differentiation and cutover proceed IN PARALLEL — two coordinated workstreams.**
+Workstream B is NOT stopped by missing hosted credentials: all code, dependency
+injection, test providers, route wiring, fail-closed configuration, and
+acceptance tests that can be built credential-free MUST be built.
+
+- **Workstream A — Product differentiation:** (1) unified review kernel,
+  (2) professional playbook kernel, (3) human-feedback records,
+  (4) deterministic review analytics, (5) migration 0008 + repositories,
+  (6) Human Review Center UI.
+- **Workstream B — Production cutover:** (1) tenant + resolver connection
+  factories, (2) PostgreSQL repository factory, (3) Clerk provider adapter,
+  (4) Clerk webhook route, (5) principal resolution, (6) invitation issuance,
+  (7) invitation acceptance, (8) authorization enforcement, (9) persistent
+  messaging cutover, (10) demo-runtime removal, (11) preview acceptance suite.
+
+### Review Center architecture (normative)
+
+The Review Center is a **coordination layer, not a second system of record**. A
+`ReviewItem` references `artifact_type` + `artifact_id` + `artifact_version` —
+it must NOT copy entire artifact state into the review record. Store an
+integrity digest or a bounded source snapshot only where required for
+auditability. Existing domain records remain authoritative: roadmap, quarterly
+report, document, education assignment, referral, Concierge recommendation,
+client communication, readiness assessment.
+
+**States.** Primary path: `draft → awaiting_review → approved → published`.
+Alternate terminal states: `rejected`, `deferred`, `withdrawn`, `superseded`.
+Never allow: `draft → published`, `awaiting_review → published`, or high-impact
+AI output becoming client-visible without approval.
+
+**Risk classification.**
+
+- `low` — routine educational assignment, non-sensitive reminder, operational
+  follow-up.
+- `medium` — client communication draft, roadmap action proposal, budget
+  explanation, engagement intervention.
+- `high` — readiness-stage changes, credit-related guidance, financial-summary
+  publication, document interpretation, partner referral, stage advancement,
+  and any legal-, tax-, lending-, investment-, or eligibility-adjacent output.
+
+High-risk items require explicit authorized human approval.
+
+### Playbook governance (normative)
+
+The ten initial Golden Key playbooks remain **editable drafts**. Every playbook
+field carries one of: `confirmed` · `assumption` · `discovery_required` ·
+`approved`. Natalia's workflow is never encoded without confirmation. A
+workflow-discovery item is created for every unresolved: threshold, document
+requirement, escalation condition, communication template, reviewer role,
+timing rule, completion evidence, expected outcome.
+
+### Feedback governance (normative)
+
+Decisions: approved unchanged · approved with edits · rejected · deferred ·
+escalated — with structured reason codes. Track: source accuracy, source
+freshness, edit categories, review time, final client action, action
+completion, observed outcome. Never used for uncontrolled external-model
+training.
+
+### Analytics priority
+
+Operational and client outcomes first: time to roadmap, review backlog, review
+time, staff edit rate, staff rejection rate, client action completion, stage
+advancement, reengagement, document turnaround, playbook effectiveness,
+administrative time saved.
+
+### Delivery standard
+
+A review feature is not done until it has: domain state machine · authorization
+· persistence · RLS · audit · client-safe projection · staff workflow · tests ·
+deployment path · measurable outcome.
+
+Standing execution rules: continue merging safe PRs after green CI; never touch
+Neon `main`.
+
+## 10. Interaction with standing constraints (unchanged)
 
 - AI drafts/explains/classifies-tentatively only; it may not alter financial
   facts, approve loans, select investments, decide disputes, determine tax
