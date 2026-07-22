@@ -12,7 +12,10 @@
 --   2. The resolver role gains SELECT (read-only — the directory never writes)
 --      on users, organization_members, and client_user_links. The resolver is
 --      BYPASSRLS, so SELECT suffices for the cross-org pre-context reads; the
---      tenant role's access to these tables is unchanged (org-scoped by RLS).
+--      tenant role's access to these tables is unchanged (`users` is a global
+--      NO-RLS table; `organization_members` and `client_user_links` are the
+--      RLS-FORCED org-scoped ones, so the tenant role still sees only the
+--      current org's rows there — migrations 0003/0005).
 --
 -- Role statements are guarded on role existence (0007 discipline): a safe
 -- no-op where the roles are not provisioned.

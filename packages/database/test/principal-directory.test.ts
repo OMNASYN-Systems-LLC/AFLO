@@ -28,6 +28,7 @@ function sql(files: string[]): string {
 }
 
 const ORG = "00000000-0000-0000-0000-0000000000aa";
+const ORG_B = "00000000-0000-0000-0000-0000000000bb";
 const CUTOFF = new Date("2026-07-20T11:00:00.000Z");
 
 let pg: PGlite;
@@ -36,6 +37,7 @@ let directory: DrizzlePrincipalDirectory;
 const u: Record<string, string> = {};
 let clientId: string;
 let membershipId: string;
+let revStaffClientId: string;
 
 beforeAll(async () => {
   pg = await PGlite.create();
@@ -50,7 +52,20 @@ beforeAll(async () => {
   await pg.exec(sql(files.filter((f) => f.startsWith("0007") || f.startsWith("0008"))));
 
   await pg.exec(`INSERT INTO organizations (id, name, slug) VALUES ('${ORG}', 'Org', 'org');`);
-  for (const key of ["staff", "client", "admin", "disabled", "revoked", "none", "dangling"]) {
+  await pg.exec(`INSERT INTO organizations (id, name, slug) VALUES ('${ORG_B}', 'Org B', 'org-b');`);
+  for (const key of [
+    "staff",
+    "client",
+    "admin",
+    "disabled",
+    "revoked",
+    "none",
+    "dangling",
+    "multi",
+    "owner",
+    "revstaff",
+    "dualclient",
+  ]) {
     const r = await pg.query<{ id: string }>(
       `INSERT INTO users (email, display_name) VALUES ($1,$2) RETURNING id`,
       [`${key}@x.co`, key],
@@ -81,6 +96,44 @@ beforeAll(async () => {
   clientId = c.rows[0]!.id;
   await pg.exec(
     `INSERT INTO client_user_links (organization_id, client_id, user_id, status) VALUES ('${ORG}', '${clientId}', '${u.client}', 'active')`,
+  );
+
+  // AMBIGUOUS staff binding: two ACTIVE staff memberships in two orgs.
+  await pg.exec(
+    `INSERT INTO organization_members (organization_id, user_id, role)
+     VALUES ('${ORG}', '${u.multi}', 'staff'), ('${ORG_B}', '${u.multi}', 'staff')`,
+  );
+  // Deterministic despite a NON-staff membership row: a historical 'client'-role
+  // row in org A must be invisible to the SQL role filter, so the org-B owner
+  // membership is the ONE active staff-side row.
+  await pg.exec(
+    `INSERT INTO organization_members (organization_id, user_id, role)
+     VALUES ('${ORG}', '${u.owner}', 'client'), ('${ORG_B}', '${u.owner}', 'organization_owner')`,
+  );
+  // Revoked-staff precedence: a DEACTIVATED staff membership + an ACTIVE client link.
+  await pg.exec(
+    `INSERT INTO organization_members (organization_id, user_id, role, is_active)
+     VALUES ('${ORG}', '${u.revstaff}', 'staff', false)`,
+  );
+  const c2 = await pg.query<{ id: string }>(
+    `INSERT INTO clients (organization_id, pipeline_stage_id, first_name, last_name) VALUES ('${ORG}','stage-new','Rev','Staff') RETURNING id`,
+  );
+  revStaffClientId = c2.rows[0]!.id;
+  await pg.exec(
+    `INSERT INTO client_user_links (organization_id, client_id, user_id, status) VALUES ('${ORG}', '${revStaffClientId}', '${u.revstaff}', 'active')`,
+  );
+  // AMBIGUOUS client binding: two ACTIVE links in two orgs (the partial unique
+  // indexes are per-org, so both inserts succeed).
+  const c3 = await pg.query<{ id: string }>(
+    `INSERT INTO clients (organization_id, pipeline_stage_id, first_name, last_name) VALUES ('${ORG}','stage-new','Dual','A') RETURNING id`,
+  );
+  const c4 = await pg.query<{ id: string }>(
+    `INSERT INTO clients (organization_id, pipeline_stage_id, first_name, last_name) VALUES ('${ORG_B}','stage-new','Dual','B') RETURNING id`,
+  );
+  await pg.exec(
+    `INSERT INTO client_user_links (organization_id, client_id, user_id, status)
+     VALUES ('${ORG}', '${c3.rows[0]!.id}', '${u.dualclient}', 'active'),
+            ('${ORG_B}', '${c4.rows[0]!.id}', '${u.dualclient}', 'active')`,
   );
 
   db = drizzle(pg);
@@ -141,14 +194,63 @@ describe("DrizzlePrincipalDirectory — resolver-role principal resolution", () 
     await pg.exec("SET ROLE aflo_auth_resolver");
   });
 
-  it("a deactivated membership does not resolve (fail-closed under-grant)", async () => {
+  it("a deactivated membership resolves with status 'revoked' (engine denies, not a bypass)", async () => {
     await pg.exec("RESET ROLE");
     await pg.exec(`UPDATE organization_members SET is_active = false WHERE id = '${membershipId}'`);
     await pg.exec("SET ROLE aflo_auth_resolver");
-    expect((await directory.loadByProviderUser("clerk", "ck_staff"))?.membership).toBeNull();
+    expect((await directory.loadByProviderUser("clerk", "ck_staff"))?.membership).toEqual({
+      membershipId,
+      organizationId: ORG,
+      memberRole: "staff",
+      status: "revoked",
+    });
     await pg.exec("RESET ROLE");
     await pg.exec(`UPDATE organization_members SET is_active = true WHERE id = '${membershipId}'`);
     await pg.exec("SET ROLE aflo_auth_resolver");
+  });
+
+  it("two ACTIVE staff memberships (multi-org) are AMBIGUOUS → null (fail closed)", async () => {
+    expect(await directory.loadByProviderUser("clerk", "ck_multi")).toBeNull();
+  });
+
+  it("the SQL role filter ignores non-staff membership rows — the org-B owner resolves deterministically", async () => {
+    const records = await directory.loadByProviderUser("clerk", "ck_owner");
+    expect(records?.membership).toMatchObject({
+      organizationId: ORG_B,
+      memberRole: "organization_owner",
+      status: "active",
+    });
+  });
+
+  it("revoked-staff precedence: deactivated staff + active client link → REVOKED STAFF, never a client session", async () => {
+    const records = await directory.loadByProviderUser("clerk", "ck_revstaff");
+    expect(records?.membership).toMatchObject({
+      organizationId: ORG,
+      memberRole: "staff",
+      status: "revoked",
+    });
+    // The client link is still reported — buildSessionContext's precedence
+    // (membership over link) is what keeps it from becoming a client session.
+    expect(records?.clientLink).toEqual({ clientId: revStaffClientId, organizationId: ORG });
+
+    const ctx = buildSessionContext({
+      sessionId: "sess-revstaff",
+      identity: records!.identity,
+      membership: records!.membership,
+      clientLink: records!.clientLink,
+      assignedClientIds: records!.assignedClientIds,
+      sessionIssuedAtIso: "2026-07-22T12:00:00.000Z",
+    });
+    expect(ctx).toMatchObject({
+      role: "staff_advisor",
+      membershipStatus: "revoked",
+      activeOrganizationId: ORG,
+      linkedClientId: null,
+    });
+  });
+
+  it("two ACTIVE client links (multi-org) are AMBIGUOUS → null (fail closed)", async () => {
+    expect(await directory.loadByProviderUser("clerk", "ck_dualclient")).toBeNull();
   });
 
   it("feeds buildSessionContext end-to-end: staff resolves, revoked-cutoff session does not", async () => {

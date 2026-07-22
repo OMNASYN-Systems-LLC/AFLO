@@ -42,21 +42,65 @@ fail-closed mappings everywhere:
 - `sessions_invalidated_before` maps to the REQUIRED
   `sessionsInvalidatedBeforeIso` — ADR-0035 made the field non-optional
   precisely so this mapping cannot be silently forgotten.
-- Only an ACTIVE membership resolves, and only the three staff-side member
-  roles (the DB enum is wider); anything else falls through to the client
-  link or null — an accepted fail-closed under-grant until the
-  membership-lifecycle slice persists pending/revoked statuses.
-- Only an ACTIVE client link resolves. `assignedClientIds` is null
-  (assignment scoping OFF — matrix §8 default).
+- Only the three staff-side member roles are considered — filtered IN the
+  SQL (`role IN (...)`) so a non-staff row never consumes a LIMIT slot.
+  Exactly one ACTIVE membership resolves with status "active"; with none,
+  the most recent INACTIVE staff membership resolves with status "revoked"
+  (see Post-review hardening); 2+ active memberships are ambiguous → null.
+- Only an ACTIVE client link resolves; 2+ active links are ambiguous →
+  null. `assignedClientIds` is null (assignment scoping OFF — matrix §8
+  default).
+
+## Post-review hardening (adversarial review of PR #88)
+
+The review returned DO NOT MERGE with two blockers (F1, F2); all findings
+are remediated in this slice:
+
+- **F1 — deterministic, fail-closed principal selection.** The staff-role
+  narrowing moved INTO the SQL (`inArray(role, STAFF_MEMBER_ROLES)`), so
+  `client`/`partner_viewer` rows can no longer consume the LIMIT and shadow
+  a real staff membership. Selection policy is now explicit: 2+ ACTIVE
+  staff memberships (multi-org staff) are AMBIGUOUS and resolve null —
+  fail closed; multi-org membership needs an explicit org-selection
+  mechanism in a later slice. Same for 2+ active client links. And the
+  revoked-staff precedence is now REAL, not just documented: with no
+  active staff membership, the most recent inactive staff membership
+  resolves with status "revoked", so a deactivated staff member who is
+  also an active client reaches `buildSessionContext` as REVOKED STAFF
+  (the engine denies with `membership_revoked`) — never as a working
+  client session.
+- **F2 — snapshot chain restored.** `meta/0008_snapshot.json` now exists
+  (chained `prevId` → 0007's id, `users.sessions_invalidated_before`
+  added), so the drizzle-kit baseline chain matches the journal and future
+  `generate` runs diff against reality.
+- **F3 — least-privilege runbook provisioning.** The cutover runbook's
+  resolver provisioning no longer grants `ON ALL TABLES`; the role gets
+  schema USAGE only and its table privileges come from migrations 0007
+  (identity/webhook/revocation tables + invitations SELECT) and 0008
+  (principal tables SELECT) — the migrations are load-bearing. The
+  sequence grant was dropped (every resolver-written table uses uuid
+  `gen_random_uuid()` defaults; there are no sequences).
+- **F4 — the identity cross-check is real.** The directory returns the
+  STORED `identity_provider_accounts.provider_user_id` as
+  `identity.clerkUserId` (never echoes the input), so the adapter's
+  mismatch check in `provider-session.ts` compares the database's mapping
+  to the session instead of the input to itself.
+- (F6 — the 0008 migration comment now states correctly that `users` is a
+  global NO-RLS table; `organization_members`/`client_user_links` are the
+  RLS-forced ones.)
 
 ## Consequences
 
-- **8 new tests → 194 database tests**, on PGlite UNDER `aflo_auth_resolver`
-  with the deploy-ordered migrations (baseline → role → 0007 → 0008): staff,
-  client-link, platform-admin, disabled, cutoff round-trip, stranger (incl.
-  cascade-deleted user), revoked-link and deactivated-membership fail-closed,
-  and an end-to-end `buildSessionContext` thread-through (staff resolves; a
-  pre-cutoff session does not).
+- **12 new tests → 198 database tests**, on PGlite UNDER
+  `aflo_auth_resolver` with the deploy-ordered migrations (baseline → role
+  → 0007 → 0008): staff, client-link, platform-admin, disabled, cutoff
+  round-trip, stranger (incl. cascade-deleted user), revoked-link
+  fail-closed, deactivated-membership → status "revoked", ambiguous
+  multi-org staff and multi-org client bindings → null, SQL role filter
+  ignoring a non-staff membership row, revoked-staff-plus-active-client
+  precedence threaded through `buildSessionContext` (membershipStatus
+  "revoked", role `staff_advisor` — not a client session), and an
+  end-to-end staff/pre-cutoff thread-through.
 - The credential-gated remainder of the session path is now ONLY composition:
   Clerk `auth()` closure → `ProviderSessionContextProvider` with this
   directory + the revocation gate over `DrizzleSessionRevocationRepository`.

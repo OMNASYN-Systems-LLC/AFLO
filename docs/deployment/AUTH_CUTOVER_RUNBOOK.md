@@ -51,12 +51,20 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public
   GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO aflo_app;
 
 -- Resolver role: the privileged auth-resolver identity. BYPASSRLS so its
--- SECURITY DEFINER function can read invitations across orgs. It owns the
--- function and is the sole reader/writer of the un-scoped resolver tables.
+-- SECURITY DEFINER function can read invitations across orgs. LEAST PRIVILEGE:
+-- provision ONLY schema usage — the role starts with NO table access. Its
+-- table privileges come from the committed migrations, which are LOAD-BEARING:
+--   * 0007 grants the identity/webhook/revocation tables (read/write) +
+--     invitations SELECT + ownership/EXECUTE of find_invitation_by_token.
+--   * 0008 grants read-only SELECT on the principal tables
+--     (users, organization_members, client_user_links).
+-- Do NOT add blanket `ON ALL TABLES` grants here — the resolver must never
+-- hold privileges beyond what those migrations grant. No sequence grants are
+-- needed: every table it writes (identity_provider_accounts,
+-- provider_webhook_events, session_revocations) uses uuid gen_random_uuid()
+-- defaults — there are no sequences to consume.
 CREATE ROLE aflo_auth_resolver LOGIN PASSWORD '<generated>' BYPASSRLS;
 GRANT USAGE ON SCHEMA public TO aflo_auth_resolver;
-GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO aflo_auth_resolver;
-GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO aflo_auth_resolver;
 
 -- The migration-runner role MUST be a member of aflo_auth_resolver so migration
 -- 0007 can reassign find_invitation_by_token's owner to it.
