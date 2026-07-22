@@ -7,6 +7,7 @@ export * from "./resolution";
 export * from "./report";
 export * from "./roundup";
 export * from "./review";
+export * from "./review-center";
 export * from "./roadmap";
 export * from "./engagement";
 export * from "./intake";

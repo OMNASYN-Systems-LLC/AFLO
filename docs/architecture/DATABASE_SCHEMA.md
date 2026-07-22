@@ -93,9 +93,11 @@ CREATE TYPE ai_run_outcome AS ENUM (
   'ok', 'needs_clarification', 'insufficient_data',
   'validation_failed', 'provider_error', 'prohibited_action'
 );
-CREATE TYPE ai_review_status AS ENUM ('not_required', 'pending_review', 'approved', 'rejected');
--- Per-recommendation review state; 'auto_published' is allowed only for
--- low-impact informational output (mirrors the shared ReviewStatus type).
+CREATE TYPE ai_review_status AS ENUM ('pending_review', 'approved', 'rejected', 'auto_published');
+-- Per-recommendation review state (matches the implemented enum in
+-- packages/database/src/enums.ts). 'auto_published' is allowed only for
+-- low-impact informational output that skipped the gate; it is not a Review
+-- Center 'published' state (mirrors the @aflo/ai ReviewStatus type).
 CREATE TYPE recommendation_review_status AS ENUM (
   'pending_review', 'approved', 'rejected', 'auto_published'
 );
