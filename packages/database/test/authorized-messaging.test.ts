@@ -101,7 +101,7 @@ class RecordingRepo implements MessagingRepository {
 function staffCtx(overrides?: { assignedClientIds?: readonly string[] | null }): SessionContext {
   const ctx = buildSessionContext({
     sessionId: "s-staff",
-    identity: { afloUserId: "user-staff", clerkUserId: "ck-staff", accountStatus: "active", isPlatformAdmin: false },
+    identity: { afloUserId: "user-staff", clerkUserId: "ck-staff", accountStatus: "active", isPlatformAdmin: false, sessionsInvalidatedBeforeIso: null },
     membership: { membershipId: "mem-staff", organizationId: ORG, memberRole: "staff", status: "active" },
     assignedClientIds: overrides?.assignedClientIds ?? null,
   });
@@ -112,7 +112,7 @@ function staffCtx(overrides?: { assignedClientIds?: readonly string[] | null }):
 function clientCtx(clientId = "client-1"): SessionContext {
   const ctx = buildSessionContext({
     sessionId: "s-client",
-    identity: { afloUserId: "user-client", clerkUserId: "ck-client", accountStatus: "active", isPlatformAdmin: false },
+    identity: { afloUserId: "user-client", clerkUserId: "ck-client", accountStatus: "active", isPlatformAdmin: false, sessionsInvalidatedBeforeIso: null },
     clientLink: { clientId, organizationId: ORG },
   });
   if (!ctx) throw new Error("client fixture failed to resolve");
@@ -122,7 +122,7 @@ function clientCtx(clientId = "client-1"): SessionContext {
 function platformAdminCtx(): SessionContext {
   const ctx = buildSessionContext({
     sessionId: "s-admin",
-    identity: { afloUserId: "user-pa", clerkUserId: "ck-pa", accountStatus: "active", isPlatformAdmin: true },
+    identity: { afloUserId: "user-pa", clerkUserId: "ck-pa", accountStatus: "active", isPlatformAdmin: true, sessionsInvalidatedBeforeIso: null },
   });
   if (!ctx) throw new Error("platform admin fixture failed to resolve");
   return ctx;
