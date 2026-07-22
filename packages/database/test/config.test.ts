@@ -3,10 +3,12 @@ import {
   DatabaseConfigError,
   getDatabaseConfig,
   isDatabaseConfigured,
+  isResolverConfigured,
 } from "../src/config";
 
 const POOLED = "postgresql://user:pass@ep-cool-name-123-pooler.us-east-2.aws.neon.tech/aflo?sslmode=require";
 const DIRECT = "postgresql://user:pass@ep-cool-name-123.us-east-2.aws.neon.tech/aflo?sslmode=require";
+const RESOLVER = "postgresql://resolver:pass@ep-cool-name-123-pooler.us-east-2.aws.neon.tech/aflo?sslmode=require";
 
 describe("isDatabaseConfigured", () => {
   it("is true only when DATABASE_URL is a non-empty string, and never throws", () => {
@@ -73,5 +75,47 @@ describe("getDatabaseConfig", () => {
     expect(cfg.database).toBe("aflo_dev");
     expect(cfg.host).toBe("localhost");
     expect(cfg.sslMode).toBeNull();
+  });
+});
+
+describe("resolver URL (AUTH_RESOLVER_DATABASE_URL)", () => {
+  it("isResolverConfigured is true only for a non-empty string, and never throws", () => {
+    expect(isResolverConfigured({ AUTH_RESOLVER_DATABASE_URL: RESOLVER })).toBe(true);
+    expect(isResolverConfigured({ AUTH_RESOLVER_DATABASE_URL: "  " })).toBe(false);
+    expect(isResolverConfigured({})).toBe(false);
+  });
+
+  it("is null when not required and not provided", () => {
+    expect(getDatabaseConfig({ DATABASE_URL: POOLED }).resolverUrl).toBeNull();
+  });
+
+  it("parses when provided; fails closed when required-but-missing", () => {
+    const cfg = getDatabaseConfig(
+      { DATABASE_URL: POOLED, AUTH_RESOLVER_DATABASE_URL: RESOLVER },
+      { requireResolverUrl: true },
+    );
+    expect(cfg.resolverUrl).toBe(RESOLVER);
+    expect(() => getDatabaseConfig({ DATABASE_URL: POOLED }, { requireResolverUrl: true })).toThrow(
+      /AUTH_RESOLVER_DATABASE_URL is required/,
+    );
+  });
+
+  it("validates a provided-but-malformed resolver URL even when not required", () => {
+    expect(() =>
+      getDatabaseConfig({ DATABASE_URL: POOLED, AUTH_RESOLVER_DATABASE_URL: "mysql://h/db" }),
+    ).toThrow(/AUTH_RESOLVER_DATABASE_URL must use the postgres/);
+  });
+
+  it("aggregates resolver problems with the rest (all three missing)", () => {
+    try {
+      getDatabaseConfig({}, { requireDirectUrl: true, requireResolverUrl: true });
+      expect.unreachable("should have thrown");
+    } catch (err) {
+      expect(err).toBeInstanceOf(DatabaseConfigError);
+      const problems = (err as DatabaseConfigError).problems;
+      expect(problems.some((p) => p.includes("DATABASE_URL is required"))).toBe(true);
+      expect(problems.some((p) => p.includes("DIRECT_DATABASE_URL"))).toBe(true);
+      expect(problems.some((p) => p.includes("AUTH_RESOLVER_DATABASE_URL"))).toBe(true);
+    }
   });
 });
