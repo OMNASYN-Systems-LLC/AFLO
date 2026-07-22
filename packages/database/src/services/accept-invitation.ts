@@ -11,6 +11,7 @@ import {
 import { hashInvitationToken, verifyInvitationToken } from "@aflo/auth/invitation-token";
 import { invitations, clientUserLinks, organizationMembers } from "../schema";
 import { withOrgContext, type TenantScopedDb } from "../request-context";
+import type { ResolverDb } from "../repositories/resolver";
 
 /**
  * Accept-by-token orchestration (Production Cutover — the capstone that ties the
@@ -120,7 +121,7 @@ function isUniqueViolation(err: unknown): boolean {
 }
 
 export async function acceptInvitationByToken(
-  resolverDb: TenantScopedDb,
+  resolverDb: ResolverDb,
   tenantDb: TenantScopedDb,
   input: AcceptInvitationByTokenInput,
 ): Promise<AcceptInvitationByTokenOutcome> {

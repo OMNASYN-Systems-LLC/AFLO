@@ -58,4 +58,27 @@ describe("connection factories (lazy, credential-free)", () => {
       createRuntimeConnections({ DATABASE_URL: "mysql://nope/db", AUTH_RESOLVER_DATABASE_URL: FAKE_RESOLVER }),
     ).toThrow(DatabaseConfigError);
   });
+
+  it("close() is idempotent — a second call resolves instead of rejecting", async () => {
+    const handle = createTenantConnection(FAKE_TENANT);
+    await handle.close();
+    await expect(handle.close()).resolves.toBeUndefined(); // pg.Pool alone would reject here
+  });
+
+  it("BRANDS the handles: swapping tenant and resolver connections cannot typecheck", () => {
+    // Compile-time proof (validated by `tsc --noEmit`: an unused @ts-expect-error
+    // is itself an error, so if a swap ever became assignable this test file
+    // stops typechecking). The function is deliberately never executed.
+    const compileOnlyProof = (): void => {
+      const tenant = createTenantConnection(FAKE_TENANT);
+      const resolver = createResolverConnection(FAKE_RESOLVER);
+      // @ts-expect-error a branded resolver handle must not be usable as the tenant handle
+      const wrongTenant: typeof tenant.db = resolver.db;
+      // @ts-expect-error a branded tenant handle must not be usable as the resolver handle
+      const wrongResolver: typeof resolver.db = tenant.db;
+      void wrongTenant;
+      void wrongResolver;
+    };
+    expect(typeof compileOnlyProof).toBe("function");
+  });
 });

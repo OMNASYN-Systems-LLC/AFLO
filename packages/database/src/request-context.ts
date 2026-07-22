@@ -34,7 +34,14 @@ import type { PgDatabase, PgQueryResultHKT } from "drizzle-orm/pg-core";
  * every tenant request), so it is unsuitable here.
  */
 
-export type TenantScopedDb = PgDatabase<PgQueryResultHKT>;
+/**
+ * The tenant-role database handle. The optional phantom `__dbRole` brand makes
+ * a BRANDED resolver handle (from `createResolverConnection`) unassignable here
+ * at compile time — a swap of the two role-scoped connections cannot typecheck
+ * — while unbranded handles (PGlite in tests, transaction handles) still
+ * assign freely.
+ */
+export type TenantScopedDb = PgDatabase<PgQueryResultHKT> & { readonly __dbRole?: "tenant" };
 
 /** Thrown when a tenant-scoped request reaches the DB with no resolved organization. */
 export class TenantContextError extends Error {

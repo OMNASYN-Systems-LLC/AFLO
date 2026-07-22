@@ -41,40 +41,63 @@ export interface PoolOptions {
 export interface ConnectionHandle<Db> {
   db: Db;
   pool: Pool;
-  /** Drain and close every client. Idempotent-safe to call once at shutdown. */
+  /** Drain and close every client. Idempotent — extra calls resolve as no-ops. */
   close(): Promise<void>;
 }
 
-function buildPool(connectionString: string, opts: PoolOptions): Pool {
-  return new Pool({
+function buildPool(connectionString: string, opts: PoolOptions, roleLabel: string): Pool {
+  const pool = new Pool({
     connectionString,
     max: opts.max ?? 10,
     idleTimeoutMillis: opts.idleTimeoutMillis ?? 30_000,
     connectionTimeoutMillis: opts.connectionTimeoutMillis ?? 10_000,
   });
+  // An idle client whose backend dies (Neon restart, network reset) makes the
+  // Pool EMIT 'error'; with no listener Node treats that as an uncaught
+  // exception and KILLS the process — the canonical node-postgres footgun.
+  // Log the role label + error message only: never the connection string.
+  pool.on("error", (err) => {
+    console.error(`[aflo-db] idle client error on ${roleLabel} pool: ${err.message}`);
+  });
+  return pool;
 }
 
 function toHandle<Db>(pool: Pool, db: Db): ConnectionHandle<Db> {
-  return { db, pool, close: () => pool.end() };
+  let closed: Promise<void> | null = null;
+  return {
+    db,
+    pool,
+    close: () => {
+      // pg.Pool rejects a second end(); make shutdown hooks (SIGTERM + SIGINT
+      // both firing) safe by returning the first end()'s promise thereafter.
+      closed ??= pool.end();
+      return closed;
+    },
+  };
 }
 
 /**
  * The tenant-role connection (`aflo_app`). Callers route every query through
  * `withOrgContext(handle.db, orgId, …)`; nothing here widens that contract.
+ * This is the branding point: the returned handle is typed `TenantScopedDb`,
+ * so it can never be passed where the resolver connection is required.
  */
 export function createTenantConnection(url: string, opts: PoolOptions = {}): ConnectionHandle<TenantScopedDb> {
-  const pool = buildPool(url, opts);
-  return toHandle(pool, drizzle(pool) as unknown as TenantScopedDb);
+  const pool = buildPool(url, opts, "tenant");
+  const db: TenantScopedDb = drizzle(pool);
+  return toHandle(pool, db);
 }
 
 /**
  * The privileged resolver-role connection (`aflo_auth_resolver`). Used ONLY by
  * the resolver-path repositories (ADR-0031) and the accept-by-token resolve —
- * never for tenant request work.
+ * never for tenant request work. Branded `ResolverDb` — unassignable to the
+ * tenant side at compile time.
  */
 export function createResolverConnection(url: string, opts: PoolOptions = {}): ConnectionHandle<ResolverDb> {
-  const pool = buildPool(url, opts);
-  return toHandle(pool, drizzle(pool) as unknown as ResolverDb);
+  const pool = buildPool(url, opts, "resolver");
+  const db: ResolverDb = drizzle(pool);
+  return toHandle(pool, db);
 }
 
 /** Both runtime connections, built from a validated config. */

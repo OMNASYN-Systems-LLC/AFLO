@@ -75,3 +75,30 @@ swap the connections. Construction is pure — no connection is opened.
   (B4), and principal resolution (B5) consume this seam; the boot fail-closed
   contract (ADR-0017) extends to require the resolver URL + field key when the
   authenticated runtime activates.
+
+## Post-review hardening
+
+An adversarial review (SAFE TO MERGE; handle order, laziness, config, casts,
+secret hygiene, and web-bundle isolation all verified against the actual driver
+sources) surfaced four items, all folded in:
+
+- **Pool `error` listener (MEDIUM).** An idle client whose backend dies makes
+  pg.Pool EMIT `error`; unhandled, Node kills the process — the canonical
+  node-postgres footgun. `buildPool` now attaches a listener logging the role
+  label + error message only (never the connection string).
+- **Compile-checked privilege split (MEDIUM).** `TenantScopedDb` and
+  `ResolverDb` were identical structural aliases, so a future handle swap in the
+  factory would typecheck and pass every test (same PGlite handle injected as
+  both) while running org-scoped WRITES on the BYPASSRLS resolver connection.
+  Both types now carry an optional phantom `__dbRole` brand stamped by the
+  connection factories: a branded swap CANNOT typecheck (proven by
+  `@ts-expect-error` assertions that `tsc --noEmit` enforces — an unused
+  expectation is itself an error), while unbranded handles (PGlite tests,
+  transaction handles) still assign freely. `acceptInvitationByToken`'s
+  resolver parameter is now typed `ResolverDb`.
+- **Idempotent `close()` (LOW).** pg.Pool rejects a second `end()`; the handle
+  now returns the first `end()`'s promise thereafter, so double shutdown hooks
+  (SIGTERM + SIGINT) are safe. Tested.
+- **Unnecessary double casts removed (LOW).** `drizzle(pool)` assigns directly
+  to the branded aliases; the factories are now the deliberate branding point
+  with the compiler fully in the loop.
