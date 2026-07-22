@@ -8,6 +8,7 @@ import { REPORT_RULES_VERSION } from "./report";
 import { ROUNDUP_RULES_VERSION } from "./roundup";
 import { REVIEW_REASON_DESCRIPTIONS, REVIEW_RULES_VERSION } from "./review";
 import { REVIEW_CENTER_RULES_VERSION } from "./review-center";
+import { PLAYBOOK_RULES_VERSION } from "./playbook";
 import { ROADMAP_RULES_VERSION } from "./roadmap";
 import { READINESS_RULES_VERSION, REASON_CODE_DESCRIPTIONS } from "./readiness";
 import { RESOLUTION_RULES_VERSION } from "./resolution";
@@ -401,6 +402,79 @@ export const RULE_REGISTRY: readonly RuleDefinition[] = [
         version: "review_center.v1.0.0",
         date: "2026-07-22",
         note: "Initial reviewer policy (risk tiers from the founder continuation directive).",
+      },
+    ],
+  },
+  {
+    id: "playbook.version_transition",
+    version: PLAYBOOK_RULES_VERSION,
+    effectiveDate: "2026-07-22",
+    description:
+      "Professional Playbook version lifecycle (versioned tenant IP). Reuses the Review Center state vocabulary verbatim with its own allow-list: draft → awaiting_review → approved → published; terminals rejected/deferred/withdrawn/superseded. Published is reachable ONLY through approved; no return-for-edits edge — a revision is a NEW version; publishing version N+1 supersedes version N.",
+    inputs: ["fromStatus", "toStatus"],
+    output: "PlaybookVersionTransitionResult { allowed, fromStatus, toStatus, reasonCode, ruleVersion }",
+    reasonCodes: [
+      "PB_SUBMITTED",
+      "PB_APPROVED",
+      "PB_REJECTED",
+      "PB_DEFERRED",
+      "PB_PUBLISHED",
+      "PB_WITHDRAWN",
+      "PB_SUPERSEDED",
+      "PB_SAME_STATUS",
+      "PB_UNKNOWN_STATUS",
+      "PB_ILLEGAL_TRANSITION",
+    ],
+    sources: [],
+    changeHistory: [
+      {
+        version: "playbook.v1.0.0",
+        date: "2026-07-22",
+        note: "Initial playbook kernel (strategic differentiation directive, Workstream A slice 2).",
+      },
+    ],
+  },
+  {
+    id: "playbook.content_validation",
+    version: PLAYBOOK_RULES_VERSION,
+    effectiveDate: "2026-07-22",
+    description:
+      "Structural validation of PlaybookContent plus the field-provenance contract: every content field carries exactly one of confirmed/assumption/discovery_required/approved. Review checkpoints may only RAISE the kernel review floor (lowering is an authoring error). contentBlocksApproval lists the discovery_required fields that must be resolved before a version can be approved/published — an unresolved question is never presented as settled process.",
+    inputs: ["content: PlaybookContent"],
+    output: "string[] (errors; empty = valid) / PlaybookContentFieldKey[] (approval blockers)",
+    reasonCodes: [],
+    sources: [],
+    changeHistory: [
+      {
+        version: "playbook.v1.0.0",
+        date: "2026-07-22",
+        note: "Initial content + provenance validator (anti-invention control).",
+      },
+    ],
+  },
+  {
+    id: "playbook.discovery",
+    version: PLAYBOOK_RULES_VERSION,
+    effectiveDate: "2026-07-22",
+    description:
+      "Workflow-discovery lifecycle: the queue of concrete questions for the founder about the real process. open → answered → converted (terminal; the answer is absorbed into a playbook version); open → dismissed; answered/dismissed may reopen.",
+    inputs: ["fromStatus", "toStatus"],
+    output: "WorkflowDiscoveryTransitionResult { allowed, fromStatus, toStatus, reasonCode, ruleVersion }",
+    reasonCodes: [
+      "WD_ANSWERED",
+      "WD_CONVERTED",
+      "WD_DISMISSED",
+      "WD_REOPENED",
+      "WD_SAME_STATUS",
+      "WD_UNKNOWN_STATUS",
+      "WD_ILLEGAL_TRANSITION",
+    ],
+    sources: [],
+    changeHistory: [
+      {
+        version: "playbook.v1.0.0",
+        date: "2026-07-22",
+        note: "Initial discovery-queue machine.",
       },
     ],
   },

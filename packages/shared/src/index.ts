@@ -12,6 +12,8 @@ export * from "./repositories/interfaces";
 export * from "./repositories/mock";
 export { GOLDEN_KEY_INTAKE, GOLDEN_KEY_PIPELINE, SYNTHETIC_NOW, syntheticDatabase } from "./data/synthetic";
 export type { SyntheticDatabase } from "./data/synthetic";
+export { GOLDEN_KEY_PLAYBOOK_DRAFTS } from "./data/playbook-seeds";
+export type { GoldenKeyPlaybookSeed, PlaybookDiscoverySeed } from "./data/playbook-seeds";
 
 // Facade re-exports: the rules kernel, AI boundary, and notifications kernel
 // are separate packages (charter monorepo layout); re-exported here so
