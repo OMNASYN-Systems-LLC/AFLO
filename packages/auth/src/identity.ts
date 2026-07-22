@@ -24,9 +24,12 @@ export interface AfloIdentity {
   isPlatformAdmin: boolean;
   /**
    * The account's session-revocation cutoff (account.ts): a session issued before
-   * this instant no longer resolves. Absent/null means nothing is revoked.
+   * this instant no longer resolves. Null means nothing is revoked. REQUIRED
+   * (not optional) so a principal loader that forgets to map the
+   * `users.sessions_invalidated_before` column is a TYPE ERROR, not a silent
+   * revocation bypass — the fail-closed guarantee rests on this field arriving.
    */
-  sessionsInvalidatedBeforeIso?: string | null;
+  sessionsInvalidatedBeforeIso: string | null;
 }
 
 /** One `organization_members` row — a user's staff-role tie to an organization. */

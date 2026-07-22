@@ -113,8 +113,18 @@ function isNonEmpty(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
 }
 
-function isParsableIso(value: unknown): value is string {
-  return typeof value === "string" && !Number.isNaN(Date.parse(value));
+/**
+ * STRICT canonical-ISO check: the string must round-trip
+ * `new Date(Date.parse(v)).toISOString() === v`. `Date.parse` alone is too
+ * lenient — it accepts strings like "9999" or "2032" that parse to a FUTURE
+ * instant, which would defeat the revocation cutoff comparison. The source
+ * contract is `Date.prototype.toISOString()` output (see the wiring example
+ * above); anything else fails closed.
+ */
+function isCanonicalIso(value: unknown): value is string {
+  if (typeof value !== "string") return false;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) && new Date(parsed).toISOString() === value;
 }
 
 /**
@@ -147,7 +157,7 @@ export class ProviderSessionContextProvider implements SessionContextProvider {
     if (
       !isNonEmpty(session.providerUserId) ||
       !isNonEmpty(session.providerSessionId) ||
-      !isParsableIso(session.issuedAtIso)
+      !isCanonicalIso(session.issuedAtIso)
     ) {
       return null;
     }
@@ -160,8 +170,14 @@ export class ProviderSessionContextProvider implements SessionContextProvider {
 
     // 4. Defense in depth: the directory's identity must be the mapping for
     //    THIS provider user — a mismatched row is a wiring bug, resolved as
-    //    unauthenticated rather than as someone else.
+    //    unauthenticated rather than as someone else. NOTE: `clerkUserId` is a
+    //    Clerk-specific field; when IdentityProvider grows beyond "clerk",
+    //    AfloIdentity needs a provider-generic mapping field and this check
+    //    must compare per-provider (until then a non-clerk identity fails
+    //    closed here, never open). A degenerate aflo user id is screened
+    //    before the revocation gate ever sees it.
     if (records.identity.clerkUserId !== session.providerUserId) return null;
+    if (!isNonEmpty(records.identity.afloUserId)) return null;
 
     // 5. Digest-specific revocation ("sign out this device"), when wired.
     //    Errors propagate — a failing revocation store must not fail OPEN.

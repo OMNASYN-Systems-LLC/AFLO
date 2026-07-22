@@ -23,6 +23,7 @@ function identity(overrides: Partial<AfloIdentity> = {}): AfloIdentity {
     clerkUserId: "clerk_abc",
     accountStatus: "active",
     isPlatformAdmin: false,
+    sessionsInvalidatedBeforeIso: null,
     ...overrides,
   };
 }

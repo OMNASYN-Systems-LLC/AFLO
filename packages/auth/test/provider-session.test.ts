@@ -27,6 +27,7 @@ const IDENTITY: AfloIdentity = {
   clerkUserId: "clerk_user_1",
   accountStatus: "active",
   isPlatformAdmin: false,
+  sessionsInvalidatedBeforeIso: null,
 };
 
 const STAFF_RECORDS: PrincipalRecords = {
@@ -45,12 +46,16 @@ function sourceOf(session: VerifiedProviderSession | null): ProviderSessionSourc
   return { current: async () => session };
 }
 
-/** A directory stub that also records whether it was consulted. */
-function directoryOf(records: PrincipalRecords | null): PrincipalDirectory & { calls: number } {
+/** A directory stub recording how (and how often) it was consulted. */
+function directoryOf(
+  records: PrincipalRecords | null,
+): PrincipalDirectory & { calls: number; seenArgs: unknown[][] } {
   const stub = {
     calls: 0,
-    async loadByProviderUser() {
+    seenArgs: [] as unknown[][],
+    async loadByProviderUser(provider: string, providerUserId: string) {
       stub.calls += 1;
+      stub.seenArgs.push([provider, providerUserId]);
       return records;
     },
   };
@@ -72,6 +77,13 @@ describe("ProviderSessionContextProvider — fail-closed resolution", () => {
       { ...SESSION, providerSessionId: "" },
       { ...SESSION, issuedAtIso: "not-a-date" },
       { ...SESSION, issuedAtIso: "" },
+      // Date.parse-lenient garbage that parses to a FUTURE instant — accepted,
+      // it would defeat the revocation cutoff. Canonical-ISO screening rejects it.
+      { ...SESSION, issuedAtIso: "9999" },
+      { ...SESSION, issuedAtIso: "2032" },
+      // Valid ISO but NOT the canonical toISOString form (no milliseconds) —
+      // outside the documented source contract, fails closed.
+      { ...SESSION, issuedAtIso: "2026-07-22T12:00:00Z" },
     ];
     for (const session of malformed) {
       const directory = directoryOf(STAFF_RECORDS);
@@ -105,11 +117,14 @@ describe("ProviderSessionContextProvider — fail-closed resolution", () => {
 
 describe("ProviderSessionContextProvider — role resolution via buildSessionContext", () => {
   it("resolves a staff member: role from the membership row, org bound, session id threaded", async () => {
+    const directory = directoryOf(STAFF_RECORDS);
     const provider = new ProviderSessionContextProvider({
       source: sourceOf(SESSION),
-      directory: directoryOf(STAFF_RECORDS),
+      directory,
     });
     const ctx = await provider.resolve();
+    // The lookup key is the verified session's (provider, providerUserId) — verbatim.
+    expect(directory.seenArgs).toEqual([["clerk", "clerk_user_1"]]);
     expect(ctx).toMatchObject({
       sessionId: "sess_abc",
       clerkUserId: "clerk_user_1",

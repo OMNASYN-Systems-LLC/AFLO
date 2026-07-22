@@ -61,6 +61,27 @@ Two facts shape the design:
   else) → revocation gate → `buildSessionContext` with `issuedAtIso` threaded
   into the cutoff check.
 
+## Post-review hardening (adversarial review, same day)
+
+The review's verdict was SAFE TO MERGE (no CRITICAL/MEDIUM); its LOW
+defense-in-depth findings were folded in anyway:
+
+1. **Strict canonical-ISO `issuedAt` validation.** `Date.parse` alone accepts
+   strings like `"9999"`/`"2032"` that parse to a FUTURE instant — a
+   future/buggy `ProviderSessionSource` forwarding such a value would defeat
+   the revocation cutoff. The guard now requires an exact
+   `Date.prototype.toISOString()` round-trip (the documented source
+   contract); anything else fails closed. Tested with future-parsing garbage
+   and non-canonical-but-valid ISO.
+2. **`AfloIdentity.sessionsInvalidatedBeforeIso` is now REQUIRED
+   (`string | null`).** A principal loader (the B5 Drizzle directory) that
+   forgets to map `users.sessions_invalidated_before` is now a type error,
+   not a silent revoke-all bypass.
+3. The directory lookup key `("clerk", providerUserId)` is now asserted
+   verbatim in tests; a degenerate empty `afloUserId` is screened before the
+   revocation gate; the clerk-specific cross-check field is documented as a
+   multi-provider generalization point (non-clerk fails closed, never open).
+
 ## Consequences
 
 - **12 new tests → 109 auth tests**: null-session and malformed-fact rejection

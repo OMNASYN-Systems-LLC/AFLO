@@ -93,7 +93,7 @@ export function buildSessionContext(input: SessionContextInput): SessionContext 
   // is unknown, we cannot prove the session post-dates the cutoff, so we reject.
   // (Reactivate-after-disable and sign-out-everywhere leave status=active with a
   // live cutoff, so this — not the disabled gate — is the only control there.)
-  const revocationCutoff = identity.sessionsInvalidatedBeforeIso ?? null;
+  const revocationCutoff = identity.sessionsInvalidatedBeforeIso;
   if (revocationCutoff !== null) {
     if (input.sessionIssuedAtIso === undefined) return null;
     if (isSessionRevoked(input.sessionIssuedAtIso, revocationCutoff)) return null;
