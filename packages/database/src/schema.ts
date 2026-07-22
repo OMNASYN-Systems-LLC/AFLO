@@ -103,6 +103,12 @@ export const users = pgTable("users", {
   /** Platform-level flag — Platform Admin is never a membership role. */
   isPlatformAdmin: boolean("is_platform_admin").notNull().default(false),
   isActive: boolean("is_active").notNull().default(true),
+  /**
+   * Session-revocation cutoff (ADR-0024/0035): a session issued before this
+   * instant no longer resolves. NULL = nothing revoked. Set by disable-account
+   * and sign-out-everywhere; read by the PrincipalDirectory on every request.
+   */
+  sessionsInvalidatedBefore: timestamp("sessions_invalidated_before", { withTimezone: true }),
   ...timestamps,
 });
 

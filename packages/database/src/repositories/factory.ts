@@ -8,6 +8,7 @@ import {
   DrizzleWebhookEventRepository,
   type ResolverDb,
 } from "./resolver";
+import { DrizzlePrincipalDirectory } from "./principal-directory";
 import {
   acceptInvitationByToken,
   type AcceptInvitationByTokenInput,
@@ -47,6 +48,8 @@ export interface Repositories {
   invitations: DrizzleInvitationRepository;
   clientUserLinks: DrizzleClientUserLinkRepository;
   identityAccounts: DrizzleIdentityAccountRepository;
+  /** Principal resolution for the session adapter (ADR-0035/0037) — resolver-role reads. */
+  principalDirectory: DrizzlePrincipalDirectory;
   webhookEvents: DrizzleWebhookEventRepository;
   sessionRevocations: DrizzleSessionRevocationRepository;
   /** Accept-by-token orchestration (ADR-0032), pre-bound to the two handles. */
@@ -60,6 +63,7 @@ export function createRepositories(handles: RepositoryHandles): Repositories {
     invitations: new DrizzleInvitationRepository(tenantDb),
     clientUserLinks: new DrizzleClientUserLinkRepository(tenantDb),
     identityAccounts: new DrizzleIdentityAccountRepository(resolverDb),
+    principalDirectory: new DrizzlePrincipalDirectory(resolverDb),
     webhookEvents: new DrizzleWebhookEventRepository(resolverDb),
     sessionRevocations: new DrizzleSessionRevocationRepository(resolverDb),
     acceptInvitation: (input) => acceptInvitationByToken(resolverDb, tenantDb, input),

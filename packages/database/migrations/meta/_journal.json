@@ -57,6 +57,13 @@
       "when": 1784518287956,
       "tag": "0007_resolver_grant_matrix",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1784521887956,
+      "tag": "0008_principal_resolution",
+      "breakpoints": true
     }
   ]
 }
