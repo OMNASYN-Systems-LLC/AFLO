@@ -13,3 +13,4 @@ export * from "./identity-repositories";
 export * from "./resolver-repositories";
 export * from "./membership";
 export * from "./account";
+export * from "./provider-session";
