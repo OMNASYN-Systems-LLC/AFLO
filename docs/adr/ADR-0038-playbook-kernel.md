@@ -32,15 +32,24 @@ workflow-discovery queue for unresolved decisions.").
    `confirmed`/`assumption`/`discovery_required`/`approved` (continuation
    directive §9, verbatim set). `validatePlaybookContent` enforces an
    exhaustive provenance map plus structural rules (non-empty purpose and
-   prohibited actions; valid lifecycle stages, trigger kinds — `fact_threshold`
-   triggers must name a backing rule id; unique question ids; review
-   checkpoints may only RAISE the kernel review floor — a lowering attempt is
-   surfaced as an authoring error via `resolveReviewPolicy`, not silently
-   clamped). `contentBlocksApproval` lists the `discovery_required` fields
-   that MUST be resolved before approval/publication — a draft may carry open
-   questions freely; an approved version may never present one as settled
-   process. (`assumption` fields do not block: visibly-labeled scaffolding a
-   reviewer explicitly accepts.)
+   prohibited actions; trimmed-non-empty entries across every string-list
+   field; valid lifecycle stages, trigger kinds — `fact_threshold` triggers
+   must name a trimmed-non-empty backing rule id; unique question, action,
+   checkpoint, and escalation ids; checkpoint `afterStep` must reference an
+   existing action or question id; review checkpoints may only RAISE the
+   kernel review floor — a lowering attempt is surfaced as an authoring error
+   via `resolveReviewPolicy`, not silently clamped). `contentBlocksApproval`
+   lists the `discovery_required` fields that MUST be resolved before
+   approval/publication — a draft may carry open questions freely; an
+   approved version may never present one as settled process. (`assumption`
+   fields do not block: visibly-labeled scaffolding a reviewer explicitly
+   accepts.)
+
+   Enforcement boundary: `playbookVersionTransition` is content-blind — the
+   STORE (design-brief PR-5) MUST consult `contentBlocksApproval` and deny
+   awaiting_review→approved / approved→published while it returns a non-empty
+   list. This ADR assigns that responsibility now so the wiring slice cannot
+   honestly omit it.
 3. **Workflow discovery.** `open → answered → converted` (terminal — the
    answer absorbed into a version, recorded via
    `converted_playbook_version_id` when persistence lands);
@@ -53,12 +62,17 @@ Readiness, Mortgage Readiness, Emergency Savings, Debt Overload,
 Business-Capital Document Readiness, Client Reengagement). Every seed:
 provenance is ONLY `assumption` (visibly generic scaffolding) or
 `discovery_required` — `confirmed`/`approved` are reserved for the founder's
-actual answers; the five process-specific fields (triggers, question
-sequence, escalation, completion evidence, outcome metrics) are
-`discovery_required`, each backed by a concrete `WorkflowDiscoveryItem`
-question; placeholder values are labeled "pending discovery" in the text
-itself; `contentBlocksApproval` is non-empty for every seed, so none can be
-approved or published as-is.
+actual answers; the eight process-specific fields (triggers, question
+sequence, escalation, completion evidence, outcome metrics, required
+documents, review checkpoints, recommended actions) are `discovery_required`,
+each backed by a concrete `WorkflowDiscoveryItem` question — nine questions
+per seed covering ALL eight §9 unresolved-decision categories (threshold,
+document requirement, escalation condition, communication template, reviewer
+role, timing rule, completion evidence, expected outcome; test-enforced
+per-category); placeholder values (triggers, escalations, action-ordering
+strategies) are labeled "pending discovery" in the text itself;
+`contentBlocksApproval` is non-empty for every seed, so none can be approved
+or published as-is.
 
 Registry: `playbook.version_transition` / `.content_validation` /
 `.discovery` at `playbook.v1.0.0`, lockstep-tested. Vocabulary boundaries:
@@ -69,13 +83,16 @@ for `calculations`.
 
 ## Consequences
 
-- **12 new rules tests → 130** (full transition matrices for both machines,
+- **18 new rules tests → 136** (full transition matrices for both machines,
   published-only-via-approved + no-return proofs, terminal no-exit,
   fail-closed unknown statuses, validator structural + provenance +
-  floor-raising cases, approval blockers, registry lockstep) and **6 new
-  shared tests → 236** (seed count/uniqueness/draft status, structural
-  validity, never-confirmed/approved, approval blocked with full discovery
-  coverage, vocabulary + registered-calculation checks, visible placeholders).
+  floor-raising cases, whitespace-entry/duplicate-id/dangling-`afterStep`
+  rejection, approval blockers, registry lockstep incl. reason-code
+  emission-equality) and **7 new shared tests → 237** (seed
+  count/uniqueness/draft status, structural validity,
+  never-confirmed/approved, approval blocked with full discovery coverage,
+  per-category §9 discovery coverage, TYPED vocabulary +
+  registered-calculation checks, visible placeholders).
 - Next slices per the design brief: PR-3 feedback + analytics kernels, PR-4
   migration + repositories (playbooks/playbook_versions/workflow_discovery_items
   org-RLS tables), PR-5 store wiring (author/approve authorization — Staff

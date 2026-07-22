@@ -39,13 +39,23 @@ export interface GoldenKeyPlaybookSeed {
   discoveryItems: PlaybookDiscoverySeed[];
 }
 
-/** Fields every seed leaves to founder discovery (the process-specific core). */
+/**
+ * Fields every seed leaves to founder discovery (the process-specific core).
+ * Document lists, checkpoint reviewer roles, and action-selection strategies
+ * are unconfirmed process — not assumptions — so they are discovery_required
+ * too (directive §9: every unresolved threshold, document requirement,
+ * escalation condition, communication template, reviewer role, timing rule,
+ * completion evidence, and expected outcome is queued).
+ */
 const DISCOVERY_FIELDS: readonly PlaybookContentFieldKey[] = [
   "triggeringConditions",
   "questionSequence",
   "escalationCriteria",
   "completionEvidence",
   "outcomeMetrics",
+  "requiredDocuments",
+  "humanReviewCheckpoints",
+  "recommendedActions",
 ];
 
 const COMMON_DISCOVERY: readonly PlaybookDiscoverySeed[] = [
@@ -73,6 +83,28 @@ const COMMON_DISCOVERY: readonly PlaybookDiscoverySeed[] = [
     checkpointRef: "outcomeMetrics",
     question: "Which outcomes do you track to know this play worked?",
     context: "Feeds the review/playbook effectiveness analytics.",
+  },
+  {
+    checkpointRef: "requiredDocuments",
+    question: "Which documents do you actually require for this play, and are any optional or conditional?",
+    context: "Seed document lists are generic scaffolding — §9: every unresolved document requirement is queued.",
+  },
+  {
+    checkpointRef: "humanReviewCheckpoints",
+    question: "Who reviews each checkpoint in this play — staff, admin, or you — and at what points?",
+    context: "Seed checkpoints default to the kernel floor; the reviewer-role choice is yours (§9: reviewer role).",
+  },
+  {
+    checkpointRef: "recommendedActions",
+    question:
+      "How do you actually choose and order the recommended actions in this play (and what wording/template do you use when communicating them)?",
+    context: "Seed action ordering is generic placeholder strategy, NOT your method (§9: communication template).",
+  },
+  {
+    checkpointRef: "triggeringConditions",
+    question:
+      "What timing or cadence rules govern this play — when does it start, how often do you check in, when is a client considered stalled?",
+    context: "§9: every unresolved timing rule is queued.",
   },
 ];
 
@@ -110,7 +142,15 @@ function draft(input: {
       calculations: input.calculations,
       questionSequence: [],
       educationContent: [],
-      recommendedActions: [{ id: "a1", summary: input.actionSummary, category: input.actionCategory }],
+      // PLACEHOLDER strategy — discovery_required; the label removes any
+      // reading of the seed's action ordering as settled Golden Key doctrine.
+      recommendedActions: [
+        {
+          id: "a1",
+          summary: `${input.actionSummary} (placeholder — pending discovery)`,
+          category: input.actionCategory,
+        },
+      ],
       prohibitedActions: [
         "Never promise a specific credit-score change",
         "Never advise on legal disputes, tax treatment, or investment selection",

@@ -170,6 +170,103 @@ describe("validatePlaybookContent — structural + provenance contract", () => {
     expect(validatePlaybookContent(extra)).toContain('fieldProvenance: unknown field "secretSauce"');
   });
 
+  it("rejects whitespace-only entries in every string-list field", () => {
+    expect(validatePlaybookContent(content({ prohibitedActions: ["Never promise a score", "  "] }))).toContain(
+      "prohibitedActions: entries must be non-empty",
+    );
+    expect(validatePlaybookContent(content({ requiredDocuments: [""] }))).toContain(
+      "requiredDocuments: entries must be non-empty",
+    );
+    expect(validatePlaybookContent(content({ requiredFacts: [" "] }))).toContain(
+      "requiredFacts: entries must be non-empty",
+    );
+    expect(validatePlaybookContent(content({ educationContent: [""] }))).toContain(
+      "educationContent: entries must be non-empty",
+    );
+    expect(validatePlaybookContent(content({ completionEvidence: ["  "] }))).toContain(
+      "completionEvidence: entries must be non-empty",
+    );
+    expect(validatePlaybookContent(content({ outcomeMetrics: [""] }))).toContain(
+      "outcomeMetrics: entries must be non-empty",
+    );
+  });
+
+  it("rejects duplicate recommendedActions ids and blank action fields", () => {
+    const dup = validatePlaybookContent(
+      content({
+        recommendedActions: [
+          { id: "a1", summary: "Pay down highest-utilization card", category: "credit" },
+          { id: "a1", summary: "Another action", category: "credit" },
+        ],
+      }),
+    );
+    expect(dup).toContain('recommendedActions: duplicate id "a1"');
+    const blank = validatePlaybookContent(
+      content({ recommendedActions: [{ id: " ", summary: "", category: "  " }] }),
+    );
+    expect(blank).toContain("recommendedActions: id must be non-empty");
+    expect(blank.some((e) => e.includes("summary for"))).toBe(true);
+    expect(blank.some((e) => e.includes("category for"))).toBe(true);
+  });
+
+  it("rejects checkpoints whose afterStep does not reference a known action or question id", () => {
+    const errors = validatePlaybookContent(
+      content({
+        humanReviewCheckpoints: [
+          {
+            id: "cp1",
+            afterStep: "a999",
+            artifactType: "roadmap_draft",
+            riskClassification: "high",
+            requiredReviewerRole: "staff",
+          },
+        ],
+      }),
+    );
+    expect(errors).toContain(
+      'humanReviewCheckpoints: afterStep "a999" of "cp1" does not reference a known action or question id',
+    );
+    // ...a questionSequence id is a legal afterStep too.
+    expect(
+      validatePlaybookContent(
+        content({
+          humanReviewCheckpoints: [
+            {
+              id: "cp1",
+              afterStep: "q1",
+              artifactType: "roadmap_draft",
+              riskClassification: "high",
+              requiredReviewerRole: "staff",
+            },
+          ],
+        }),
+      ),
+    ).toEqual([]);
+  });
+
+  it("rejects blank/duplicate checkpoint and escalation ids and blank question ids", () => {
+    const cp = content().humanReviewCheckpoints[0]!;
+    const cps = validatePlaybookContent(
+      content({ humanReviewCheckpoints: [{ ...cp, id: " " }, cp, { ...cp }] }),
+    );
+    expect(cps).toContain("humanReviewCheckpoints: id must be non-empty");
+    expect(cps).toContain('humanReviewCheckpoints: duplicate id "cp1"');
+    const esc = { id: "e1", condition: "client disputes a balance", escalateToRole: "organization_admin" as const };
+    const escs = validatePlaybookContent(content({ escalationCriteria: [{ ...esc, id: "" }, esc, { ...esc }] }));
+    expect(escs).toContain("escalationCriteria: id must be non-empty");
+    expect(escs).toContain('escalationCriteria: duplicate id "e1"');
+    expect(
+      validatePlaybookContent(content({ questionSequence: [{ id: "  ", prompt: "A question?", capturesFactKey: null }] })),
+    ).toContain("questionSequence: id must be non-empty");
+  });
+
+  it("rejects a whitespace-only fact_threshold ruleId", () => {
+    const errors = validatePlaybookContent(
+      content({ triggeringConditions: [{ kind: "fact_threshold", value: "utilization>0.5", ruleId: "  " }] }),
+    );
+    expect(errors.some((e) => e.includes("must name a backing ruleId"))).toBe(true);
+  });
+
   it("contentBlocksApproval names exactly the discovery_required fields", () => {
     const c = content();
     c.fieldProvenance.calculations = "discovery_required";
@@ -202,5 +299,25 @@ describe("registry lockstep", () => {
       expect(rule, id).toBeDefined();
       expect(rule!.version).toBe(PLAYBOOK_RULES_VERSION);
     }
+  });
+
+  it("registry reasonCodes exactly equal the codes the machines actually emit", () => {
+    const pbEmitted = new Set<string>();
+    for (const from of PLAYBOOK_VERSION_STATUSES) {
+      for (const to of PLAYBOOK_VERSION_STATUSES) {
+        pbEmitted.add(playbookVersionTransition(from, to).reasonCode);
+      }
+    }
+    pbEmitted.add(playbookVersionTransition("draft", "not-a-status").reasonCode); // PB_UNKNOWN_STATUS
+    expect(getRule("playbook.version_transition")!.reasonCodes.slice().sort()).toEqual([...pbEmitted].sort());
+
+    const wdEmitted = new Set<string>();
+    for (const from of WORKFLOW_DISCOVERY_STATUSES) {
+      for (const to of WORKFLOW_DISCOVERY_STATUSES) {
+        wdEmitted.add(workflowDiscoveryTransition(from, to).reasonCode);
+      }
+    }
+    wdEmitted.add(workflowDiscoveryTransition("open", "not-a-status").reasonCode); // WD_UNKNOWN_STATUS
+    expect(getRule("playbook.discovery")!.reasonCodes.slice().sort()).toEqual([...wdEmitted].sort());
   });
 });

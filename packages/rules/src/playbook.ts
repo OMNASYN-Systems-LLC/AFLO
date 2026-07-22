@@ -144,7 +144,10 @@ export interface PlaybookTrigger {
 
 export interface PlaybookReviewCheckpoint {
   id: string;
-  /** The content step this checkpoint follows (question/action/calculation id). */
+  /**
+   * The content step this checkpoint follows — must reference an existing
+   * recommendedActions id or questionSequence id (validator-enforced).
+   */
   afterStep: string;
   artifactType: ReviewArtifactType;
   riskClassification: ReviewRiskClass;
@@ -208,8 +211,25 @@ export function validatePlaybookContent(content: PlaybookContent): string[] {
       errors.push(`triggeringConditions: unknown kind "${trigger.kind}"`);
     }
     if (trigger.value.trim().length === 0) errors.push("triggeringConditions: value must be non-empty");
-    if (trigger.kind === "fact_threshold" && !trigger.ruleId) {
+    if (trigger.kind === "fact_threshold" && (trigger.ruleId === undefined || trigger.ruleId.trim().length === 0)) {
       errors.push("triggeringConditions: fact_threshold triggers must name a backing ruleId");
+    }
+  }
+
+  // Every string-list field must contain trimmed-non-empty entries — the
+  // contract the PlaybookContent doc comment promises (vocabulary membership
+  // for shared-owned strings is checked at the store boundary).
+  const stringLists: [string, string[]][] = [
+    ["requiredFacts", content.requiredFacts],
+    ["requiredDocuments", content.requiredDocuments],
+    ["educationContent", content.educationContent],
+    ["completionEvidence", content.completionEvidence],
+    ["outcomeMetrics", content.outcomeMetrics],
+    ["prohibitedActions", content.prohibitedActions],
+  ];
+  for (const [field, entries] of stringLists) {
+    for (const entry of entries) {
+      if (entry.trim().length === 0) errors.push(`${field}: entries must be non-empty`);
     }
   }
 
@@ -219,16 +239,41 @@ export function validatePlaybookContent(content: PlaybookContent): string[] {
 
   const questionIds = new Set<string>();
   for (const q of content.questionSequence) {
+    if (q.id.trim().length === 0) errors.push("questionSequence: id must be non-empty");
     if (q.prompt.trim().length === 0) errors.push(`questionSequence: prompt for "${q.id}" must be non-empty`);
     if (questionIds.has(q.id)) errors.push(`questionSequence: duplicate id "${q.id}"`);
     questionIds.add(q.id);
+  }
+
+  const actionIds = new Set<string>();
+  for (const action of content.recommendedActions) {
+    if (action.id.trim().length === 0) errors.push("recommendedActions: id must be non-empty");
+    if (action.summary.trim().length === 0) {
+      errors.push(`recommendedActions: summary for "${action.id}" must be non-empty`);
+    }
+    if (action.category.trim().length === 0) {
+      errors.push(`recommendedActions: category for "${action.id}" must be non-empty`);
+    }
+    if (actionIds.has(action.id)) errors.push(`recommendedActions: duplicate id "${action.id}"`);
+    actionIds.add(action.id);
   }
 
   if (content.prohibitedActions.length === 0) {
     errors.push("prohibitedActions must be non-empty (every playbook names what it must never do)");
   }
 
+  const checkpointIds = new Set<string>();
   for (const cp of content.humanReviewCheckpoints) {
+    if (cp.id.trim().length === 0) errors.push("humanReviewCheckpoints: id must be non-empty");
+    if (checkpointIds.has(cp.id)) errors.push(`humanReviewCheckpoints: duplicate id "${cp.id}"`);
+    checkpointIds.add(cp.id);
+    if (cp.afterStep.trim().length === 0) {
+      errors.push(`humanReviewCheckpoints: afterStep for "${cp.id}" must be non-empty`);
+    } else if (!actionIds.has(cp.afterStep) && !questionIds.has(cp.afterStep)) {
+      errors.push(
+        `humanReviewCheckpoints: afterStep "${cp.afterStep}" of "${cp.id}" does not reference a known action or question id`,
+      );
+    }
     if (!(REVIEW_ARTIFACT_TYPES as readonly string[]).includes(cp.artifactType)) {
       errors.push(`humanReviewCheckpoints: unknown artifact type "${cp.artifactType}"`);
       continue;
@@ -259,7 +304,11 @@ export function validatePlaybookContent(content: PlaybookContent): string[] {
     }
   }
 
+  const escalationIds = new Set<string>();
   for (const esc of content.escalationCriteria) {
+    if (esc.id.trim().length === 0) errors.push("escalationCriteria: id must be non-empty");
+    if (escalationIds.has(esc.id)) errors.push(`escalationCriteria: duplicate id "${esc.id}"`);
+    escalationIds.add(esc.id);
     if (esc.condition.trim().length === 0) errors.push(`escalationCriteria: condition for "${esc.id}" must be non-empty`);
     if (!(REVIEWER_ROLES as readonly string[]).includes(esc.escalateToRole)) {
       errors.push(`escalationCriteria: unknown reviewer role "${esc.escalateToRole}"`);
@@ -290,6 +339,11 @@ export function validatePlaybookContent(content: PlaybookContent): string[] {
  * (`assumption` fields do not block — they are visibly labeled scaffolding a
  * reviewer explicitly accepts; converting them to `confirmed`/`approved` is
  * the discovery queue's job.)
+ *
+ * Enforcement boundary: `playbookVersionTransition` is content-blind — the
+ * STORE (design-brief PR-5) MUST consult `contentBlocksApproval` and deny
+ * awaiting_review→approved / approved→published while it returns a non-empty
+ * list.
  */
 export function contentBlocksApproval(content: PlaybookContent): PlaybookContentFieldKey[] {
   return PLAYBOOK_CONTENT_FIELDS.filter((f) => content.fieldProvenance[f] === "discovery_required");
