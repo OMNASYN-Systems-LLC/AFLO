@@ -17,6 +17,11 @@
  *   - `rejected`, `deferred`, `withdrawn`, `superseded` are terminal; a revised
  *     attempt is a NEW ReviewItem linked via `previousReviewItemId`, never a
  *     resurrection (append-only history, the report-kernel principle).
+ *   - There is NO "return for edits" edge (the directive's model has none): an
+ *     author revises by WITHDRAWING their item and submitting a new linked one,
+ *     and every exit from `awaiting_review` is a structured decision or a
+ *     withdrawal/supersession — nothing leaves the queue without a recorded,
+ *     reason-coded action (the feedback data the moat depends on).
  *   - `escalated` is a DECISION, not a state: the item stays `awaiting_review`
  *     with the required reviewer role raised one rank.
  *
@@ -95,7 +100,6 @@ export type ReviewCenterReasonCode =
   | "RVC_REJECTED"
   | "RVC_DEFERRED"
   | "RVC_ESCALATED"
-  | "RVC_RETURNED"
   | "RVC_PUBLISHED"
   | "RVC_WITHDRAWN"
   | "RVC_SUPERSEDED"
@@ -108,6 +112,7 @@ export type ReviewCenterReasonCode =
   | "RVC_INVALID_REASON_CODE"
   | "RVC_MISSING_MODIFICATIONS"
   | "RVC_UNEXPECTED_MODIFICATIONS"
+  | "RVC_INVALID_MODIFICATION_COUNT"
   | "RVC_ESCALATION_CEILING"
   | "RVC_REVIEWER_NOT_MEMBER"
   | "RVC_ROLE_NOT_REVIEWER"
@@ -205,13 +210,11 @@ const ALLOWED: Record<ReviewItemState, Partial<Record<ReviewItemState, ReviewCen
     approved: "RVC_APPROVED",
     rejected: "RVC_REJECTED",
     deferred: "RVC_DEFERRED",
-    draft: "RVC_RETURNED",
     withdrawn: "RVC_WITHDRAWN",
     superseded: "RVC_SUPERSEDED",
   },
   approved: {
     published: "RVC_PUBLISHED",
-    draft: "RVC_RETURNED",
     superseded: "RVC_SUPERSEDED",
   },
   published: {
@@ -264,6 +267,12 @@ export interface ApplyReviewDecisionInput {
   modifiedFieldCount: number;
   /** Structured reason code (RVD_*) — must be declared valid for the decision. */
   decisionReasonCode: string;
+  /**
+   * The item's CURRENT required reviewer role — used by `escalated` to compute
+   * the raised floor and to DENY escalation at the ceiling (an
+   * organization_owner-level item has nowhere to escalate).
+   */
+  requiredReviewerRole: ReviewerRole;
 }
 
 export interface ReviewDecisionResult {
@@ -272,6 +281,8 @@ export interface ReviewDecisionResult {
   fromState: string;
   /** The state after the decision; unchanged for `escalated` and for any denial. */
   toState: string;
+  /** For an allowed `escalated` decision: the raised required reviewer role. */
+  escalatedToRole?: ReviewerRole;
   reasonCode: ReviewCenterReasonCode;
   ruleVersion: string;
 }
@@ -296,10 +307,15 @@ const DECISION_TO_CODE: Record<ReviewDecision, ReviewCenterReasonCode> = {
 /**
  * Apply one of the five structured decisions. Fail-closed validation order:
  * state known → item is awaiting_review → decision known → reason code valid
- * for the decision → modifications paired correctly (approved_unchanged must
- * carry none; approved_with_edits must carry at least one — the kernel makes
- * "edited but recorded as unchanged" and "unchanged but recorded as edited"
- * both unrepresentable, which is what keeps the feedback data trustworthy).
+ * for the decision → modification count well-formed (a non-negative integer) →
+ * modifications paired correctly (approved_unchanged must carry none;
+ * approved_with_edits must carry at least one — the kernel makes "edited but
+ * recorded as unchanged" and "unchanged but recorded as edited" both
+ * unrepresentable, which is what keeps the feedback data trustworthy) →
+ * escalation has somewhere to go (an organization_owner-level item is at the
+ * ceiling and CANNOT be escalated — `RVC_ESCALATION_CEILING`). An allowed
+ * `escalated` result carries `escalatedToRole`, the raised floor the store
+ * must persist.
  */
 export function applyReviewDecision(input: ApplyReviewDecisionInput): ReviewDecisionResult {
   const base = {
@@ -319,11 +335,25 @@ export function applyReviewDecision(input: ApplyReviewDecisionInput): ReviewDeci
   if (!isDecisionReasonValid(decision, input.decisionReasonCode)) {
     return { ...base, allowed: false, reasonCode: "RVC_INVALID_REASON_CODE" };
   }
+  if (!Number.isInteger(input.modifiedFieldCount) || input.modifiedFieldCount < 0) {
+    return { ...base, allowed: false, reasonCode: "RVC_INVALID_MODIFICATION_COUNT" };
+  }
   if (decision === "approved_unchanged" && input.modifiedFieldCount > 0) {
     return { ...base, allowed: false, reasonCode: "RVC_UNEXPECTED_MODIFICATIONS" };
   }
   if (decision === "approved_with_edits" && input.modifiedFieldCount === 0) {
     return { ...base, allowed: false, reasonCode: "RVC_MISSING_MODIFICATIONS" };
+  }
+  if (decision === "escalated") {
+    const raised = escalateReviewerRole(input.requiredReviewerRole);
+    if (raised === null) return { ...base, allowed: false, reasonCode: "RVC_ESCALATION_CEILING" };
+    return {
+      ...base,
+      allowed: true,
+      toState: DECISION_TO_STATE[decision],
+      escalatedToRole: raised,
+      reasonCode: DECISION_TO_CODE[decision],
+    };
   }
   return {
     ...base,
@@ -353,21 +383,33 @@ export interface ReviewPolicy {
 }
 
 /**
- * Baseline policy per artifact type (founder continuation directive risk
- * tiers × AUTHORIZATION_MATRIX §4). `partner_referral` is the one queue Staff
- * cannot approve — referral approval is OO/OA-reserved in the matrix.
+ * Baseline policy per artifact type — the founder continuation directive's risk
+ * tiers (FOUNDER_DIRECTIVE_2026-07-20 §9), verbatim: HIGH = readiness-stage
+ * changes, credit-related guidance, financial-summary publication, document
+ * interpretation, partner referral, stage advancement, and any legal-, tax-,
+ * lending-, investment-, or eligibility-adjacent output. `partner_referral` is
+ * the one queue Staff cannot approve — referral approval is OO/OA-reserved in
+ * AUTHORIZATION_MATRIX §4.
+ *
+ * `roadmap_draft`, `client_communication`, and `quarterly_report` sit in or
+ * above their directive tier (raising is always allowed; lowering never is).
+ * `concierge_recommendation` is not named by §9 but is the flagship guidance
+ * surface and routinely credit/eligibility-adjacent, so it defaults into the
+ * §9 catch-all as HIGH — flagged for explicit founder confirmation; an org
+ * override can only raise it further, and any lowering is a founder/kernel
+ * decision, not configuration.
  */
 export const DEFAULT_REVIEW_POLICIES: Record<ReviewArtifactType, ReviewPolicy> = {
   readiness_assessment: { riskClassification: "high", requiredReviewerRole: "staff" },
   roadmap_draft: { riskClassification: "high", requiredReviewerRole: "staff" },
-  concierge_recommendation: { riskClassification: "medium", requiredReviewerRole: "staff" },
+  concierge_recommendation: { riskClassification: "high", requiredReviewerRole: "staff" },
   document_interpretation: { riskClassification: "high", requiredReviewerRole: "staff" },
-  financial_summary: { riskClassification: "medium", requiredReviewerRole: "staff" },
+  financial_summary: { riskClassification: "high", requiredReviewerRole: "staff" },
   educational_assignment: { riskClassification: "medium", requiredReviewerRole: "staff" },
   partner_referral: { riskClassification: "high", requiredReviewerRole: "organization_admin" },
   client_communication: { riskClassification: "high", requiredReviewerRole: "staff" },
   quarterly_report: { riskClassification: "high", requiredReviewerRole: "staff" },
-  stage_advancement: { riskClassification: "medium", requiredReviewerRole: "staff" },
+  stage_advancement: { riskClassification: "high", requiredReviewerRole: "staff" },
 };
 
 const RISK_RANK: Record<ReviewRiskClass, number> = { low: 0, medium: 1, high: 2 };

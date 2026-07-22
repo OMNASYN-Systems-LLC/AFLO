@@ -33,11 +33,9 @@ const LEGAL: Array<[ReviewItemState, ReviewItemState, string]> = [
   ["awaiting_review", "approved", "RVC_APPROVED"],
   ["awaiting_review", "rejected", "RVC_REJECTED"],
   ["awaiting_review", "deferred", "RVC_DEFERRED"],
-  ["awaiting_review", "draft", "RVC_RETURNED"],
   ["awaiting_review", "withdrawn", "RVC_WITHDRAWN"],
   ["awaiting_review", "superseded", "RVC_SUPERSEDED"],
   ["approved", "published", "RVC_PUBLISHED"],
-  ["approved", "draft", "RVC_RETURNED"],
   ["approved", "superseded", "RVC_SUPERSEDED"],
   ["published", "superseded", "RVC_SUPERSEDED"],
 ];
@@ -73,6 +71,15 @@ describe("reviewItemTransition — the full matrix", () => {
     expect(reachPublished).toEqual(["approved"]);
   });
 
+  it("has NO return-for-edits edge: every exit from the queue is a decision, withdrawal, or supersession", () => {
+    // The directive's model has no return path — an author revises by
+    // withdrawing and submitting a new linked item.
+    expect(reviewItemTransition("awaiting_review", "draft").allowed).toBe(false);
+    expect(reviewItemTransition("approved", "draft").allowed).toBe(false);
+    // approved's only exits: published, superseded.
+    expect(reviewTransitionsFrom("approved").sort()).toEqual(["published", "superseded"]);
+  });
+
   it("terminal states never exit (rejected, deferred, withdrawn, superseded)", () => {
     for (const terminal of ["rejected", "deferred", "withdrawn", "superseded"] as const) {
       expect(isTerminalReviewState(terminal)).toBe(true);
@@ -94,7 +101,7 @@ describe("reviewItemTransition — the full matrix", () => {
 });
 
 describe("applyReviewDecision — the five structured decisions", () => {
-  const base = { fromState: "awaiting_review", modifiedFieldCount: 0 };
+  const base = { fromState: "awaiting_review", modifiedFieldCount: 0, requiredReviewerRole: "staff" as const };
 
   it("approved_unchanged → approved, zero modifications required", () => {
     const ok = applyReviewDecision({ ...base, decision: "approved_unchanged", decisionReasonCode: "RVD_ACCURATE" });
@@ -133,13 +140,53 @@ describe("applyReviewDecision — the five structured decisions", () => {
     ).toMatchObject({ allowed: true, toState: "deferred", reasonCode: "RVC_DEFERRED" });
   });
 
-  it("escalated leaves the item awaiting_review (a decision, not a state)", () => {
+  it("escalated leaves the item awaiting_review and returns the raised floor", () => {
     const result = applyReviewDecision({
       ...base,
       decision: "escalated",
       decisionReasonCode: "RVD_NEEDS_SENIOR_REVIEW",
     });
-    expect(result).toMatchObject({ allowed: true, toState: "awaiting_review", reasonCode: "RVC_ESCALATED" });
+    expect(result).toMatchObject({
+      allowed: true,
+      toState: "awaiting_review",
+      reasonCode: "RVC_ESCALATED",
+      escalatedToRole: "organization_admin",
+    });
+    const fromAdmin = applyReviewDecision({
+      ...base,
+      requiredReviewerRole: "organization_admin",
+      decision: "escalated",
+      decisionReasonCode: "RVD_NEEDS_SENIOR_REVIEW",
+    });
+    expect(fromAdmin.escalatedToRole).toBe("organization_owner");
+  });
+
+  it("DENIES escalation at the organization_owner ceiling (nowhere to go)", () => {
+    const result = applyReviewDecision({
+      ...base,
+      requiredReviewerRole: "organization_owner",
+      decision: "escalated",
+      decisionReasonCode: "RVD_NEEDS_SENIOR_REVIEW",
+    });
+    expect(result).toMatchObject({
+      allowed: false,
+      reasonCode: "RVC_ESCALATION_CEILING",
+      toState: "awaiting_review", // unchanged
+    });
+    expect(result.escalatedToRole).toBeUndefined();
+  });
+
+  it("rejects a malformed modification count (negative, NaN, non-integer) fail-closed", () => {
+    for (const bad of [-1, Number.NaN, 1.5]) {
+      const result = applyReviewDecision({
+        ...base,
+        decision: "approved_with_edits",
+        decisionReasonCode: "RVD_EDITED_TONE",
+        modifiedFieldCount: bad,
+      });
+      expect(result.allowed, String(bad)).toBe(false);
+      expect(result.reasonCode).toBe("RVC_INVALID_MODIFICATION_COUNT");
+    }
   });
 
   it("decisions are only legal from awaiting_review", () => {
@@ -149,6 +196,7 @@ describe("applyReviewDecision — the five structured decisions", () => {
         fromState: from,
         modifiedFieldCount: 0,
         decisionReasonCode: "RVD_ACCURATE",
+        requiredReviewerRole: "staff",
       });
       expect(result.allowed, from).toBe(false);
       expect(result.reasonCode).toBe("RVC_NOT_AWAITING_REVIEW");
@@ -242,27 +290,33 @@ describe("reviewer policy — deny-by-default + separation of duties", () => {
 });
 
 describe("policy table + overrides", () => {
-  it("covers every artifact type; partner_referral is the OO/OA-only queue", () => {
-    for (const type of REVIEW_ARTIFACT_TYPES) {
-      expect(DEFAULT_REVIEW_POLICIES[type]).toBeDefined();
-    }
-    expect(DEFAULT_REVIEW_POLICIES.partner_referral.requiredReviewerRole).toBe("organization_admin");
-    // Every high-tier artifact from the founder's list is classified high:
-    for (const type of [
-      "readiness_assessment",
-      "roadmap_draft",
-      "document_interpretation",
-      "partner_referral",
-      "client_communication",
-      "quarterly_report",
-    ] as const) {
-      expect(DEFAULT_REVIEW_POLICIES[type].riskClassification, type).toBe("high");
-    }
+  it("matches the founder's risk-tier directive EXACTLY (2026-07-22 §9)", () => {
+    // Exact-table assertion — a loop over a subset silently passes when a type
+    // is misclassified, so we pin the WHOLE table. The directive lists
+    // financial-summary publication and stage advancement as HIGH; concierge
+    // recommendations default HIGH under the eligibility-adjacent catch-all
+    // (flagged for explicit founder confirmation); only routine educational
+    // assignment sits at MEDIUM pending playbook discovery.
+    expect(DEFAULT_REVIEW_POLICIES).toEqual({
+      readiness_assessment: { riskClassification: "high", requiredReviewerRole: "staff" },
+      roadmap_draft: { riskClassification: "high", requiredReviewerRole: "staff" },
+      concierge_recommendation: { riskClassification: "high", requiredReviewerRole: "staff" },
+      document_interpretation: { riskClassification: "high", requiredReviewerRole: "staff" },
+      financial_summary: { riskClassification: "high", requiredReviewerRole: "staff" },
+      educational_assignment: { riskClassification: "medium", requiredReviewerRole: "staff" },
+      partner_referral: { riskClassification: "high", requiredReviewerRole: "organization_admin" },
+      client_communication: { riskClassification: "high", requiredReviewerRole: "staff" },
+      quarterly_report: { riskClassification: "high", requiredReviewerRole: "staff" },
+      stage_advancement: { riskClassification: "high", requiredReviewerRole: "staff" },
+    });
+    // ...and the table covers exactly the declared artifact types (no drift).
+    expect(Object.keys(DEFAULT_REVIEW_POLICIES).sort()).toEqual([...REVIEW_ARTIFACT_TYPES].sort());
   });
 
   it("org overrides may only RAISE the floor — lowering is clamped to the baseline", () => {
-    // Raise: medium→high and staff→owner both stick.
-    const raised = resolveReviewPolicy("financial_summary", {
+    // Raise: medium→high and staff→owner both stick (educational_assignment is
+    // the one medium-baseline type).
+    const raised = resolveReviewPolicy("educational_assignment", {
       riskClassification: "high",
       requiredReviewerRole: "organization_owner",
     });

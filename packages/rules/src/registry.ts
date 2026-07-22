@@ -7,7 +7,7 @@ import { PIPELINE_RULES_VERSION } from "./pipeline";
 import { REPORT_RULES_VERSION } from "./report";
 import { ROUNDUP_RULES_VERSION } from "./roundup";
 import { REVIEW_REASON_DESCRIPTIONS, REVIEW_RULES_VERSION } from "./review";
-import { REVIEW_CENTER_RULES_VERSION, REVIEW_DECISION_REASON_CODES } from "./review-center";
+import { REVIEW_CENTER_RULES_VERSION } from "./review-center";
 import { ROADMAP_RULES_VERSION } from "./roadmap";
 import { READINESS_RULES_VERSION, REASON_CODE_DESCRIPTIONS } from "./readiness";
 import { RESOLUTION_RULES_VERSION } from "./resolution";
@@ -323,17 +323,14 @@ export const RULE_REGISTRY: readonly RuleDefinition[] = [
     version: REVIEW_CENTER_RULES_VERSION,
     effectiveDate: "2026-07-22",
     description:
-      "Unified Human Review Center state machine (founder directive 2026-07-20/22): draft → awaiting_review → approved → published, with terminal rejected/deferred/withdrawn/superseded. Publication is only reachable through approved — draft→published and awaiting_review→published do not exist, so high-impact output can never become client-visible without an authorized human approval. Terminal states never exit; a follow-up is a new linked ReviewItem.",
+      "Unified Human Review Center state machine (founder directive 2026-07-20/22): draft → awaiting_review → approved → published, with terminal rejected/deferred/withdrawn/superseded. Publication is only reachable through approved — draft→published and awaiting_review→published do not exist, so high-impact output can never become client-visible without an authorized human approval. There is no return-for-edits edge: authors revise by withdrawing and submitting a new linked item. Terminal states never exit; a follow-up is a new linked ReviewItem.",
     inputs: ["fromState", "toState"],
     output: "ReviewItemTransitionResult { allowed, fromState, toState, reasonCode, ruleVersion }",
     reasonCodes: [
       "RVC_SUBMITTED",
       "RVC_APPROVED",
-      "RVC_APPROVED_WITH_EDITS",
       "RVC_REJECTED",
       "RVC_DEFERRED",
-      "RVC_ESCALATED",
-      "RVC_RETURNED",
       "RVC_PUBLISHED",
       "RVC_WITHDRAWN",
       "RVC_SUPERSEDED",
@@ -355,10 +352,25 @@ export const RULE_REGISTRY: readonly RuleDefinition[] = [
     version: REVIEW_CENTER_RULES_VERSION,
     effectiveDate: "2026-07-22",
     description:
-      "The five structured review decisions (approved_unchanged / approved_with_edits / rejected / escalated / deferred) with structured RVD_* reason codes and modification pairing: approved_unchanged must carry zero recorded modifications and approved_with_edits at least one, making dishonest feedback records unrepresentable. Escalated leaves the item awaiting_review with the required reviewer role raised one rank.",
-    inputs: ["decision", "fromState", "modifiedFieldCount", "decisionReasonCode"],
-    output: "ReviewDecisionResult { allowed, decision, fromState, toState, reasonCode, ruleVersion }",
-    reasonCodes: Object.keys(REVIEW_DECISION_REASON_CODES),
+      "The five structured review decisions (approved_unchanged / approved_with_edits / rejected / escalated / deferred) with structured RVD_* reason codes (the REVIEW_DECISION_REASON_CODES catalog, validated per decision) and modification pairing: approved_unchanged must carry zero recorded modifications and approved_with_edits at least one, making dishonest feedback records unrepresentable; the count must be a non-negative integer. An allowed escalation leaves the item awaiting_review and returns escalatedToRole (the floor raised one rank); escalation at the organization_owner ceiling is DENIED (RVC_ESCALATION_CEILING).",
+    inputs: ["decision", "fromState", "modifiedFieldCount", "decisionReasonCode", "requiredReviewerRole"],
+    output:
+      "ReviewDecisionResult { allowed, decision, fromState, toState, escalatedToRole?, reasonCode, ruleVersion }",
+    reasonCodes: [
+      "RVC_APPROVED",
+      "RVC_APPROVED_WITH_EDITS",
+      "RVC_REJECTED",
+      "RVC_DEFERRED",
+      "RVC_ESCALATED",
+      "RVC_ESCALATION_CEILING",
+      "RVC_NOT_AWAITING_REVIEW",
+      "RVC_UNKNOWN_STATE",
+      "RVC_UNKNOWN_DECISION",
+      "RVC_INVALID_REASON_CODE",
+      "RVC_INVALID_MODIFICATION_COUNT",
+      "RVC_MISSING_MODIFICATIONS",
+      "RVC_UNEXPECTED_MODIFICATIONS",
+    ],
     sources: [],
     changeHistory: [
       {
@@ -382,7 +394,6 @@ export const RULE_REGISTRY: readonly RuleDefinition[] = [
       "RVC_ROLE_NOT_REVIEWER",
       "RVC_INSUFFICIENT_ROLE",
       "RVC_SELF_REVIEW_DENIED",
-      "RVC_ESCALATION_CEILING",
     ],
     sources: [],
     changeHistory: [
