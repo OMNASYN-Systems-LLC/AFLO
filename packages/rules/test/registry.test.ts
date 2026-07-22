@@ -17,7 +17,7 @@ describe("rule registry", () => {
   it("carries complete charter metadata for every rule", () => {
     for (const rule of RULE_REGISTRY) {
       expect(rule.id).toMatch(/^[a-z_]+\.[a-z_]+$/);
-      expect(rule.version).toMatch(/^[a-z]+\.v\d+\.\d+\.\d+$/);
+      expect(rule.version).toMatch(/^[a-z_]+\.v\d+\.\d+\.\d+$/); // underscores allowed, matching the id convention
       expect(Date.parse(rule.effectiveDate)).not.toBeNaN();
       expect(rule.description.length).toBeGreaterThan(20);
       expect(rule.inputs.length).toBeGreaterThan(0);

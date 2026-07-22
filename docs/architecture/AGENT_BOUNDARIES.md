@@ -392,7 +392,7 @@ Every agent invocation — success or failure — persists exactly one `ai_runs`
 | `response_envelope` | The validated `AgentEnvelope` (or the validation error) |
 | `confidence`, `facts_used`, `missing_facts`, `rule_versions_used`, `reason_codes`, `proposed_actions`, `requires_human_review`, `prohibited_actions_detected` | Extracted, indexable copies derived from `response_envelope` (the envelope is canonical) |
 | `outcome` | `ok`, `needs_clarification`, `insufficient_data`, `validation_failed`, `provider_error`, `prohibited_action` |
-| `review_status` | `not_required`, `pending_review`, `approved`, `rejected` — `reviewed_by` / `reviewed_at` record the reviewer once resolved (the envelope's `reviewStatus: "auto_published"` maps to `not_required`) |
+| `review_status` | `pending_review`, `approved`, `rejected`, `auto_published` (the implemented `ai_review_status` enum) — `reviewed_by` / `reviewed_at` record the reviewer once resolved. `auto_published` marks below-gate low-impact output that legitimately skipped review; it is NOT equivalent to a Review Center `published` state, and such runs never enter a review queue |
 | `latency_ms`, `input_token_count`, `output_token_count`, `created_at` | Operational metrics |
 
 Additional requirements:
