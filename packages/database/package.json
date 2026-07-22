@@ -22,12 +22,14 @@
     "@aflo/rules": "workspace:*",
     "@aflo/security": "workspace:*",
     "@aflo/shared": "workspace:*",
-    "drizzle-orm": "^0.45.2"
+    "drizzle-orm": "^0.45.2",
+    "pg": "^8.22.0"
   },
   "devDependencies": {
     "@electric-sql/pglite": "^0.5.4",
     "@eslint/js": "^10.0.1",
     "@types/node": "^22.10.2",
+    "@types/pg": "^8.20.0",
     "drizzle-kit": "^0.31.10",
     "eslint": "^9.39.5",
     "typescript": "^5.9.2",

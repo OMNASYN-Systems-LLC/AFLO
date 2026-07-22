@@ -24,7 +24,13 @@ import { identityProviderAccounts, providerWebhookEvents, sessionRevocations } f
  * Secrets are digests only. `session_revocations` reads are USER-SCOPED
  * (`WHERE user_id = …`), never table-wide (ADR-0026/0030).
  */
-export type ResolverDb = PgDatabase<PgQueryResultHKT>;
+/**
+ * The privileged resolver-role handle. Branded (phantom `__dbRole`) so a
+ * BRANDED tenant handle cannot be passed where the resolver connection is
+ * required (and vice versa) — the ADR-0030 privilege split is compile-checked.
+ * Unbranded handles (PGlite in tests) still assign freely.
+ */
+export type ResolverDb = PgDatabase<PgQueryResultHKT> & { readonly __dbRole?: "resolver" };
 
 type IdentityRow = typeof identityProviderAccounts.$inferSelect;
 type WebhookRow = typeof providerWebhookEvents.$inferSelect;

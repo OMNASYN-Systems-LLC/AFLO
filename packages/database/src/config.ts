@@ -16,7 +16,7 @@
  */
 
 export interface DatabaseConfig {
-  /** Pooled runtime connection string (`DATABASE_URL`). */
+  /** Pooled runtime connection string (`DATABASE_URL`) — the TENANT role (`aflo_app`). */
   url: string;
   /**
    * Direct connection string for migrations (`DIRECT_DATABASE_URL`); `null`
@@ -24,6 +24,15 @@ export interface DatabaseConfig {
    * migration tooling requires it (`requireDirectUrl: true`).
    */
   directUrl: string | null;
+  /**
+   * Pooled connection string for the privileged auth-resolver role
+   * (`AUTH_RESOLVER_DATABASE_URL`, connecting as `aflo_auth_resolver` —
+   * ADR-0030/0031); `null` when not required and not provided. The
+   * authenticated runtime requires it (`requireResolverUrl: true`): identity
+   * resolution, webhook receipts, session-revocation checks, and the
+   * accept-by-token resolve all run on this connection.
+   */
+  resolverUrl: string | null;
   host: string;
   database: string;
   /** `sslmode` query param if present (Neon uses `require`); `null` if unspecified. */
@@ -33,6 +42,8 @@ export interface DatabaseConfig {
 export interface DatabaseConfigOptions {
   /** Require `DIRECT_DATABASE_URL` too (migration tooling); defaults to false. */
   requireDirectUrl?: boolean;
+  /** Require `AUTH_RESOLVER_DATABASE_URL` too (authenticated runtime); defaults to false. */
+  requireResolverUrl?: boolean;
 }
 
 type Env = Record<string, string | undefined>;
@@ -90,6 +101,12 @@ export function isDatabaseConfigured(env: Env = process.env): boolean {
   return typeof url === "string" && url.trim() !== "";
 }
 
+/** Whether the privileged auth-resolver connection is configured. Non-throwing. */
+export function isResolverConfigured(env: Env = process.env): boolean {
+  const url = env.AUTH_RESOLVER_DATABASE_URL;
+  return typeof url === "string" && url.trim() !== "";
+}
+
 /**
  * Validate and parse the database environment. Throws `DatabaseConfigError`
  * (aggregating every problem) when anything is missing or malformed, so a
@@ -110,6 +127,15 @@ export function getDatabaseConfig(env: Env = process.env, opts: DatabaseConfigOp
     if (direct) directUrl = directRaw!.trim();
   }
 
+  const resolverRaw = env.AUTH_RESOLVER_DATABASE_URL;
+  const resolverProvided = resolverRaw !== undefined && resolverRaw.trim() !== "";
+  let resolverUrl: string | null = null;
+  if (opts.requireResolverUrl || resolverProvided) {
+    // Same validate-when-required-or-provided rule as the direct URL.
+    const resolver = parsePostgresUrl("AUTH_RESOLVER_DATABASE_URL", resolverRaw, problems);
+    if (resolver) resolverUrl = resolverRaw!.trim();
+  }
+
   if (problems.length > 0 || !runtime) {
     throw new DatabaseConfigError(problems.length > 0 ? problems : ["DATABASE_URL is required but is missing or empty"]);
   }
@@ -117,6 +143,7 @@ export function getDatabaseConfig(env: Env = process.env, opts: DatabaseConfigOp
   return {
     url: env.DATABASE_URL!.trim(),
     directUrl,
+    resolverUrl,
     host: runtime.host,
     database: runtime.database,
     sslMode: runtime.sslMode,
