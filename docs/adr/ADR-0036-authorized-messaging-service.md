@@ -42,19 +42,32 @@ STRUCTURAL (unrepresentable, not merely checked):
    staff-side only per the policy table.
 
 Denials throw `MessagingAccessDeniedError` carrying the engine's stable
-`DenialReason` + the permission. Read-path route handlers should render a
-denial indistinguishably from not-found (both 404) so same-org id probing
-yields no oracle; unknown/foreign-org threads already read as null/empty, and
-a missing thread on a write surfaces the repository's own
-`ThreadNotFoundError`.
+`DenialReason` + the permission. **Uniform route-mapping rule (all seven
+methods, writes included):** a denial and a not-found/unknown id MUST render
+identically (404-shaped) — a 403-vs-404 or 200-empty-vs-404 split would give
+same-org id probing an existence oracle (available even to pending/revoked
+members, who resolve a session and fail only at the engine). Unknown/
+foreign-org threads already read as null/empty; a missing thread on a write
+surfaces the repository's own `ThreadNotFoundError`, which routes map to the
+same 404 shape.
+
+**Explicit deferral — sensitive-denial audit events.** The denial-reasons
+contract (matrix §7 row 16) requires `not_owner` / `not_assigned` /
+`membership_revoked` denials to emit audit events. No service persists
+`audit_events` yet; this service throws without recording. That audit write
+(or an injected audit port) MUST land with — or before — the B9 route-wiring
+slice, where these denials first become reachable by real callers. Tracked
+here so the requirement is not lost.
 
 ## Consequences
 
-- **11 new tests → 170 database tests**, with a recording stub proving the
-  negative space: a denied call NEVER reaches the repository; org and sender
-  in every repo call come from the session; client ownership, staff
-  assignment scoping, `message.close` role policy, platform-admin fail-closed,
-  and null/empty reads for unknown ids.
+- **12 new tests → 171 database tests**, with a recording stub proving the
+  negative space: a denied call never reaches the repository's WRITE/LIST
+  surface — the only pre-authorization repository touch is the RLS-scoped
+  thread load itself (org-correct, result discarded on denial); org and
+  sender in every repo call come from the session; client ownership, staff
+  assignment scoping, `message.close` role policy, pending-membership and
+  platform-admin fail-closed, and null/empty reads for unknown ids.
 - The client portal and staff messaging routes (Workstream B9) call THIS
   service, never the repository directly. The repository stays exported for
   composition, but route-layer code review treats a direct

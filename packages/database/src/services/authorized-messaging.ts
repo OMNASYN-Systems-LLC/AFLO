@@ -37,9 +37,11 @@ import { ThreadNotFoundError } from "../repositories/messaging";
  *     authorize against the thread's ACTUAL clientId — never a caller claim.
  *
  * Denials throw `MessagingAccessDeniedError` with the engine's stable reason
- * code. Route handlers for READ paths should render a denial indistinguishably
- * from not-found (both 404) so probing same-org thread ids yields no oracle;
- * an unknown/foreign-org thread already reads as null from the repository.
+ * code. ROUTE MAPPING RULE (uniform, ALL seven methods — writes included): a
+ * `MessagingAccessDeniedError` and a not-found/unknown id MUST render
+ * identically (404-shaped), never 403-vs-404 or 200-empty-vs-404 — otherwise
+ * same-org id probing gains an existence oracle. An unknown/foreign-org thread
+ * already reads as null/empty from the repository.
  *
  * Platform Admin: holds `message.read` in the matrix but has NO tenant binding
  * (`activeOrganizationId` null) — cross-tenant access is a separate audited

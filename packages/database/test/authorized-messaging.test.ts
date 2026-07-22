@@ -191,7 +191,7 @@ describe("AuthorizedMessagingService — client ownership (not_owner) enforced b
     expect(repo.calls.at(-1)?.method).toBe("createThread");
   });
 
-  it("unknown thread ids read as null/empty (no denial oracle for non-existent records)", async () => {
+  it("unknown thread ids: reads null/empty, writes ThreadNotFoundError (routes render BOTH like a denial: 404)", async () => {
     const { svc } = setup();
     expect(await svc.getThread(clientCtx("client-1"), "t-missing")).toBeNull();
     expect(await svc.listMessages(clientCtx("client-1"), "t-missing")).toEqual([]);
@@ -199,6 +199,22 @@ describe("AuthorizedMessagingService — client ownership (not_owner) enforced b
     await expect(svc.postMessage(clientCtx("client-1"), { threadId: "t-missing", body: "x" }, NOW)).rejects.toThrow(
       ThreadNotFoundError,
     );
+    await expect(svc.setThreadStatus(staffCtx(), "t-missing", "close", NOW)).rejects.toThrow(ThreadNotFoundError);
+  });
+
+  it("a pending membership is denied at the engine before any write/list", async () => {
+    const pending = buildSessionContext({
+      sessionId: "s-pending",
+      identity: { afloUserId: "user-p", clerkUserId: "ck-p", accountStatus: "active", isPlatformAdmin: false, sessionsInvalidatedBeforeIso: null },
+      membership: { membershipId: "mem-p", organizationId: ORG, memberRole: "staff", status: "pending" },
+    });
+    if (!pending) throw new Error("pending fixture failed to resolve");
+    const { repo, svc } = setup();
+    await expect(svc.listThreads(pending, "client-1")).rejects.toMatchObject({ reason: "membership_pending" });
+    await expect(svc.postMessage(pending, { threadId: "t1", body: "x" }, NOW)).rejects.toMatchObject({
+      reason: "membership_pending",
+    });
+    expect(repo.calls.filter((c) => c.method !== "getThread")).toEqual([]);
   });
 });
 
