@@ -87,12 +87,29 @@ export async function runAcceptance(db: AcceptanceDb, opts: AcceptanceOptions = 
   results.push(await guardedRun("function.find_invitation_by_token", () => checkResolverFunction(db)));
   results.push(await guardedRun("constraints.key_indexes", () => checkKeyIndexes(db)));
   results.push(await guardedRun("enums.lockstep_with_schema", () => checkEnumLockstep(db)));
-  results.push(await guardedRun("smoke.fail_closed_no_org_context", () => checkFailClosedSmoke(db)));
+
+  // M2: the fail-closed smoke performs DML (inside a rolled-back transaction).
+  // Default is to run it; the CLI sets runSmoke=false for remote targets unless
+  // ACCEPTANCE_RUN_SMOKE=true, so remote validate-only stays READ-ONLY. A
+  // skipped check is not a failure — it is reported as SKIPPED with the reason.
+  const runSmoke = opts.runSmoke ?? true;
+  if (runSmoke) {
+    results.push(await guardedRun("smoke.fail_closed_no_org_context", () => checkFailClosedSmoke(db)));
+  } else {
+    results.push({
+      check: "smoke.fail_closed_no_org_context",
+      passed: false,
+      skipped: true,
+      detail:
+        "SKIPPED — remote validate-only is read-only by default; the fail-closed DML smoke runs only with ACCEPTANCE_RUN_SMOKE=true (it writes inside a rolled-back transaction). Local PGlite always runs it.",
+    });
+  }
 
   const finishedAt = new Date().toISOString();
   return {
     target,
-    passed: results.every((r) => r.passed),
+    // A skipped check does not fail the suite; only a real failure does.
+    passed: results.every((r) => r.passed || r.skipped === true),
     results,
     startedAt,
     finishedAt,

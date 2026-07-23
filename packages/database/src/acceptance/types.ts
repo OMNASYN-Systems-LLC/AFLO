@@ -8,19 +8,26 @@
  * PGlite today (CI) and against Neon PREVIEW later via env parameterization.
  */
 
-/** One acceptance check outcome. `detail` always says what was verified or why it failed. */
+/**
+ * One acceptance check outcome. `detail` always says what was verified, why it
+ * failed, or why it was skipped. A `skipped` check is NOT a failure — it never
+ * ran (e.g. the write-touching fail-closed smoke against a remote target, which
+ * is read-only by default).
+ */
 export interface CheckResult {
   /** Stable check id (e.g. "rls.tenant_tables_enforced"). */
   check: string;
   passed: boolean;
   detail: string;
+  /** True when the check was deliberately not run (does not fail the suite). */
+  skipped?: boolean;
 }
 
 /** The aggregate report `runAcceptance` returns. */
 export interface AcceptanceReport {
   /** What the suite ran against. */
   target: "pglite" | "remote";
-  /** True only when EVERY check passed. */
+  /** True when NO check failed (skipped checks do not fail the suite). */
   passed: boolean;
   results: CheckResult[];
   startedAt: string;
@@ -32,4 +39,10 @@ export interface AcceptanceOptions {
   migrationsDir?: string;
   /** Reported target label (default "pglite"). */
   target?: "pglite" | "remote";
+  /**
+   * Run the fail-closed DML smoke (M2). Defaults to TRUE. The CLI sets it false
+   * for remote targets unless ACCEPTANCE_RUN_SMOKE=true, so remote validate-only
+   * stays read-only; local PGlite always runs it.
+   */
+  runSmoke?: boolean;
 }

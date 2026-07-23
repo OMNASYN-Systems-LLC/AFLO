@@ -312,12 +312,40 @@ export async function checkTenantTableRls(db: AcceptanceDb): Promise<CheckResult
       problems.push(`${table}: WITH CHECK expression differs from the nullif() fail-closed shape (${String(org.with_check)})`);
     }
   }
+
+  // ABSENCE CHECK (review M3a): enumerate the WHOLE public schema for any table
+  // carrying rowsecurity OR a policy, and assert that set EQUALS the derived
+  // tenant set. An UNEXPECTED RLS table (RLS mistakenly enabled on a global /
+  // resolver-path table like `users`, which would silently break the resolver
+  // path) OR a MISSING one both fail — the derived set is the whole truth.
+  const rlsUniverse = await db.query<{ relname: string }>(
+    `SELECT DISTINCT c.relname
+       FROM pg_class c
+       JOIN pg_namespace n ON n.oid = c.relnamespace
+      WHERE n.nspname = 'public' AND c.relkind = 'r'
+        AND (c.relrowsecurity OR EXISTS (
+          SELECT 1 FROM pg_policy p WHERE p.polrelid = c.oid
+        ))`,
+  );
+  const actualRlsTables = new Set(rlsUniverse.rows.map((r) => r.relname));
+  const expectedRlsTables = new Set(tables);
+  for (const t of actualRlsTables) {
+    if (!expectedRlsTables.has(t)) {
+      problems.push(`${t}: has RLS/policies but is NOT a derived tenant table (unexpected — a global/resolver table must not carry RLS)`);
+    }
+  }
+  for (const t of expectedRlsTables) {
+    if (!actualRlsTables.has(t)) {
+      problems.push(`${t}: is a derived tenant table but carries NO RLS/policy in the target`);
+    }
+  }
+
   return {
     check,
     passed: problems.length === 0,
     detail:
       problems.length === 0
-        ? `${tables.length}/${tables.length} tenant tables (derived from schema.ts) have RLS enabled + forced with the exact nullif() org_isolation policy`
+        ? `${tables.length}/${tables.length} tenant tables (derived from schema.ts) have RLS enabled + forced with the exact nullif() org_isolation policy, and the target's RLS-table set EQUALS the derived set exactly (no unexpected or missing RLS tables)`
         : problems.join("; "),
   };
 }
@@ -381,12 +409,47 @@ async function tablePrivilege(db: AcceptanceDb, role: string, table: string, pri
   return res.rows[0]?.ok === true;
 }
 
-/** The resolver role holds exactly the read paths migrations 0007/0008 grant it. */
+const ALL_PRIVILEGES = ["SELECT", "INSERT", "UPDATE", "DELETE"] as const;
+
+/**
+ * The EXACT resolver grant whitelist (migrations 0007/0008): table → the
+ * privileges the resolver is allowed to hold on it. The absence check asserts
+ * the resolver holds NOTHING beyond this — a manual `GRANT … TO
+ * aflo_auth_resolver` on a tenant table (which BYPASSRLS would make a
+ * cross-tenant reader) flips the check.
+ */
+const RESOLVER_GRANT_WHITELIST: Record<string, readonly string[]> = {
+  identity_provider_accounts: ALL_PRIVILEGES,
+  provider_webhook_events: ALL_PRIVILEGES,
+  session_revocations: ALL_PRIVILEGES,
+  invitations: ["SELECT"],
+  users: ["SELECT"],
+  organization_members: ["SELECT"],
+  client_user_links: ["SELECT"],
+};
+
+/** Every public base table (for the whole-schema no-excess-grant enumeration). */
+async function publicBaseTables(db: AcceptanceDb): Promise<string[]> {
+  const res = await db.query<{ relname: string }>(
+    `SELECT c.relname FROM pg_class c
+       JOIN pg_namespace n ON n.oid = c.relnamespace
+      WHERE n.nspname = 'public' AND c.relkind = 'r'`,
+  );
+  return res.rows.map((r) => r.relname).filter((n) => n !== "__drizzle_migrations");
+}
+
+/**
+ * The resolver role holds EXACTLY the read/write paths migrations 0007/0008
+ * grant it — the required grants are present (M spot-checks) AND, enumerating
+ * the whole public schema, NO grant exists beyond the whitelist (review M3b).
+ */
 export async function checkResolverReadPaths(db: AcceptanceDb): Promise<CheckResult> {
   const check = "grants.resolver_read_paths";
   const problems: string[] = [];
+
+  // Required grants present.
   for (const table of RESOLVER_ONLY_TABLES) {
-    for (const privilege of ["SELECT", "INSERT", "UPDATE", "DELETE"]) {
+    for (const privilege of ALL_PRIVILEGES) {
       if (!(await tablePrivilege(db, "aflo_auth_resolver", table, privilege))) {
         problems.push(`resolver missing ${privilege} on ${table} (migration 0007)`);
       }
@@ -400,12 +463,26 @@ export async function checkResolverReadPaths(db: AcceptanceDb): Promise<CheckRes
       problems.push(`resolver missing SELECT on ${table} (migration 0008)`);
     }
   }
+
+  // ABSENCE CHECK: no grant anywhere beyond the whitelist.
+  for (const table of await publicBaseTables(db)) {
+    const allowed = RESOLVER_GRANT_WHITELIST[table] ?? [];
+    for (const privilege of ALL_PRIVILEGES) {
+      const held = await tablePrivilege(db, "aflo_auth_resolver", table, privilege);
+      if (held && !allowed.includes(privilege)) {
+        problems.push(
+          `resolver holds ${privilege} on ${table} — OUTSIDE the whitelist (a BYPASSRLS role must never hold a grant beyond migrations 0007/0008)`,
+        );
+      }
+    }
+  }
+
   return {
     check,
     passed: problems.length === 0,
     detail:
       problems.length === 0
-        ? "resolver holds read/write on the three un-scoped tables, SELECT on invitations + the three principal tables"
+        ? "resolver holds read/write on the three un-scoped tables, SELECT on invitations + the three principal tables, and NOTHING beyond that whitelist (whole-schema enumeration)"
         : problems.join("; "),
   };
 }
@@ -611,20 +688,26 @@ export async function checkFailClosedSmoke(db: AcceptanceDb): Promise<CheckResul
   const check = "smoke.fail_closed_no_org_context";
   return db.withSession(async (session) => {
     // Part 1 — unset GUC: fresh transaction, tenant role, no org context at all.
+    // ROLLBACK ALWAYS runs (L3: try/finally) so a failed assertion or thrown
+    // query can never leave an open transaction on a live target.
     try {
-      await session.query("BEGIN");
-      await session.query("SET LOCAL ROLE aflo_app");
-      const unset = await session.query<{ n: number | string }>("SELECT count(*) AS n FROM clients");
-      await session.query("ROLLBACK");
-      if (Number(unset.rows[0]?.n) !== 0) {
+      let unsetCount: number;
+      try {
+        await session.query("BEGIN");
+        await session.query("SET LOCAL ROLE aflo_app");
+        const unset = await session.query<{ n: number | string }>("SELECT count(*) AS n FROM clients");
+        unsetCount = Number(unset.rows[0]?.n);
+      } finally {
+        await session.query("ROLLBACK").catch(() => undefined);
+      }
+      if (unsetCount !== 0) {
         return {
           check,
           passed: false,
-          detail: `tenant role saw ${String(unset.rows[0]?.n)} clients rows with NO org context — RLS is not failing closed`,
+          detail: `tenant role saw ${unsetCount} clients rows with NO org context — RLS is not failing closed`,
         };
       }
     } catch (err) {
-      await session.query("ROLLBACK").catch(() => undefined);
       return {
         check,
         passed: false,
@@ -636,33 +719,41 @@ export async function checkFailClosedSmoke(db: AcceptanceDb): Promise<CheckResul
     // provably present in the transaction, then invisible to the tenant role.
     const orgId = randomUUID();
     try {
-      await session.query("BEGIN");
-      await session.query("SELECT set_config('app.current_org_id', $1, true)", [orgId]);
-      await session.query("INSERT INTO organizations (id, name, slug) VALUES ($1, 'acceptance-smoke', $2)", [
-        orgId,
-        `acceptance-smoke-${orgId.slice(0, 8)}`,
-      ]);
-      await session.query(
-        "INSERT INTO clients (organization_id, pipeline_stage_id, first_name, last_name) VALUES ($1, 'stage-new', 'Smoke', 'Probe')",
-        [orgId],
-      );
-      const visible = await session.query<{ n: number | string }>("SELECT count(*) AS n FROM clients WHERE organization_id = $1", [orgId]);
-      if (Number(visible.rows[0]?.n) !== 1) throw new Error("seed row not visible inside its own org context");
-      // Clear the org context to the hardened '' state, then become the tenant role.
-      await session.query("SELECT set_config('app.current_org_id', '', true)");
-      await session.query("SET LOCAL ROLE aflo_app");
-      const cleared = await session.query<{ n: number | string }>("SELECT count(*) AS n FROM clients");
-      await session.query("ROLLBACK");
-      const n = Number(cleared.rows[0]?.n);
-      if (n !== 0) {
+      let clearedCount: number;
+      try {
+        await session.query("BEGIN");
+        await session.query("SELECT set_config('app.current_org_id', $1, true)", [orgId]);
+        await session.query("INSERT INTO organizations (id, name, slug) VALUES ($1, 'acceptance-smoke', $2)", [
+          orgId,
+          `acceptance-smoke-${orgId.slice(0, 8)}`,
+        ]);
+        await session.query(
+          "INSERT INTO clients (organization_id, pipeline_stage_id, first_name, last_name) VALUES ($1, 'stage-new', 'Smoke', 'Probe')",
+          [orgId],
+        );
+        const visible = await session.query<{ n: number | string }>(
+          "SELECT count(*) AS n FROM clients WHERE organization_id = $1",
+          [orgId],
+        );
+        if (Number(visible.rows[0]?.n) !== 1) throw new Error("seed row not visible inside its own org context");
+        // Clear the org context to the hardened '' state, then become the tenant role.
+        await session.query("SELECT set_config('app.current_org_id', '', true)");
+        await session.query("SET LOCAL ROLE aflo_app");
+        const cleared = await session.query<{ n: number | string }>("SELECT count(*) AS n FROM clients");
+        clearedCount = Number(cleared.rows[0]?.n);
+      } finally {
+        // The seed row (and everything else) is discarded — nothing persists on
+        // a live target, whatever happened above.
+        await session.query("ROLLBACK").catch(() => undefined);
+      }
+      if (clearedCount !== 0) {
         return {
           check,
           passed: false,
-          detail: `tenant role saw ${n} clients rows with the org context cleared to '' — the nullif hardening is not in effect`,
+          detail: `tenant role saw ${clearedCount} clients rows with the org context cleared to '' — the nullif hardening is not in effect`,
         };
       }
     } catch (err) {
-      await session.query("ROLLBACK").catch(() => undefined);
       return {
         check,
         passed: false,

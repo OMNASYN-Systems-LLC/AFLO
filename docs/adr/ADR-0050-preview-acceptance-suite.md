@@ -55,7 +55,11 @@ those tests.** The thirteen checks:
    resolver-path table): RLS ENABLED **and** FORCED, exactly one policy, named
    `org_isolation`, PERMISSIVE, FOR ALL, with USING and WITH CHECK both
    deparse-equal to the `nullif(current_setting('app.current_org_id', true),
-   '')::uuid` fail-closed shape.
+   '')::uuid` fail-closed shape. **AND (absence check, review M3a)** it
+   enumerates the WHOLE public schema for any table carrying `rowsecurity` or a
+   policy and asserts that set EQUALS the derived tenant set — RLS mistakenly
+   enabled on a global/resolver table (e.g. `users`, which would silently break
+   the resolver path) OR missing on a tenant table both fail.
 5. `roles.tenant_role_posture` — `aflo_app` exists, NOT superuser, NOT
    BYPASSRLS.
 6. `roles.resolver_role_posture` — `aflo_auth_resolver` exists WITH BYPASSRLS,
@@ -64,7 +68,10 @@ those tests.** The thirteen checks:
    DELETE on the three un-scoped tables (`identity_provider_accounts`,
    `provider_webhook_events`, `session_revocations`; migration 0007), SELECT
    on `invitations` (0007), and SELECT on `users`/`organization_members`/
-   `client_user_links` (0008).
+   `client_user_links` (0008), **and — enumerating the WHOLE public schema —
+   NOTHING beyond that whitelist** (review M3b). A manual `GRANT … TO
+   aflo_auth_resolver` on a tenant table (which BYPASSRLS would turn into a
+   cross-tenant read) flips this check.
 8. `grants.tenant_role_walled_off` — `aflo_app` holds NO privilege on the
    three resolver-only tables and cannot EXECUTE
    `find_invitation_by_token` (the 0007 REVOKE wall is in effect).
@@ -86,10 +93,13 @@ those tests.** The thirteen checks:
 13. `smoke.fail_closed_no_org_context` — runtime proof under the tenant role:
     with no org context (unset AND cleared-to-`''`), `SET ROLE aflo_app`
     sees ZERO rows on a tenant table — including a row seeded moments earlier
-    in the SAME transaction, which is then ROLLBACKed (no trace left on a live
+    in the SAME transaction, which is then ROLLBACKed (try/finally — review L3,
+    so a thrown query never leaves a transaction open; no trace left on a live
     target). Requires the acceptance connection to be able to
     `SET ROLE aflo_app` (grant membership: `GRANT aflo_app TO <acceptance
-    role>`); anything else fails the check, closed.
+    role>`); anything else fails the check, closed. This is the ONLY check that
+    writes, so on a REMOTE target it is SKIPPED by default (review M2) — it runs
+    only with `ACCEPTANCE_RUN_SMOKE=true`. A SKIPPED check is not a failure.
 
 A check that throws is converted into a failed result — the suite always
 completes and always reports. The runner itself NEVER issues DDL.
@@ -100,40 +110,83 @@ completes and always reports. The runner itself NEVER issues DDL.
   runbook §2 prescribes for a Neon branch (roles + tenant DEFAULT PRIVILEGES
   BEFORE migrations, resolver starting with schema-usage only so migrations
   0007/0008 remain load-bearing), applies the committed migrations via the
-  REAL drizzle migrator (so the bookkeeping check runs), executes all checks.
-  The vitest wrapper `test/acceptance.test.ts` runs this same full path with
-  the normal test suite — that is the CI wiring — plus drift-detection cases
-  (a dropped policy and a BYPASSRLS'd tenant role each flip their check to
-  failed).
-- **`DATABASE_URL_ACCEPTANCE` set (operator, later):** the remote path,
-  guarded as below. Validate-only by default.
+  REAL drizzle migrator (so the bookkeeping check runs), executes all checks
+  (the fail-closed DML smoke INCLUDED — local PGlite always runs it). The
+  vitest wrapper `test/acceptance.test.ts` runs this same full path with the
+  normal test suite — that is the CI wiring — plus drift-detection cases (a
+  dropped policy, an ALTERED USING clause, a BYPASSRLS'd tenant role, RLS on an
+  unexpected table, and an out-of-whitelist resolver grant each flip their
+  check to failed).
+- **`DATABASE_URL_ACCEPTANCE` set (operator, later):** the remote path, via
+  the guarded factory below. VALIDATE-ONLY **and READ-ONLY** by default — no
+  DDL, and the DML smoke is skipped.
 
-### The remote hard guard (NON-NEGOTIABLE, `guard.ts`)
+### The remote hard guard (NON-NEGOTIABLE, `guard.ts`) — the parse-for-connect principle
 
-Before ANY check runs against a remote URL, the CLI refuses — exit 1, without
-opening a connection — unless the target is AFFIRMATIVELY non-main:
+Two live bypasses of an earlier WHATWG-`URL`-only guard were proven against the
+real `pg.Client` and drove this rewrite:
 
-1. URL must parse as `postgres://`/`postgresql://`.
-2. **Main-like markers refuse outright:** host or database containing
-   `main`, `prod`, `production`, `primary`, or `live` as a SUBSTRING is
-   refused, even with a correct confirmation echo. Deliberately over-broad
-   (e.g. "domain" refuses on "main") — over-refusal is safe, under-refusal is
-   not.
-3. **An affirmative discriminator is required:** the host or database must
-   carry one of `preview`, `dev`, `development`, `staging`, `test`, `branch`,
-   `acceptance`, `ephemeral`, `sandbox`, `localhost`, `127` as a clean TOKEN
-   (split on `./-/_` — a letter run inside an unrelated word never counts).
-   A URL with no verifiable discriminator is treated as potentially-main and
-   refused: name the preview database/endpoint so the target is self-evidently
-   not main.
-4. **Second factor:** `ACCEPTANCE_CONFIRM_NON_MAIN` must exactly echo the
-   URL's host. Missing or mismatched → refused.
-5. **Remote DDL is opt-in:** migrations are applied to a remote target ONLY
-   when `ACCEPTANCE_APPLY_MIGRATIONS=true` (exactly) is ALSO set; the default
-   is validate-only. (The PGlite path always migrates — that is its purpose.)
+- **C1 — `?host=` override:** pg parses connection strings with
+  `pg-connection-string`, where a `?host=` query param SILENTLY OVERRIDES the
+  authority host. A WHATWG-only guard validated the visible decoy host while pg
+  connected to the `?host=` target.
+- **C2 — percent-encoding:** `postgres://` is a NON-SPECIAL scheme, so WHATWG
+  `URL` keeps the host OPAQUE (escapes NOT decoded); `ep-m%61in-…` passed the
+  marker check while `pg-connection-string` decoded it to `ep-main-…` and
+  connected there.
 
-The guard is a pure function with its own refusal-matrix tests
-(`test/acceptance-guard.test.ts`); evaluating it never connects.
+**The fix is one principle: evaluate the guard on the SAME parse pg uses
+(`pg-connection-string`), validating the DECODED host that will ACTUALLY be
+connected to.** Before ANY check runs against a remote URL, the guard refuses —
+exit 1, WITHOUT opening a connection — unless the target is AFFIRMATIVELY
+non-main. Order:
+
+1. URL must parse as `postgres://`/`postgresql://` (WHATWG, for the protocol +
+   param + divergence checks).
+2. **Reject connection-redirecting query params OUTRIGHT:** any URL carrying
+   `host`, `hostaddr`, or `options` is refused (they redirect or reconfigure
+   the connection — C1's vector, plus `hostaddr` pinning a connect IP and
+   `options` reconfiguring the session).
+3. Parse with `pg-connection-string` → the host pg will ACTUALLY connect to
+   (percent-decoded, `?host=` applied). Empty host → refuse.
+4. **Divergence check (defense in depth):** the pg-parsed host must EQUAL the
+   WHATWG authority host — any difference means a manipulated/percent-encoded
+   host (C2's vector) and refuses, even if the decoded host carries no marker.
+5. **Main-like markers refuse outright:** the pg host or database containing
+   `main`, `prod`, `production`, `primary`, or `live` as a SUBSTRING is refused,
+   even with a correct confirmation echo. Deliberately over-broad (e.g. "domain"
+   refuses on "main"). **Honesty (review L1): this marker layer rarely fires on
+   real Neon hostnames** — random `ep-cool-star-…` endpoints contain no
+   main-like substring — so it is a cheap catch for obviously-named targets, NOT
+   the operative defense.
+6. **An affirmative discriminator is required (operative defense):** the pg host
+   or database must carry one of `preview`, `dev`, `development`, `staging`,
+   `test`, `branch`, `acceptance`, `ephemeral`, `sandbox`, `localhost`, `127` as
+   a clean TOKEN (split on `./-/_` — a letter run inside an unrelated word never
+   counts). No verifiable discriminator → refused: name the preview
+   database/endpoint so the target is self-evidently not main.
+7. **Second factor (operative defense):** `ACCEPTANCE_CONFIRM_NON_MAIN` must
+   exactly echo the pg-parsed CONNECT host. Missing or mismatched → refused.
+8. **Remote DDL is opt-in:** migrations are applied to a remote target ONLY when
+   `ACCEPTANCE_APPLY_MIGRATIONS=true` (exactly) is ALSO set. **Remote DML is opt-in:**
+   the fail-closed smoke runs only when `ACCEPTANCE_RUN_SMOKE=true`. Both default
+   off — remote validate-only is READ-ONLY. (The PGlite path always migrates and
+   always smokes — that is its purpose.)
+
+The guard is a PURE function with its own refusal-matrix tests
+(`test/acceptance-guard.test.ts`, including both live bypass URLs and variants:
+`?hostaddr=`, `?options=`, uppercase percent-encoding, IPv6 literals, and
+userinfo decoys in both directions); evaluating it never connects.
+
+**Structural remote-handle invariant (review M1):** the ONLY exported way to
+obtain a remote `AcceptanceDb` is `connectRemoteAcceptanceDb(rawUrl, env)`, which
+runs the guard INSIDE the factory and — when it passes — builds the pg `Pool`
+from the SAME parsed config the guard validated (`toClientConfig(verdict.config)`),
+never a re-parse of the raw URL (which is precisely what let the bypasses reach a
+different host than was validated). `acceptanceDbFromPgPool` is NOT exported from
+the package surface; a grep-assert test proves `remote.ts` is the only module
+that constructs a `Pool` or references the pool adapter, so no caller can build a
+guard-free remote handle.
 
 ### The Neon-main precondition
 
@@ -153,17 +206,32 @@ authorize.
   verification queries as the only cross-check.
 - The tenant-table and enum sets are DERIVED from `schema.ts`, so future
   migrations are covered automatically; the vitest wrapper pins today's
-  35-table set so additions remain conscious.
+  35-table set so additions remain conscious. The RLS and resolver-grant checks
+  are ABSENCE checks (set-equality, whitelist), so drift in EITHER direction —
+  an unexpected RLS table, a missing one, an out-of-whitelist resolver grant —
+  fails, not just missing expected state.
 - The remote guard makes pointing the suite at production structurally hard:
-  three independent refusal layers (marker, discriminator, echo) plus a
-  DDL opt-in flag.
-- The fail-closed smoke writes only inside a rolled-back transaction, so the
-  suite is safe against a live preview branch carrying real synthetic data.
+  it validates the host pg ACTUALLY connects to (parse-for-connect), rejects
+  connection-redirecting params, rejects host manipulation via a divergence
+  check, then applies discriminator + exact-host-echo (the operative layers) on
+  top of the cheap marker layer, with DDL and DML each behind an explicit opt-in
+  flag. The only remote-handle path is the guarded factory (structural, M1).
+- Remote validate-only is READ-ONLY: the only writing check (the fail-closed
+  smoke) is skipped unless `ACCEPTANCE_RUN_SMOKE=true`, and even then writes
+  only inside a rolled-back transaction — safe against a live preview branch
+  carrying real synthetic data.
 - Found and fixed en route: `test/migration.test.ts`'s enum-discovery helper
   matched nothing (drizzle pgEnums are callable, `typeof "function"`), making
   its CREATE TYPE check vacuous; the shared `declaredEnums()` iteration now
   handles callables and the test asserts non-vacuity (>30 enums).
 - `tsx` joins `@aflo/database` devDependencies (already in the workspace via
-  `apps/worker`) to run the CLI; the acceptance module is intentionally NOT
-  exported from the package root index, keeping the dev-only PGlite driver out
-  of the web app's import graph.
+  `apps/worker`) to run the CLI; `pg-connection-string` (already a transitive
+  dep of `pg`, now direct) is the guard's parse-for-connect source; the
+  acceptance module is intentionally NOT exported from the package root index,
+  keeping the dev-only PGlite driver and the remote-pool path out of the web
+  app's import graph.
+- Post-merge adversarial review of PR #100 (DO NOT MERGE) found the two guard
+  bypasses (C1 `?host=`, C2 `%61`) and the structural gaps (M1 unguarded export,
+  M2 remote DML on validate-only, M3 absence checks); all are fixed here with
+  the bypass URLs + variants added to the refusal-matrix tests, and both
+  bypasses are documented above as fixed.

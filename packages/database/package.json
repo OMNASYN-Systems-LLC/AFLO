@@ -24,7 +24,8 @@
     "@aflo/security": "workspace:*",
     "@aflo/shared": "workspace:*",
     "drizzle-orm": "^0.45.2",
-    "pg": "^8.22.0"
+    "pg": "^8.22.0",
+    "pg-connection-string": "^2.14.0"
   },
   "devDependencies": {
     "@electric-sql/pglite": "^0.5.4",
