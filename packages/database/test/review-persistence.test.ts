@@ -11,19 +11,25 @@ import {
   type FieldProvenance,
   type PlaybookContent,
   type PlaybookContentFieldKey,
+  type ReviewItemState,
 } from "@aflo/rules";
 import { GOLDEN_KEY_PLAYBOOK_DRAFTS } from "@aflo/shared";
 
 import {
+  AiRunNotInOrganizationError,
   DrizzlePlaybookRepository,
   DrizzleReviewDecisionRepository,
   DrizzleReviewItemRepository,
   DrizzleWorkflowDiscoveryRepository,
+  InvalidInitialReviewStateError,
   InvalidPlaybookContentError,
+  MemberNotInOrganizationError,
   OpenReviewItemExistsError,
   PlaybookApprovalBlockedError,
+  PlaybookNotFoundError,
   PlaybookTransitionDeniedError,
   ReviewClientNotInOrganizationError,
+  ReviewItemNotFoundError,
   WorkflowDiscoveryInputError,
   WorkflowDiscoveryTransitionDeniedError,
 } from "../src/repositories/review-center";
@@ -562,5 +568,378 @@ describe("RLS isolation across all five tables", () => {
         ORG_B,
       ]),
     ).rejects.toThrow(/row-level security/i);
+  });
+});
+
+describe("cross-org reference guards (F1) — FK validation bypasses RLS, the repositories do not", () => {
+  let orgBPlaybookId = "";
+  let orgBItemId = "";
+  let orgBAiRunId = "";
+  let orgAAiRunId = "";
+  let orgAItemId = "";
+
+  beforeAll(async () => {
+    // Org B fixtures (created through the repositories in the RLS block above).
+    orgBPlaybookId = (await playbookRepo.getByKey(ORG_B, "org-b-play"))!.id;
+    orgBItemId = (await items.listByOrg(ORG_B))[0]!.id;
+    // One ai_run per org (raw insert under each org's own RLS context).
+    await useOrg(ORG_B);
+    const runB = await pg.query<{ id: string }>(
+      `INSERT INTO ai_runs (organization_id, client_id, agent_name, agent_version, status, confidence, response_envelope)
+       VALUES ('${ORG_B}', '${clientB}', 'roadmap-agent', '1.0.0', 'ok', 0.500, '{}') RETURNING id`,
+    );
+    orgBAiRunId = runB.rows[0]!.id;
+    await useOrg(ORG_A);
+    const runA = await pg.query<{ id: string }>(
+      `INSERT INTO ai_runs (organization_id, client_id, agent_name, agent_version, status, confidence, response_envelope)
+       VALUES ('${ORG_A}', '${clientA}', 'roadmap-agent', '1.0.0', 'ok', 0.500, '{}') RETURNING id`,
+    );
+    orgAAiRunId = runA.rows[0]!.id;
+    // An org-A item the transition/decision PoCs operate on.
+    orgAItemId = (
+      await items.create(
+        ORG_A,
+        {
+          clientId: clientA,
+          artifactType: "document_interpretation",
+          artifactId: "f1-target",
+          riskClassification: "high",
+          requiredReviewerRole: "staff",
+        },
+        NOW,
+      )
+    ).id;
+  });
+
+  it("create: org B's playbook id → typed error, no row written", async () => {
+    await expect(
+      items.create(
+        ORG_A,
+        {
+          artifactType: "roadmap_draft",
+          artifactId: "f1-pb",
+          riskClassification: "high",
+          requiredReviewerRole: "staff",
+          playbookId: orgBPlaybookId,
+        },
+        NOW,
+      ),
+    ).rejects.toBeInstanceOf(PlaybookNotFoundError);
+    expect((await items.listByOrg(ORG_A)).map((i) => i.artifactId)).not.toContain("f1-pb");
+  });
+
+  it("create: org B's review item as previousReviewItemId → typed error, no row written", async () => {
+    await expect(
+      items.create(
+        ORG_A,
+        {
+          artifactType: "roadmap_draft",
+          artifactId: "f1-prev",
+          riskClassification: "high",
+          requiredReviewerRole: "staff",
+          previousReviewItemId: orgBItemId,
+        },
+        NOW,
+      ),
+    ).rejects.toBeInstanceOf(ReviewItemNotFoundError);
+    expect((await items.listByOrg(ORG_A)).map((i) => i.artifactId)).not.toContain("f1-prev");
+  });
+
+  it("create: org B's ai_run id → typed error, no row written", async () => {
+    await expect(
+      items.create(
+        ORG_A,
+        {
+          artifactType: "roadmap_draft",
+          artifactId: "f1-run",
+          riskClassification: "high",
+          requiredReviewerRole: "staff",
+          aiRunId: orgBAiRunId,
+        },
+        NOW,
+      ),
+    ).rejects.toBeInstanceOf(AiRunNotInOrganizationError);
+    expect((await items.listByOrg(ORG_A)).map((i) => i.artifactId)).not.toContain("f1-run");
+  });
+
+  it("create: org B's member as createdByMemberId → typed error, no row written", async () => {
+    await expect(
+      items.create(
+        ORG_A,
+        {
+          artifactType: "roadmap_draft",
+          artifactId: "f1-member",
+          riskClassification: "high",
+          requiredReviewerRole: "staff",
+          createdByMemberId: memberB,
+        },
+        NOW,
+      ),
+    ).rejects.toBeInstanceOf(MemberNotInOrganizationError);
+    expect((await items.listByOrg(ORG_A)).map((i) => i.artifactId)).not.toContain("f1-member");
+  });
+
+  it("create: SAME-org playbook/previous/ai_run/member references are accepted", async () => {
+    const orgAPlaybook = await playbookRepo.getByKey(ORG_A, seed.playbookKey);
+    const previous = (await items.listByOrg(ORG_A, { state: "rejected" }))[0]!;
+    const created = await items.create(
+      ORG_A,
+      {
+        clientId: clientA,
+        artifactType: "concierge_recommendation",
+        artifactId: "f1-ok",
+        riskClassification: "high",
+        requiredReviewerRole: "staff",
+        playbookId: orgAPlaybook!.id,
+        previousReviewItemId: previous.id,
+        aiRunId: orgAAiRunId,
+        createdByMemberId: memberA,
+      },
+      NOW,
+    );
+    expect(created.playbookId).toBe(orgAPlaybook!.id);
+    expect(created.previousReviewItemId).toBe(previous.id);
+    expect(created.aiRunId).toBe(orgAAiRunId);
+  });
+
+  it("saveTransition: org B's item as supersededByReviewItemId → typed error, nothing changed", async () => {
+    await expect(
+      items.saveTransition(ORG_A, orgAItemId, "superseded", LATER, {
+        supersededByReviewItemId: orgBItemId,
+      }),
+    ).rejects.toBeInstanceOf(ReviewItemNotFoundError);
+    const after = await items.getById(ORG_A, orgAItemId);
+    expect(after!.state).toBe("draft");
+    expect(after!.supersededByReviewItemId).toBeNull();
+  });
+
+  it("saveTransition: org B's member as reviewedByMemberId → typed error, nothing changed", async () => {
+    await expect(
+      items.saveTransition(ORG_A, orgAItemId, "approved", LATER, { reviewedByMemberId: memberB }),
+    ).rejects.toBeInstanceOf(MemberNotInOrganizationError);
+    const after = await items.getById(ORG_A, orgAItemId);
+    expect(after!.state).toBe("draft");
+    expect(after!.reviewedByMemberId).toBeNull();
+  });
+
+  it("append: org B's member as decidedByMemberId → typed error, no decision written", async () => {
+    await expect(
+      decisions.append(
+        ORG_A,
+        {
+          reviewItemId: orgAItemId,
+          decision: "approved_unchanged",
+          reasonCode: "RVD_ACCURATE",
+          ruleVersion: REVIEW_CENTER_RULES_VERSION,
+          decidedByMemberId: memberB,
+          workflowType: "document_interpretation",
+        },
+        NOW,
+      ),
+    ).rejects.toBeInstanceOf(MemberNotInOrganizationError);
+    expect(await decisions.listByItem(ORG_A, orgAItemId)).toEqual([]);
+  });
+
+  it("append: org B's ai_run id → typed error, no decision written", async () => {
+    await expect(
+      decisions.append(
+        ORG_A,
+        {
+          reviewItemId: orgAItemId,
+          decision: "approved_unchanged",
+          reasonCode: "RVD_ACCURATE",
+          ruleVersion: REVIEW_CENTER_RULES_VERSION,
+          decidedByMemberId: memberA,
+          workflowType: "document_interpretation",
+          aiRunId: orgBAiRunId,
+        },
+        NOW,
+      ),
+    ).rejects.toBeInstanceOf(AiRunNotInOrganizationError);
+    expect(await decisions.listByItem(ORG_A, orgAItemId)).toEqual([]);
+  });
+
+  it("saveDraftVersion: org B's member as author → typed error, no version written", async () => {
+    const orgAPlaybook = await playbookRepo.getByKey(ORG_A, seed.playbookKey);
+    const before = (await playbookRepo.listVersions(ORG_A, orgAPlaybook!.id)).length;
+    await expect(
+      playbookRepo.saveDraftVersion(
+        ORG_A,
+        { playbookId: orgAPlaybook!.id, version: "9.9.9", content: resolvedContent(), authorMemberId: memberB },
+        NOW,
+      ),
+    ).rejects.toBeInstanceOf(MemberNotInOrganizationError);
+    expect((await playbookRepo.listVersions(ORG_A, orgAPlaybook!.id)).length).toBe(before);
+  });
+
+  it("discovery raise: org B's member as raisedBy → typed error, no row written", async () => {
+    const before = (await discovery.listByOrg(ORG_A)).length;
+    await expect(
+      discovery.raise(ORG_A, { question: "Sneaky?", raisedByMemberId: memberB }, NOW),
+    ).rejects.toBeInstanceOf(MemberNotInOrganizationError);
+    expect((await discovery.listByOrg(ORG_A)).length).toBe(before);
+  });
+});
+
+describe("escalation preserves submitted_at (F2) — the review-time metric anchor", () => {
+  it("a same-state escalation raises the reviewer floor without re-stamping submitted_at", async () => {
+    const created = await items.create(
+      ORG_A,
+      {
+        clientId: clientA,
+        artifactType: "stage_advancement",
+        artifactId: "f2-esc",
+        riskClassification: "high",
+        requiredReviewerRole: "staff",
+        state: "awaiting_review",
+      },
+      NOW,
+    );
+    expect(created.submittedAt).toBe(NOW.toISOString());
+    const escalated = await items.saveTransition(ORG_A, created.id, "awaiting_review", LATER, {
+      requiredReviewerRole: "organization_admin",
+    });
+    expect(escalated.state).toBe("awaiting_review");
+    expect(escalated.requiredReviewerRole).toBe("organization_admin");
+    // The anchor every review-time median derives from is UNCHANGED.
+    expect(escalated.submittedAt).toBe(NOW.toISOString());
+    expect(escalated.updatedAt).toBe(LATER.toISOString());
+  });
+});
+
+describe("atomic decide-and-transition (F3) — head and log move together or not at all", () => {
+  it("writes the decision row AND the head change consistently on success", async () => {
+    const item = await items.create(
+      ORG_A,
+      {
+        clientId: clientA,
+        artifactType: "financial_summary",
+        artifactId: "f3-ok",
+        riskClassification: "high",
+        requiredReviewerRole: "staff",
+        state: "awaiting_review",
+      },
+      NOW,
+    );
+    const result = await items.recordDecisionAndTransition(
+      ORG_A,
+      {
+        reviewItemId: item.id,
+        decision: "approved_with_edits",
+        reasonCode: "RVD_EDITED_TONE",
+        ruleVersion: REVIEW_CENTER_RULES_VERSION,
+        decidedByMemberId: memberA,
+        workflowType: "financial_summary",
+        editedFields: ["summary"],
+        finalOutputSha256: "d".repeat(64),
+        toState: "approved",
+        headPatch: {
+          modificationsDigest: [
+            { field: "summary", beforeSha256: "a".repeat(64), afterSha256: "b".repeat(64) },
+          ],
+        },
+      },
+      LATER,
+    );
+    expect(result.decision.decision).toBe("approved_with_edits");
+    expect(result.item.state).toBe("approved");
+    expect(result.item.latestDecision).toBe("approved_with_edits");
+    expect(result.item.latestDecisionReasonCode).toBe("RVD_EDITED_TONE");
+    expect(result.item.reviewedByMemberId).toBe(memberA);
+    expect(result.item.reviewedAt).toBe(LATER.toISOString());
+    expect((await decisions.listByItem(ORG_A, item.id)).map((d) => d.id)).toEqual([result.decision.id]);
+  });
+
+  it("an escalated decision through the atomic path leaves state and submitted_at untouched", async () => {
+    const item = await items.create(
+      ORG_A,
+      {
+        clientId: clientA,
+        artifactType: "partner_referral",
+        artifactId: "f3-esc",
+        riskClassification: "high",
+        requiredReviewerRole: "staff",
+        state: "awaiting_review",
+      },
+      NOW,
+    );
+    const result = await items.recordDecisionAndTransition(
+      ORG_A,
+      {
+        reviewItemId: item.id,
+        decision: "escalated",
+        reasonCode: "RVD_NEEDS_SENIOR_REVIEW",
+        ruleVersion: REVIEW_CENTER_RULES_VERSION,
+        decidedByMemberId: memberA,
+        workflowType: "partner_referral",
+        escalatedToRole: "organization_admin",
+        toState: "awaiting_review",
+        headPatch: { requiredReviewerRole: "organization_admin" },
+      },
+      LATER,
+    );
+    expect(result.item.state).toBe("awaiting_review");
+    expect(result.item.requiredReviewerRole).toBe("organization_admin");
+    expect(result.item.submittedAt).toBe(NOW.toISOString()); // F2 anchor preserved here too
+    expect(result.item.latestDecision).toBe("escalated");
+    expect(result.item.reviewedAt).toBeNull(); // escalation is not a terminal review
+    expect((await decisions.listByItem(ORG_A, item.id)).map((d) => d.escalatedToRole)).toEqual([
+      "organization_admin",
+    ]);
+  });
+
+  it("a mid-operation failure rolls back BOTH writes (valid decision input, invalid toState)", async () => {
+    const item = await items.create(
+      ORG_A,
+      {
+        clientId: clientA,
+        artifactType: "client_communication",
+        artifactId: "f3-roll",
+        riskClassification: "high",
+        requiredReviewerRole: "staff",
+        state: "awaiting_review",
+      },
+      NOW,
+    );
+    await expect(
+      items.recordDecisionAndTransition(
+        ORG_A,
+        {
+          reviewItemId: item.id,
+          decision: "approved_unchanged",
+          reasonCode: "RVD_ACCURATE",
+          ruleVersion: REVIEW_CENTER_RULES_VERSION,
+          decidedByMemberId: memberA,
+          workflowType: "client_communication",
+          toState: "not_a_state" as ReviewItemState,
+        },
+        LATER,
+      ),
+    ).rejects.toThrow();
+    // NEITHER the decision row NOR the head change survives the rollback.
+    expect(await decisions.listByItem(ORG_A, item.id)).toEqual([]);
+    const after = await items.getById(ORG_A, item.id);
+    expect(after!.state).toBe("awaiting_review");
+    expect(after!.latestDecision).toBeNull();
+    expect(after!.reviewedAt).toBeNull();
+  });
+});
+
+describe("runtime birth-state assert (F4)", () => {
+  it("rejects a cast state 'published' at runtime — no row written", async () => {
+    await expect(
+      items.create(
+        ORG_A,
+        {
+          artifactType: "roadmap_draft",
+          artifactId: "f4-birth",
+          riskClassification: "high",
+          requiredReviewerRole: "staff",
+          state: "published" as unknown as "draft",
+        },
+        NOW,
+      ),
+    ).rejects.toBeInstanceOf(InvalidInitialReviewStateError);
+    expect((await items.listByOrg(ORG_A)).map((i) => i.artifactId)).not.toContain("f4-birth");
   });
 });

@@ -17,7 +17,9 @@ import {
   type WorkflowDiscoveryStatus,
 } from "@aflo/rules";
 import {
+  aiRuns,
   clients,
+  organizationMembers,
   playbookVersions,
   playbooks,
   reviewDecisions,
@@ -36,6 +38,21 @@ import { withOrgContext, type TenantScopedDb } from "../request-context";
  *  - LEGALITY of a ReviewItem state move is decided by the review_center
  *    kernel IN THE CALLER (store, PR-5). `saveTransition` PERSISTS a
  *    kernel-approved transition plus its bookkeeping — it never re-decides.
+ *  - CROSS-ORG REFERENCE GUARD: FK validation bypasses RLS, so EVERY
+ *    caller-supplied reference into another table (client, playbook, playbook
+ *    version, review item, organization member, ai_run) is verified visible
+ *    via a one-row SELECT inside the SAME `withOrgContext` transaction before
+ *    it is written. A foreign org's id fails with a typed not-visible error
+ *    (never echoing foreign data) and no row is written.
+ *  - `recordDecisionAndTransition` is THE store entry point for review
+ *    decisions (PR-5 must use it): it appends the `review_decisions` row AND
+ *    moves the `review_items` head in ONE transaction, so the denormalized
+ *    head can never drift from the append-only log. `append`/`saveTransition`
+ *    remain for the non-decision paths (submission, withdrawal, supersession,
+ *    publish; log backfill).
+ *  - `submitted_at` stamps ONLY on the FIRST entry into `awaiting_review` —
+ *    an escalation (same-state persist with the reviewer floor raised via
+ *    patch) leaves the review-time metric anchor untouched.
  *  - Playbook-version legality IS enforced here (`transitionVersion` consults
  *    `playbookVersionTransition` and `contentBlocksApproval`), because
  *    publish/supersede/current-head must be one atomic unit and this is the
@@ -78,6 +95,30 @@ export class ReviewClientNotInOrganizationError extends Error {
   constructor(public readonly clientId: string) {
     super(`client not found in organization: ${clientId}`);
     this.name = "ReviewClientNotInOrganizationError";
+  }
+}
+
+/** Thrown when a referenced organization member is not in the current org (FK bypasses RLS — guard here). */
+export class MemberNotInOrganizationError extends Error {
+  constructor(public readonly memberId: string) {
+    super(`member not found in organization: ${memberId}`);
+    this.name = "MemberNotInOrganizationError";
+  }
+}
+
+/** Thrown when a referenced ai_run is not in the current org (FK bypasses RLS — guard here). */
+export class AiRunNotInOrganizationError extends Error {
+  constructor(public readonly aiRunId: string) {
+    super(`ai run not found in organization: ${aiRunId}`);
+    this.name = "AiRunNotInOrganizationError";
+  }
+}
+
+/** Thrown when `create` receives a runtime state outside the two legal birth states (F4). */
+export class InvalidInitialReviewStateError extends Error {
+  constructor(public readonly state: string) {
+    super(`invalid initial review item state: ${state}`);
+    this.name = "InvalidInitialReviewStateError";
   }
 }
 
@@ -199,6 +240,42 @@ function isUniqueViolation(err: unknown): boolean {
 async function assertClientInOrg(tx: TenantScopedDb, clientId: string): Promise<void> {
   const rows = await tx.select({ id: clients.id }).from(clients).where(eq(clients.id, clientId)).limit(1);
   if (!rows[0]) throw new ReviewClientNotInOrganizationError(clientId);
+}
+
+/** Verify `memberId` is an organization member visible under the current org context (RLS-scoped). */
+async function assertMemberInOrg(tx: TenantScopedDb, memberId: string): Promise<void> {
+  const rows = await tx
+    .select({ id: organizationMembers.id })
+    .from(organizationMembers)
+    .where(eq(organizationMembers.id, memberId))
+    .limit(1);
+  if (!rows[0]) throw new MemberNotInOrganizationError(memberId);
+}
+
+/** Verify `aiRunId` is visible under the current org context (ai_runs is org-scoped + RLS'd). */
+async function assertAiRunInOrg(tx: TenantScopedDb, aiRunId: string): Promise<void> {
+  const rows = await tx.select({ id: aiRuns.id }).from(aiRuns).where(eq(aiRuns.id, aiRunId)).limit(1);
+  if (!rows[0]) throw new AiRunNotInOrganizationError(aiRunId);
+}
+
+/** Verify `playbookId` is visible under the current org context (RLS-scoped). */
+async function assertPlaybookInOrg(tx: TenantScopedDb, playbookId: string): Promise<void> {
+  const rows = await tx
+    .select({ id: playbooks.id })
+    .from(playbooks)
+    .where(eq(playbooks.id, playbookId))
+    .limit(1);
+  if (!rows[0]) throw new PlaybookNotFoundError(playbookId);
+}
+
+/** Verify `reviewItemId` is visible under the current org context (RLS-scoped). */
+async function assertReviewItemInOrg(tx: TenantScopedDb, reviewItemId: string): Promise<void> {
+  const rows = await tx
+    .select({ id: reviewItems.id })
+    .from(reviewItems)
+    .where(eq(reviewItems.id, reviewItemId))
+    .limit(1);
+  if (!rows[0]) throw new ReviewItemNotFoundError(reviewItemId);
 }
 
 function isoOrNull(value: Date | null): string | null {
@@ -353,10 +430,20 @@ export class DrizzleReviewItemRepository {
    * replacements supersede, they never coexist.
    */
   async create(organizationId: string, input: CreateReviewItemInput, now: Date): Promise<ReviewItemRecord> {
+    const state = input.state ?? "draft";
+    // F4: the TS union allows only the two birth states — enforce at RUNTIME
+    // too, so a cast can never mint an item directly in a later state.
+    if (state !== "draft" && state !== "awaiting_review") {
+      throw new InvalidInitialReviewStateError(state);
+    }
     return withOrgContext(this.db, organizationId, async (tx) => {
-      // The client FK bypasses RLS — verify a referenced client is in THIS org.
+      // FK validation bypasses RLS — every caller-supplied cross-table
+      // reference must be verified visible in THIS org before it is written.
       if (input.clientId != null) await assertClientInOrg(tx, input.clientId);
-      const state = input.state ?? "draft";
+      if (input.playbookId != null) await assertPlaybookInOrg(tx, input.playbookId);
+      if (input.previousReviewItemId != null) await assertReviewItemInOrg(tx, input.previousReviewItemId);
+      if (input.aiRunId != null) await assertAiRunInOrg(tx, input.aiRunId);
+      if (input.createdByMemberId != null) await assertMemberInOrg(tx, input.createdByMemberId);
       try {
         const inserted = await tx
           .insert(reviewItems)
@@ -419,9 +506,12 @@ export class DrizzleReviewItemRepository {
    * PERSIST a kernel-approved transition. The caller (store, PR-5) has already
    * run `reviewItemTransition`/`applyReviewDecision` — this method never
    * re-decides legality; it writes the new state plus the transition's
-   * bookkeeping: `submitted_at` on entering awaiting_review, reviewer stamps
-   * on decisions, `published_at` on publish, the superseded-by link on
-   * supersession, and the raised reviewer floor on escalation.
+   * bookkeeping: `submitted_at` on FIRST entering awaiting_review (an
+   * escalation's same-state persist leaves the review-time metric anchor
+   * untouched — F2), reviewer stamps on decisions, `published_at` on publish,
+   * the superseded-by link on supersession, and the raised reviewer floor on
+   * escalation. Caller-supplied cross-table references in the patch are
+   * verified org-visible before writing (F1).
    */
   async saveTransition(
     organizationId: string,
@@ -431,29 +521,8 @@ export class DrizzleReviewItemRepository {
     patch?: ReviewItemTransitionPatch,
   ): Promise<ReviewItemRecord> {
     return withOrgContext(this.db, organizationId, async (tx) => {
-      const set: Partial<typeof reviewItems.$inferInsert> = {
-        state: toState,
-        updatedAt: now,
-      };
-      if (toState === "awaiting_review") set.submittedAt = now;
-      if (toState === "approved" || toState === "rejected" || toState === "deferred") {
-        set.reviewedAt = now;
-        if (patch?.reviewedByMemberId !== undefined) set.reviewedByMemberId = patch.reviewedByMemberId;
-      }
-      if (toState === "published") {
-        set.publishedAt = now;
-        if (patch?.publishedResultRef !== undefined) set.publishedResultRef = patch.publishedResultRef;
-      }
-      if (toState === "superseded" && patch?.supersededByReviewItemId !== undefined) {
-        set.supersededByReviewItemId = patch.supersededByReviewItemId;
-      }
-      if (patch?.latestDecision !== undefined) set.latestDecision = patch.latestDecision;
-      if (patch?.latestDecisionReasonCode !== undefined) {
-        set.latestDecisionReasonCode = patch.latestDecisionReasonCode;
-      }
-      if (patch?.modificationsDigest !== undefined) set.modificationsDigest = patch.modificationsDigest;
-      if (patch?.requiredReviewerRole !== undefined) set.requiredReviewerRole = patch.requiredReviewerRole;
-
+      const head = await loadReviewItemHead(tx, reviewItemId);
+      const set = await buildTransitionSet(tx, toState, head.submittedAt, now, patch);
       const updated = await tx
         .update(reviewItems)
         .set(set)
@@ -463,6 +532,98 @@ export class DrizzleReviewItemRepository {
       return toReviewItem(updated[0]);
     });
   }
+
+  /**
+   * THE store entry point for review decisions (PR-5 must use it): appends the
+   * `review_decisions` row AND moves the `review_items` head in ONE
+   * `withOrgContext` transaction — decision log and denormalized head commit
+   * or roll back together, so they can never drift (F3). State bookkeeping is
+   * `saveTransition`'s exactly; `latest_decision`/`latest_decision_reason_code`
+   * and `reviewed_by` come FROM the decision record (the input type omits them
+   * from the patch so the head cannot disagree with the log). Legality is the
+   * caller's job (`applyReviewDecision`), as everywhere in this module.
+   */
+  async recordDecisionAndTransition(
+    organizationId: string,
+    input: RecordDecisionAndTransitionInput,
+    now: Date,
+  ): Promise<{ decision: ReviewDecisionRecordRow; item: ReviewItemRecord }> {
+    return withOrgContext(this.db, organizationId, async (tx) => {
+      const head = await loadReviewItemHead(tx, input.reviewItemId);
+      const decision = await insertDecisionRow(tx, organizationId, input, now);
+      const set = await buildTransitionSet(tx, input.toState, head.submittedAt, now, {
+        ...input.headPatch,
+        reviewedByMemberId: input.decidedByMemberId,
+        latestDecision: input.decision,
+        latestDecisionReasonCode: input.reasonCode,
+      });
+      const updated = await tx
+        .update(reviewItems)
+        .set(set)
+        .where(eq(reviewItems.id, input.reviewItemId))
+        .returning();
+      if (!updated[0]) throw new ReviewItemNotFoundError(input.reviewItemId);
+      return { decision, item: toReviewItem(updated[0]) };
+    });
+  }
+}
+
+/** Load the head fields a transition needs; typed not-found when RLS-invisible. */
+async function loadReviewItemHead(
+  tx: TenantScopedDb,
+  reviewItemId: string,
+): Promise<{ submittedAt: Date | null }> {
+  const rows = await tx
+    .select({ submittedAt: reviewItems.submittedAt })
+    .from(reviewItems)
+    .where(eq(reviewItems.id, reviewItemId))
+    .limit(1);
+  if (!rows[0]) throw new ReviewItemNotFoundError(reviewItemId);
+  return rows[0];
+}
+
+/**
+ * The ONE place transition bookkeeping is computed (`saveTransition` and
+ * `recordDecisionAndTransition` share it). Verifies every caller-supplied
+ * cross-table reference in the patch org-visible before it is written (F1),
+ * and stamps `submitted_at` ONLY when the item has never been submitted (F2).
+ */
+async function buildTransitionSet(
+  tx: TenantScopedDb,
+  toState: ReviewItemState,
+  currentSubmittedAt: Date | null,
+  now: Date,
+  patch?: ReviewItemTransitionPatch,
+): Promise<Partial<typeof reviewItems.$inferInsert>> {
+  const set: Partial<typeof reviewItems.$inferInsert> = {
+    state: toState,
+    updatedAt: now,
+  };
+  // F2: first entry into awaiting_review ONLY — an escalation re-persisting
+  // awaiting_review must not move the review-time metric anchor.
+  if (toState === "awaiting_review" && currentSubmittedAt === null) set.submittedAt = now;
+  if (toState === "approved" || toState === "rejected" || toState === "deferred") {
+    set.reviewedAt = now;
+    if (patch?.reviewedByMemberId !== undefined) {
+      if (patch.reviewedByMemberId !== null) await assertMemberInOrg(tx, patch.reviewedByMemberId);
+      set.reviewedByMemberId = patch.reviewedByMemberId;
+    }
+  }
+  if (toState === "published") {
+    set.publishedAt = now;
+    if (patch?.publishedResultRef !== undefined) set.publishedResultRef = patch.publishedResultRef;
+  }
+  if (toState === "superseded" && patch?.supersededByReviewItemId !== undefined) {
+    await assertReviewItemInOrg(tx, patch.supersededByReviewItemId);
+    set.supersededByReviewItemId = patch.supersededByReviewItemId;
+  }
+  if (patch?.latestDecision !== undefined) set.latestDecision = patch.latestDecision;
+  if (patch?.latestDecisionReasonCode !== undefined) {
+    set.latestDecisionReasonCode = patch.latestDecisionReasonCode;
+  }
+  if (patch?.modificationsDigest !== undefined) set.modificationsDigest = patch.modificationsDigest;
+  if (patch?.requiredReviewerRole !== undefined) set.requiredReviewerRole = patch.requiredReviewerRole;
+  return set;
 }
 
 // --- Review decisions (append-only) -----------------------------------------
@@ -505,6 +666,22 @@ export interface AppendReviewDecisionInput {
   detail?: string | null;
 }
 
+/**
+ * Input for `recordDecisionAndTransition` (F3): the decision record fields
+ * plus the kernel-approved target state and any remaining head bookkeeping.
+ * `reviewedByMemberId`/`latestDecision`/`latestDecisionReasonCode` are
+ * deliberately EXCLUDED from the patch — they always come from the decision
+ * record itself, so the head can never disagree with the append-only log.
+ */
+export interface RecordDecisionAndTransitionInput extends AppendReviewDecisionInput {
+  /** The state `applyReviewDecision` returned (awaiting_review for escalations). */
+  toState: ReviewItemState;
+  headPatch?: Omit<
+    ReviewItemTransitionPatch,
+    "reviewedByMemberId" | "latestDecision" | "latestDecisionReasonCode"
+  >;
+}
+
 type ReviewDecisionRow = typeof reviewDecisions.$inferSelect;
 
 function toDecision(row: ReviewDecisionRow): ReviewDecisionRecordRow {
@@ -529,10 +706,51 @@ function toDecision(row: ReviewDecisionRow): ReviewDecisionRecordRow {
 }
 
 /**
+ * Guarded insert into the append-only decision log, shared by `append` and
+ * `recordDecisionAndTransition` (F3) — every caller-supplied cross-table
+ * reference (decider member, ai_run) is verified org-visible first (F1); the
+ * review item itself is guarded by each caller.
+ */
+async function insertDecisionRow(
+  tx: TenantScopedDb,
+  organizationId: string,
+  input: AppendReviewDecisionInput,
+  now: Date,
+): Promise<ReviewDecisionRecordRow> {
+  await assertMemberInOrg(tx, input.decidedByMemberId);
+  if (input.aiRunId != null) await assertAiRunInOrg(tx, input.aiRunId);
+  const inserted = await tx
+    .insert(reviewDecisions)
+    .values({
+      organizationId,
+      reviewItemId: input.reviewItemId,
+      decision: input.decision,
+      reasonCode: input.reasonCode,
+      ruleVersion: input.ruleVersion,
+      decidedByMemberId: input.decidedByMemberId,
+      clientStageAtDecision:
+        (input.clientStageAtDecision as ReviewDecisionRow["clientStageAtDecision"]) ?? null,
+      workflowType: input.workflowType,
+      aiRunId: input.aiRunId ?? null,
+      agentVersion: input.agentVersion ?? null,
+      editedFields: input.editedFields ?? [],
+      finalOutputSha256: input.finalOutputSha256 ?? null,
+      escalatedToRole: input.escalatedToRole ?? null,
+      detail: input.detail ?? null,
+      decidedAt: now,
+    })
+    .returning();
+  return toDecision(inserted[0]!);
+}
+
+/**
  * APPEND-ONLY decision log. This class exposes `append` and `listByItem` and
  * NOTHING else — no update, no delete, structurally (the review-persistence
  * test asserts the surface). The feedback record the moat depends on cannot
- * be rewritten after the fact.
+ * be rewritten after the fact. NOTE: for an actual review decision the store
+ * (PR-5) must use `DrizzleReviewItemRepository.recordDecisionAndTransition`,
+ * which appends the SAME row atomically with the head move; bare `append` is
+ * for non-transition paths (e.g. log backfill/import).
  */
 export class DrizzleReviewDecisionRepository {
   constructor(private readonly db: TenantScopedDb) {}
@@ -544,35 +762,8 @@ export class DrizzleReviewDecisionRepository {
   ): Promise<ReviewDecisionRecordRow> {
     return withOrgContext(this.db, organizationId, async (tx) => {
       // The item FK bypasses RLS — verify the decided item is in THIS org.
-      const item = await tx
-        .select({ id: reviewItems.id })
-        .from(reviewItems)
-        .where(eq(reviewItems.id, input.reviewItemId))
-        .limit(1);
-      if (!item[0]) throw new ReviewItemNotFoundError(input.reviewItemId);
-
-      const inserted = await tx
-        .insert(reviewDecisions)
-        .values({
-          organizationId,
-          reviewItemId: input.reviewItemId,
-          decision: input.decision,
-          reasonCode: input.reasonCode,
-          ruleVersion: input.ruleVersion,
-          decidedByMemberId: input.decidedByMemberId,
-          clientStageAtDecision:
-            (input.clientStageAtDecision as ReviewDecisionRow["clientStageAtDecision"]) ?? null,
-          workflowType: input.workflowType,
-          aiRunId: input.aiRunId ?? null,
-          agentVersion: input.agentVersion ?? null,
-          editedFields: input.editedFields ?? [],
-          finalOutputSha256: input.finalOutputSha256 ?? null,
-          escalatedToRole: input.escalatedToRole ?? null,
-          detail: input.detail ?? null,
-          decidedAt: now,
-        })
-        .returning();
-      return toDecision(inserted[0]!);
+      await assertReviewItemInOrg(tx, input.reviewItemId);
+      return insertDecisionRow(tx, organizationId, input, now);
     });
   }
 
@@ -732,13 +923,10 @@ export class DrizzlePlaybookRepository {
     if (errors.length > 0) throw new InvalidPlaybookContentError(errors);
 
     return withOrgContext(this.db, organizationId, async (tx) => {
-      // The playbook FK bypasses RLS — verify the parent is in THIS org.
-      const parent = await tx
-        .select({ id: playbooks.id })
-        .from(playbooks)
-        .where(eq(playbooks.id, input.playbookId))
-        .limit(1);
-      if (!parent[0]) throw new PlaybookNotFoundError(input.playbookId);
+      // FK validation bypasses RLS — verify the parent playbook and the
+      // author member are in THIS org.
+      await assertPlaybookInOrg(tx, input.playbookId);
+      await assertMemberInOrg(tx, input.authorMemberId);
 
       try {
         const inserted = await tx
@@ -807,7 +995,11 @@ export class DrizzlePlaybookRepository {
       };
       if (toStatus === "approved") {
         set.approvedAt = now;
-        if (options?.approverMemberId !== undefined) set.approverMemberId = options.approverMemberId;
+        if (options?.approverMemberId !== undefined) {
+          // The member FK bypasses RLS — verify the approver is in THIS org.
+          await assertMemberInOrg(tx, options.approverMemberId);
+          set.approverMemberId = options.approverMemberId;
+        }
       }
       if (toStatus === "published") {
         // A published version must carry an effective date; stamp when unset.
@@ -908,15 +1100,10 @@ export class DrizzleWorkflowDiscoveryRepository {
     now: Date,
   ): Promise<WorkflowDiscoveryRecord> {
     return withOrgContext(this.db, organizationId, async (tx) => {
-      // The playbook FK bypasses RLS — verify a referenced playbook is in THIS org.
-      if (input.playbookId != null) {
-        const parent = await tx
-          .select({ id: playbooks.id })
-          .from(playbooks)
-          .where(eq(playbooks.id, input.playbookId))
-          .limit(1);
-        if (!parent[0]) throw new PlaybookNotFoundError(input.playbookId);
-      }
+      // FK validation bypasses RLS — verify a referenced playbook and the
+      // raising member are in THIS org.
+      if (input.playbookId != null) await assertPlaybookInOrg(tx, input.playbookId);
+      if (input.raisedByMemberId != null) await assertMemberInOrg(tx, input.raisedByMemberId);
       const inserted = await tx
         .insert(workflowDiscoveryItems)
         .values({
@@ -996,6 +1183,8 @@ export class DrizzleWorkflowDiscoveryRepository {
         if (options?.answer === undefined || options.answer.trim().length === 0) {
           throw new WorkflowDiscoveryInputError("missing_answer");
         }
+        // The member FK bypasses RLS — verify the answering member is in THIS org.
+        if (options.answeredByMemberId != null) await assertMemberInOrg(tx, options.answeredByMemberId);
         set.answer = options.answer;
         set.answeredByMemberId = options.answeredByMemberId ?? null;
         set.answeredAt = now;
