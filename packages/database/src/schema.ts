@@ -1166,8 +1166,10 @@ export const playbookVersions = pgTable(
  * history must outlive convenience deletes. Provenance columns carry
  * IDENTIFIERS AND DIGESTS ONLY: fact ids + freshness timestamps (never fact
  * values), rule versions, model/prompt labels, and sha256 modification
- * digests (never edited content). At most one OPEN item per artifact
- * (uq_review_items_open); replacements supersede via the self-FKs.
+ * digests (never edited content). At most one OPEN item per org-scoped
+ * (artifact_type, artifact_id, artifact_version, workflow_type) tuple
+ * (uq_review_items_open, migration 0010); replacements supersede via the
+ * self-FKs.
  */
 export const reviewItems = pgTable(
   "review_items",
@@ -1181,6 +1183,25 @@ export const reviewItems = pgTable(
     artifactType: reviewArtifactTypeEnum("artifact_type").notNull(),
     /** Any aggregate id — the audit_events.target_id convention. */
     artifactId: text("artifact_id").notNull(),
+    /**
+     * The reviewed artifact VERSION (migration 0010, founder decision
+     * 2026-07-23 #3): a new artifact version requires a new review. Free-form
+     * version string (semver, revision counter, …) owned by the artifact's
+     * domain.
+     */
+    artifactVersion: text("artifact_version").notNull(),
+    /**
+     * sha256 hex digest of the reviewed artifact content at review creation —
+     * the stale-artifact publication invariant's anchor (digest only, never
+     * the body; the checksum_sha256 idiom).
+     */
+    artifactDigest: varchar("artifact_digest", { length: 64 }).notNull(),
+    /**
+     * The workflow this review belongs to (founder 5-tuple, migration 0010).
+     * Usually equals artifact_type; explicit so one artifact version can be
+     * reviewed under distinct workflows without colliding.
+     */
+    workflowType: reviewArtifactTypeEnum("workflow_type").notNull(),
     /** `{ factId, asOf }[]` — fact identifiers + freshness timestamps only, never values. */
     sourceFactSnapshots: jsonb("source_fact_snapshots").notNull().default(sql`'[]'::jsonb`),
     ruleVersionsUsed: jsonb("rule_versions_used").notNull().default(sql`'[]'::jsonb`),
@@ -1237,9 +1258,13 @@ export const reviewItems = pgTable(
   (t) => [
     index("idx_review_items_org_type_state").on(t.organizationId, t.artifactType, t.state),
     index("idx_review_items_org_client").on(t.organizationId, t.clientId),
-    // At most one OPEN review per artifact; replacements supersede.
+    // ORG-SCOPED open-review uniqueness (migration 0010, founder decision
+    // 2026-07-23 #3, verbatim tuple): at most one active open review per
+    // (organization_id, artifact_type, artifact_id, artifact_version,
+    // workflow_type). Terminal reviews free the slot; a new artifact version
+    // requires a new review. Replacements supersede, they never coexist.
     uniqueIndex("uq_review_items_open")
-      .on(t.artifactType, t.artifactId)
+      .on(t.organizationId, t.artifactType, t.artifactId, t.artifactVersion, t.workflowType)
       .where(sql`state IN ('draft', 'awaiting_review')`),
   ],
 );

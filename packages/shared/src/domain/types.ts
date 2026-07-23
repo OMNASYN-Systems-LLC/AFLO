@@ -10,9 +10,17 @@
 import type {
   EngagementStatus,
   LifecycleStage,
+  PlaybookContent,
+  PlaybookVersionStatus,
   ReasonCode,
+  ReviewArtifactType,
+  ReviewDecision,
+  ReviewItemState,
   ReviewReasonCode,
+  ReviewRiskClass,
+  ReviewerRole,
   RoadmapStatus,
+  WorkflowDiscoveryStatus,
 } from "@aflo/rules";
 import type {
   NeutralityRecord,
@@ -70,6 +78,13 @@ export interface Organization {
   id: string;
   name: string;
   slug: string;
+  /**
+   * Founder decision 2026-07-23 #2: whether this tenant permits the DOCUMENTED
+   * single-operator owner override of the playbook author/approver separation
+   * rules (reason recorded, audited, not regulated advice, visible in review
+   * history). Default FALSE — including the Golden Key seed.
+   */
+  allowSingleOperatorPlaybookOverride: boolean;
 }
 
 /** Organization member roles (charter: Owner, Admin, Advisor/Staff). Platform
@@ -323,4 +338,178 @@ export interface AdminNote {
   staffId: string;
   body: string;
   createdAt: string; // ISO datetime
+}
+
+// ============================================================================
+// Human Review Center + Professional Playbooks (Workstream A PR-5, ADR-0043)
+//
+// Mirrors migrations 0009 + 0010 field-for-field (camelCase, ISO strings) so
+// the mock store can be swapped for the Drizzle repositories behind the same
+// shapes. A ReviewItem REFERENCES its artifact — id + version + sha256 digest
+// ONLY, never the artifact body (coordination layer, not a second system of
+// record). Member-id columns surface as staff ids in the prototype store.
+// ============================================================================
+
+/** A source-fact reference: identifier + freshness timestamp ONLY, never a value. */
+export interface SourceFactSnapshot {
+  factId: string;
+  asOf: string; // ISO datetime
+}
+
+/** One recorded field modification — sha256 digests only, never content. */
+export interface ModificationDigest {
+  field: string;
+  beforeSha256: string;
+  afterSha256: string;
+}
+
+/** Outcome-tracking vocabulary (founder: measurable outcomes). */
+export type ClientActionStatus = "pending" | "completed" | "not_completed";
+export type ReviewOutcome = "achieved" | "not_achieved" | "unknown";
+
+/**
+ * A Human Review Center queue item (review_center.v1.0.0). State moves only
+ * through the kernel; publication additionally requires the stale-artifact
+ * check (stored artifactVersion + artifactDigest must match the artifact's
+ * CURRENT version + digest) and the founder-matrix publication role floor.
+ */
+export interface ReviewItem {
+  id: string;
+  organizationId: string;
+  /** Null for org-level artifacts. */
+  clientId: string | null;
+  artifactType: ReviewArtifactType;
+  artifactId: string;
+  /** The reviewed artifact version — a new artifact version requires a new review. */
+  artifactVersion: string;
+  /** sha256 hex digest of the reviewed artifact content (64 lowercase hex). */
+  artifactDigest: string;
+  /** The founder 5-tuple's workflow dimension; usually equals artifactType. */
+  workflowType: ReviewArtifactType;
+  sourceFactSnapshots: SourceFactSnapshot[];
+  ruleVersionsUsed: string[];
+  /** Provenance for AI-drafted artifacts (null = manually authored). */
+  aiRunId: string | null;
+  aiModel: string | null;
+  aiPromptVersion: string | null;
+  /** Numeric string ("0.850") or null for deterministic/manual artifacts. */
+  confidence: string | null;
+  riskClassification: ReviewRiskClass;
+  requiredReviewerRole: ReviewerRole;
+  state: ReviewItemState;
+  assignedReviewerStaffId: string | null;
+  reviewedByStaffId: string | null;
+  reviewedAt: string | null;
+  latestDecision: ReviewDecision | null;
+  latestDecisionReasonCode: string | null;
+  modificationsDigest: ModificationDigest[];
+  /** Pointer/digest of the published artifact version — never the body. */
+  publishedResultRef: string | null;
+  publishedAt: string | null;
+  playbookId: string | null;
+  playbookVersion: string | null;
+  previousReviewItemId: string | null;
+  supersededByReviewItemId: string | null;
+  clientActionRef: string | null;
+  clientActionStatus: ClientActionStatus | null;
+  outcome: ReviewOutcome | null;
+  outcomeRecordedAt: string | null;
+  /** Null = orchestrator/system-created. */
+  createdByStaffId: string | null;
+  /** Review-time metric anchor — stamped ONLY on the FIRST entry into awaiting_review. */
+  submittedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/**
+ * One structured review decision — APPEND-ONLY (the feedback record the moat
+ * depends on; digests and field NAMES only, never content). Data governance
+ * (founder directive 2026-07-20): used ONLY for analytics, rule improvement,
+ * prompt improvement, workflow improvement, and QA — never for uncontrolled
+ * model training.
+ */
+export interface ReviewDecisionRecord {
+  id: string;
+  organizationId: string;
+  reviewItemId: string;
+  decision: ReviewDecision;
+  /** Structured RVD_* code from REVIEW_DECISION_REASON_CODES. */
+  reasonCode: string;
+  ruleVersion: string;
+  decidedByStaffId: string;
+  clientStageAtDecision: LifecycleStage | null;
+  workflowType: ReviewArtifactType;
+  aiRunId: string | null;
+  agentVersion: string | null;
+  /** Edited field NAMES only — never values. */
+  editedFields: string[];
+  /** sha256 hex digest of the final approved output — digest only. */
+  finalOutputSha256: string | null;
+  escalatedToRole: ReviewerRole | null;
+  detail: string | null;
+  decidedAt: string;
+}
+
+/** Playbook identity; content lives in versions. currentVersionId = latest PUBLISHED version. */
+export interface Playbook {
+  id: string;
+  organizationId: string;
+  playbookKey: string;
+  name: string;
+  currentVersionId: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/**
+ * One review-history entry on a playbook version (append-only). The founder's
+ * owner-override decision requires the override to be VISIBLE in review
+ * history — `ownerOverride` carries the recorded reason whenever the entry
+ * was allowed through the documented single-operator override.
+ */
+export interface PlaybookVersionReviewEvent {
+  action: "saved" | "submitted" | "approved" | "rejected" | "deferred" | "published" | "withdrawn" | "superseded";
+  actorStaffId: string;
+  reasonCode: string;
+  occurredAt: string;
+  ownerOverride: { reason: string } | null;
+}
+
+/** A playbook version — versioned tenant IP under the unified review vocabulary. */
+export interface PlaybookVersion {
+  id: string;
+  organizationId: string;
+  playbookId: string;
+  /** Plain semver, e.g. "1.0.0". */
+  version: string;
+  status: PlaybookVersionStatus;
+  effectiveDate: string | null;
+  authorStaffId: string;
+  approverStaffId: string | null;
+  approvedAt: string | null;
+  content: PlaybookContent;
+  /** Append-only review history (incl. any recorded owner override). */
+  reviewHistory: PlaybookVersionReviewEvent[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** A workflow-discovery queue item — the anti-invention question list. */
+export interface WorkflowDiscoveryItem {
+  id: string;
+  organizationId: string;
+  playbookId: string | null;
+  checkpointRef: string | null;
+  question: string;
+  context: string;
+  status: WorkflowDiscoveryStatus;
+  /** Null = system/seed-raised. */
+  raisedByStaffId: string | null;
+  answer: string | null;
+  answeredByStaffId: string | null;
+  answeredAt: string | null;
+  convertedPlaybookVersionId: string | null;
+  createdAt: string;
+  updatedAt: string;
 }

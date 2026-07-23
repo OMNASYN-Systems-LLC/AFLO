@@ -79,14 +79,54 @@ export class ReviewItemNotFoundError extends Error {
   }
 }
 
-/** Thrown when an artifact already has an OPEN review item (uq_review_items_open). */
+/**
+ * Thrown when the org-scoped 5-tuple (artifact_type, artifact_id,
+ * artifact_version, workflow_type) already has an OPEN review item
+ * (uq_review_items_open, migration 0010).
+ */
 export class OpenReviewItemExistsError extends Error {
   constructor(
     public readonly artifactType: string,
     public readonly artifactId: string,
+    public readonly artifactVersion: string,
+    public readonly workflowType: string,
   ) {
-    super(`artifact already has an open review item: ${artifactType}/${artifactId}`);
+    super(
+      `artifact already has an open review item: ${artifactType}/${artifactId}@${artifactVersion} (${workflowType})`,
+    );
     this.name = "OpenReviewItemExistsError";
+  }
+}
+
+/**
+ * Thrown when publication is attempted against a CHANGED artifact (founder
+ * invariant, verbatim: "review references artifact version and digest →
+ * artifact changes → review becomes stale → prior approval cannot publish
+ * changed content → new review required"). Also thrown fail-closed when the
+ * caller omits the current version/digest — publication without the staleness
+ * check does not exist. The correct path is supersession + a fresh ReviewItem
+ * for the new artifact version.
+ */
+export class StaleReviewItemError extends Error {
+  constructor(
+    public readonly reviewItemId: string,
+    public readonly stored: { artifactVersion: string; artifactDigest: string },
+    public readonly current: { artifactVersion: string | null; artifactDigest: string | null },
+  ) {
+    super(
+      `review item is stale — artifact changed since review: ${reviewItemId} ` +
+        `(reviewed ${stored.artifactVersion}/${stored.artifactDigest.slice(0, 12)}…, ` +
+        `current ${current.artifactVersion ?? "<missing>"}/${(current.artifactDigest ?? "<missing>").slice(0, 12)}…)`,
+    );
+    this.name = "StaleReviewItemError";
+  }
+}
+
+/** Thrown when `create` receives a malformed artifact version or digest. */
+export class InvalidReviewArtifactRefError extends Error {
+  constructor(public readonly reason: "empty_artifact_version" | "invalid_artifact_digest") {
+    super(`invalid review artifact reference: ${reason}`);
+    this.name = "InvalidReviewArtifactRefError";
   }
 }
 
@@ -282,6 +322,9 @@ function isoOrNull(value: Date | null): string | null {
   return value === null ? null : value.toISOString();
 }
 
+/** sha256 hex digest shape: exactly 64 lowercase hex characters. */
+const SHA256_HEX = /^[0-9a-f]{64}$/;
+
 // --- Review items -----------------------------------------------------------
 
 /** A source-fact reference: identifier + freshness timestamp ONLY, never a value. */
@@ -303,6 +346,10 @@ export interface ReviewItemRecord {
   clientId: string | null;
   artifactType: ReviewArtifactType;
   artifactId: string;
+  artifactVersion: string;
+  /** sha256 hex digest of the reviewed artifact content — digest only, never the body. */
+  artifactDigest: string;
+  workflowType: ReviewArtifactType;
   sourceFactSnapshots: SourceFactSnapshot[];
   ruleVersionsUsed: string[];
   aiRunId: string | null;
@@ -339,6 +386,15 @@ export interface CreateReviewItemInput {
   clientId?: string | null;
   artifactType: ReviewArtifactType;
   artifactId: string;
+  /** REQUIRED (migration 0010): the reviewed artifact version — non-empty trimmed. */
+  artifactVersion: string;
+  /** REQUIRED (migration 0010): sha256 hex digest of the reviewed content (64 lowercase hex). */
+  artifactDigest: string;
+  /**
+   * The workflow this review belongs to (founder 5-tuple). Defaults to
+   * `artifactType` here at the call-site type level — never silently in SQL.
+   */
+  workflowType?: ReviewArtifactType;
   sourceFactSnapshots?: SourceFactSnapshot[];
   ruleVersionsUsed?: string[];
   aiRunId?: string | null;
@@ -370,6 +426,14 @@ export interface ReviewItemTransitionPatch {
   supersededByReviewItemId?: string;
   /** The raised floor an allowed `escalated` decision carries (state stays awaiting_review). */
   requiredReviewerRole?: ReviewerRole;
+  /**
+   * REQUIRED when toState = "published" (stale-artifact invariant): the
+   * artifact's CURRENT version, compared against the reviewed one. Mismatch
+   * or omission → `StaleReviewItemError`; the item is NOT published.
+   */
+  currentArtifactVersion?: string;
+  /** REQUIRED when toState = "published": the artifact's CURRENT sha256 digest. */
+  currentArtifactDigest?: string;
 }
 
 export interface ListReviewItemsFilter {
@@ -388,6 +452,9 @@ function toReviewItem(row: ReviewItemRow): ReviewItemRecord {
     // the kernel unions here (the messaging-repository idiom).
     artifactType: row.artifactType as ReviewArtifactType,
     artifactId: row.artifactId,
+    artifactVersion: row.artifactVersion,
+    artifactDigest: row.artifactDigest,
+    workflowType: row.workflowType as ReviewArtifactType,
     sourceFactSnapshots: row.sourceFactSnapshots as SourceFactSnapshot[],
     ruleVersionsUsed: row.ruleVersionsUsed as string[],
     aiRunId: row.aiRunId,
@@ -436,6 +503,15 @@ export class DrizzleReviewItemRepository {
     if (state !== "draft" && state !== "awaiting_review") {
       throw new InvalidInitialReviewStateError(state);
     }
+    // Migration-0010 requirements: a non-empty trimmed artifact version and a
+    // well-formed sha256 hex digest — the stale-artifact invariant's anchors.
+    const artifactVersion = input.artifactVersion?.trim() ?? "";
+    if (artifactVersion.length === 0) throw new InvalidReviewArtifactRefError("empty_artifact_version");
+    if (typeof input.artifactDigest !== "string" || !SHA256_HEX.test(input.artifactDigest)) {
+      throw new InvalidReviewArtifactRefError("invalid_artifact_digest");
+    }
+    // Call-site-level default only — never silently in SQL.
+    const workflowType = input.workflowType ?? input.artifactType;
     return withOrgContext(this.db, organizationId, async (tx) => {
       // FK validation bypasses RLS — every caller-supplied cross-table
       // reference must be verified visible in THIS org before it is written.
@@ -452,6 +528,9 @@ export class DrizzleReviewItemRepository {
             clientId: input.clientId ?? null,
             artifactType: input.artifactType,
             artifactId: input.artifactId,
+            artifactVersion,
+            artifactDigest: input.artifactDigest,
+            workflowType,
             sourceFactSnapshots: input.sourceFactSnapshots ?? [],
             ruleVersionsUsed: input.ruleVersionsUsed ?? [],
             aiRunId: input.aiRunId ?? null,
@@ -473,7 +552,9 @@ export class DrizzleReviewItemRepository {
           .returning();
         return toReviewItem(inserted[0]!);
       } catch (err) {
-        if (isUniqueViolation(err)) throw new OpenReviewItemExistsError(input.artifactType, input.artifactId);
+        if (isUniqueViolation(err)) {
+          throw new OpenReviewItemExistsError(input.artifactType, input.artifactId, artifactVersion, workflowType);
+        }
         throw err;
       }
     });
@@ -522,7 +603,7 @@ export class DrizzleReviewItemRepository {
   ): Promise<ReviewItemRecord> {
     return withOrgContext(this.db, organizationId, async (tx) => {
       const head = await loadReviewItemHead(tx, reviewItemId);
-      const set = await buildTransitionSet(tx, toState, head.submittedAt, now, patch);
+      const set = await buildTransitionSet(tx, reviewItemId, toState, head, now, patch);
       const updated = await tx
         .update(reviewItems)
         .set(set)
@@ -551,7 +632,7 @@ export class DrizzleReviewItemRepository {
     return withOrgContext(this.db, organizationId, async (tx) => {
       const head = await loadReviewItemHead(tx, input.reviewItemId);
       const decision = await insertDecisionRow(tx, organizationId, input, now);
-      const set = await buildTransitionSet(tx, input.toState, head.submittedAt, now, {
+      const set = await buildTransitionSet(tx, input.reviewItemId, input.toState, head, now, {
         ...input.headPatch,
         reviewedByMemberId: input.decidedByMemberId,
         latestDecision: input.decision,
@@ -572,9 +653,13 @@ export class DrizzleReviewItemRepository {
 async function loadReviewItemHead(
   tx: TenantScopedDb,
   reviewItemId: string,
-): Promise<{ submittedAt: Date | null }> {
+): Promise<{ submittedAt: Date | null; artifactVersion: string; artifactDigest: string }> {
   const rows = await tx
-    .select({ submittedAt: reviewItems.submittedAt })
+    .select({
+      submittedAt: reviewItems.submittedAt,
+      artifactVersion: reviewItems.artifactVersion,
+      artifactDigest: reviewItems.artifactDigest,
+    })
     .from(reviewItems)
     .where(eq(reviewItems.id, reviewItemId))
     .limit(1);
@@ -586,12 +671,17 @@ async function loadReviewItemHead(
  * The ONE place transition bookkeeping is computed (`saveTransition` and
  * `recordDecisionAndTransition` share it). Verifies every caller-supplied
  * cross-table reference in the patch org-visible before it is written (F1),
- * and stamps `submitted_at` ONLY when the item has never been submitted (F2).
+ * stamps `submitted_at` ONLY when the item has never been submitted (F2), and
+ * enforces the STALE-ARTIFACT publication invariant: publishing requires the
+ * caller-supplied CURRENT artifact version + digest to match the reviewed
+ * ones exactly — a changed (or unstated) artifact throws
+ * `StaleReviewItemError` and nothing is written. New review required.
  */
 async function buildTransitionSet(
   tx: TenantScopedDb,
+  reviewItemId: string,
   toState: ReviewItemState,
-  currentSubmittedAt: Date | null,
+  head: { submittedAt: Date | null; artifactVersion: string; artifactDigest: string },
   now: Date,
   patch?: ReviewItemTransitionPatch,
 ): Promise<Partial<typeof reviewItems.$inferInsert>> {
@@ -601,7 +691,7 @@ async function buildTransitionSet(
   };
   // F2: first entry into awaiting_review ONLY — an escalation re-persisting
   // awaiting_review must not move the review-time metric anchor.
-  if (toState === "awaiting_review" && currentSubmittedAt === null) set.submittedAt = now;
+  if (toState === "awaiting_review" && head.submittedAt === null) set.submittedAt = now;
   if (toState === "approved" || toState === "rejected" || toState === "deferred") {
     set.reviewedAt = now;
     if (patch?.reviewedByMemberId !== undefined) {
@@ -610,6 +700,21 @@ async function buildTransitionSet(
     }
   }
   if (toState === "published") {
+    // Stale-artifact invariant (fail closed): publication without the current
+    // version + digest, or against a changed artifact, does not exist.
+    if (
+      patch?.currentArtifactVersion !== head.artifactVersion ||
+      patch?.currentArtifactDigest !== head.artifactDigest
+    ) {
+      throw new StaleReviewItemError(
+        reviewItemId,
+        { artifactVersion: head.artifactVersion, artifactDigest: head.artifactDigest },
+        {
+          artifactVersion: patch?.currentArtifactVersion ?? null,
+          artifactDigest: patch?.currentArtifactDigest ?? null,
+        },
+      );
+    }
     set.publishedAt = now;
     if (patch?.publishedResultRef !== undefined) set.publishedResultRef = patch.publishedResultRef;
   }

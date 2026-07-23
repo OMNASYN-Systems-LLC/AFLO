@@ -1,4 +1,12 @@
-import type { LifecycleStage } from "@aflo/rules";
+import type {
+  LifecycleStage,
+  ReviewArtifactType,
+  ReviewDecision,
+  ReviewItemState,
+  ReviewRiskClass,
+  ReviewerRole,
+  WorkflowDiscoveryStatus,
+} from "@aflo/rules";
 import type { ReviewStatus } from "@aflo/ai";
 import type { EventType } from "./catalog";
 
@@ -248,6 +256,102 @@ export interface MessageReadPayload {
   messageCount: number;
 }
 
+// --- Human Review Center + Playbooks + Workflow Discovery (A PR-5) ----------
+// Every payload here carries IDS, DIGESTS, AND REASON CODES ONLY — never an
+// artifact body, edited content, or answer text. Domain records stay the
+// source of truth; the outbox stays free of sensitive content.
+
+export interface ReviewItemCreatedPayload {
+  reviewItemId: string;
+  clientId: string | null;
+  artifactType: ReviewArtifactType;
+  artifactId: string;
+  artifactVersion: string;
+  /** sha256 hex digest of the reviewed artifact content — digest only. */
+  artifactDigest: string;
+  workflowType: ReviewArtifactType;
+  riskClassification: ReviewRiskClass;
+  requiredReviewerRole: ReviewerRole;
+  /** Birth state: "draft", or "awaiting_review" for gated AI output landing directly in the queue. */
+  state: ReviewItemState;
+  previousReviewItemId: string | null;
+}
+
+export interface ReviewItemSubmittedPayload {
+  reviewItemId: string;
+  artifactType: ReviewArtifactType;
+  /** True only on the FIRST entry into awaiting_review (the metric anchor stamp). */
+  firstSubmission: boolean;
+}
+
+export interface ReviewDecisionRecordedPayload {
+  reviewItemId: string;
+  decisionId: string;
+  decision: ReviewDecision;
+  /** Structured RVD_* reason code. */
+  reasonCode: string;
+  toState: ReviewItemState;
+  escalatedToRole: ReviewerRole | null;
+  /** Count of recorded field modifications (names/digests live on the records). */
+  modifiedFieldCount: number;
+}
+
+export interface ReviewItemPublishedPayload {
+  reviewItemId: string;
+  artifactType: ReviewArtifactType;
+  artifactId: string;
+  artifactVersion: string;
+  artifactDigest: string;
+  publishedByStaffId: string;
+}
+
+export interface ReviewItemSupersededPayload {
+  reviewItemId: string;
+  supersededByReviewItemId: string;
+}
+
+export interface ReviewItemWithdrawnPayload {
+  reviewItemId: string;
+  artifactType: ReviewArtifactType;
+  withdrawnByStaffId: string;
+}
+
+export interface ReviewOutcomeRecordedPayload {
+  reviewItemId: string;
+  clientActionStatus: string;
+  outcome: string;
+}
+
+export interface PlaybookVersionSavedPayload {
+  playbookId: string;
+  playbookVersionId: string;
+  version: string;
+  authorStaffId: string;
+}
+
+export interface PlaybookVersionPublishedPayload {
+  playbookId: string;
+  playbookVersionId: string;
+  version: string;
+  publishedByStaffId: string;
+  supersededVersionId: string | null;
+  /** True when publication was allowed via the documented single-operator owner override. */
+  usedOwnerOverride: boolean;
+}
+
+export interface WorkflowDiscoveryRaisedPayload {
+  discoveryItemId: string;
+  playbookId: string | null;
+  checkpointRef: string | null;
+}
+
+export interface WorkflowDiscoveryResolvedPayload {
+  discoveryItemId: string;
+  toStatus: WorkflowDiscoveryStatus;
+  /** The playbook version that absorbed the answer (converted only). */
+  convertedPlaybookVersionId: string | null;
+}
+
 /** Compile-time map from event type to payload shape (exhaustive). */
 export interface EventPayloadMap {
   LeadCreated: LeadCreatedPayload;
@@ -280,6 +384,17 @@ export interface EventPayloadMap {
   ConsentRevoked: ConsentRevokedPayload;
   MessagePosted: MessagePostedPayload;
   MessageRead: MessageReadPayload;
+  ReviewItemCreated: ReviewItemCreatedPayload;
+  ReviewItemSubmitted: ReviewItemSubmittedPayload;
+  ReviewDecisionRecorded: ReviewDecisionRecordedPayload;
+  ReviewItemPublished: ReviewItemPublishedPayload;
+  ReviewItemSuperseded: ReviewItemSupersededPayload;
+  ReviewItemWithdrawn: ReviewItemWithdrawnPayload;
+  ReviewOutcomeRecorded: ReviewOutcomeRecordedPayload;
+  PlaybookVersionSaved: PlaybookVersionSavedPayload;
+  PlaybookVersionPublished: PlaybookVersionPublishedPayload;
+  WorkflowDiscoveryRaised: WorkflowDiscoveryRaisedPayload;
+  WorkflowDiscoveryResolved: WorkflowDiscoveryResolvedPayload;
 }
 
 // Exhaustiveness guarantee: if EventPayloadMap ever misses an EventType (or
