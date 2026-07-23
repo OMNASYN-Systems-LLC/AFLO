@@ -196,13 +196,14 @@ describe("founder decision #2 — role floors and separation of duties", () => {
         ownerOverride: { reason: "  ", attestsNotRegulatedAdvice: true },
       }),
     ).toMatchObject({ ok: false, reasonCode: "PB_OVERRIDE_REASON_REQUIRED" });
-    // Complete override → allowed; visible in review history; audited.
+    // Complete override → allowed; visible in review history; audited. The
+    // padded reason proves the L1 clamp: the recorded value is TRIMMED.
     const approved = store.transitionPlaybookVersion({
       organizationId: ORG,
       versionId: id,
       toStatus: "approved",
       actorStaffId: "s-mercer",
-      ownerOverride: { reason: "Sole authorized operator; content is generic education", attestsNotRegulatedAdvice: true },
+      ownerOverride: { reason: "  Sole authorized operator; content is generic education  ", attestsNotRegulatedAdvice: true },
     });
     expect(approved.ok).toBe(true);
     const historyEntry = approved.version!.reviewHistory.at(-1)!;
@@ -222,6 +223,35 @@ describe("founder decision #2 — role floors and separation of duties", () => {
     });
     expect(published.ok).toBe(true);
     expect(published.version!.reviewHistory.at(-1)!.ownerOverride).not.toBeNull();
+  });
+});
+
+describe("review-history entries — the ONE cross-layer contract shape (ADR-0047)", () => {
+  it("every entry is exactly {action, actorMemberId, reasonCode, ownerOverride, occurredAt}", () => {
+    const store = makeStore();
+    const saved = draftVersion(store, "s-boyd");
+    const id = saved.version!.id;
+    store.transitionPlaybookVersion({ organizationId: ORG, versionId: id, toStatus: "awaiting_review", actorStaffId: "s-boyd" });
+    const entries = store.database().playbookVersions.find((v) => v.id === id)!.reviewHistory;
+    expect(entries.length).toBeGreaterThan(0);
+    // The exact key set the DURABLE layer writes to playbook_versions.review_history
+    // (DrizzlePlaybookRepository) — one contract, no drift.
+    for (const entry of entries) {
+      expect(Object.keys(entry).sort()).toEqual([
+        "action",
+        "actorMemberId",
+        "occurredAt",
+        "ownerOverride",
+        "reasonCode",
+      ]);
+    }
+    expect(entries.at(-1)).toEqual({
+      action: "submitted",
+      actorMemberId: "s-boyd",
+      reasonCode: "PB_SUBMITTED",
+      ownerOverride: null,
+      occurredAt: NOW.toISOString(),
+    });
   });
 });
 

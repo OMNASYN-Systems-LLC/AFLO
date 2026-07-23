@@ -536,6 +536,7 @@ export const RULE_REGISTRY: readonly RuleDefinition[] = [
       "PB_AUTHOR_APPROVER_SEPARATION",
       "PB_OVERRIDE_NOT_PERMITTED",
       "PB_OVERRIDE_REASON_REQUIRED",
+      "PB_OVERRIDE_REASON_TOO_LONG",
     ],
     sources: [],
     changeHistory: [
@@ -543,6 +544,11 @@ export const RULE_REGISTRY: readonly RuleDefinition[] = [
         version: "playbook.v1.0.0",
         date: "2026-07-23",
         note: "Founder-resolved author/approver separation + owner override (store wiring slice).",
+      },
+      {
+        version: "playbook.v1.0.0",
+        date: "2026-07-23",
+        note: "Override reason bounded in the kernel (trimmed, ≤500 chars — PB_OVERRIDE_REASON_TOO_LONG); both enforcement layers inherit it (ADR-0047 review fix L1).",
       },
     ],
   },

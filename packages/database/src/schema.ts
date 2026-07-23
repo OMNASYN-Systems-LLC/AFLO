@@ -95,6 +95,16 @@ export const organizations = pgTable("organizations", {
   name: text("name").notNull(),
   slug: text("slug").notNull().unique(),
   isActive: boolean("is_active").notNull().default(true),
+  /**
+   * Founder decision 2026-07-23 #2 (migration 0011): whether this tenant
+   * permits the DOCUMENTED single-operator owner override of the playbook
+   * author/approver separation rules (reason recorded, audited, not regulated
+   * advice, visible in review history). Default FALSE — matching the
+   * @aflo/shared Organization default, including the Golden Key seed.
+   */
+  allowSingleOperatorPlaybookOverride: boolean("allow_single_operator_playbook_override")
+    .notNull()
+    .default(false),
   /** Configurable pipeline, intake, and other tenant settings (charter). */
   settings: jsonb("settings").notNull().default(sql`'{}'::jsonb`),
   ...timestamps,
@@ -1153,6 +1163,23 @@ export const playbookVersions = pgTable(
       onDelete: "set null",
     }),
     approvedAt: timestamp("approved_at", { withTimezone: true }),
+    /**
+     * Publisher identity (migration 0011, founder decision 2026-07-23 #2):
+     * stamped by the repository from the ACTING member on publish — never
+     * optional, never anonymous. Author/publisher separation is enforced by
+     * `canActOnPlaybookVersion` in the single write path.
+     */
+    publishedByMemberId: uuid("published_by_member_id").references(() => organizationMembers.id, {
+      onDelete: "set null",
+    }),
+    /**
+     * APPEND-ONLY review history (migration 0011): one
+     * `{action, actorMemberId, reasonCode, ownerOverride, occurredAt}` entry
+     * per executed transition — ids/codes only, never content. The founder's
+     * documented owner override is VISIBLE here. The repository always
+     * read-modifies-appends inside the transition transaction, never replaces.
+     */
+    reviewHistory: jsonb("review_history").notNull().default(sql`'[]'::jsonb`),
     /** The typed @aflo/rules PlaybookContent object (validator-gated on write). */
     content: jsonb("content").notNull(),
     ...timestamps,

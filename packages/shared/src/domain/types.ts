@@ -467,10 +467,17 @@ export interface Playbook {
  * owner-override decision requires the override to be VISIBLE in review
  * history — `ownerOverride` carries the recorded reason whenever the entry
  * was allowed through the documented single-operator override.
+ *
+ * THE ONE CONTRACT (ADR-0047): this exact shape is what BOTH layers write —
+ * the in-memory store to `PlaybookVersion.reviewHistory` and the Drizzle
+ * repository to the `playbook_versions.review_history` jsonb column. The
+ * actor field is `actorMemberId` (the durable layer's organization-member id;
+ * the store's staff ids ARE its member ids). Ids and reason codes only —
+ * never content.
  */
 export interface PlaybookVersionReviewEvent {
   action: "saved" | "submitted" | "approved" | "rejected" | "deferred" | "published" | "withdrawn" | "superseded";
-  actorStaffId: string;
+  actorMemberId: string;
   reasonCode: string;
   occurredAt: string;
   ownerOverride: { reason: string } | null;
