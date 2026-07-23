@@ -133,9 +133,15 @@ export type ReviewCenterReasonCode =
   //    (otherwise qualified) actor is neither the assignee nor
   //    organization_admin+ — the founder matrix's "assigned" qualifier,
   //    narrowing authorization ON TOP of canReview (never widening it).
+  //  - RVC_BRIDGED_ARTIFACT (ADR-0049): the item shadows a BRIDGED domain
+  //    artifact (roadmap_draft, quarterly_report) whose DOMAIN status is
+  //    authoritative — no public review API may create or transition it
+  //    directly; it moves ONLY as the derived shadow of its domain workflow
+  //    transition (audited denial; anti-two-architectures).
   | "RVC_BLOCKED_ENVELOPE"
   | "RVC_STALE_ARTIFACT"
-  | "RVC_NOT_ASSIGNED_REVIEWER";
+  | "RVC_NOT_ASSIGNED_REVIEWER"
+  | "RVC_BRIDGED_ARTIFACT";
 
 /**
  * Structured decision reason codes (founder: "reason codes must be

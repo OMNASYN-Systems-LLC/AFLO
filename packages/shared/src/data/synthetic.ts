@@ -1082,13 +1082,28 @@ const messages: Message[] = [
 ];
 
 /**
- * Human Review Center seeds (Workstream A PR-5) — items across several states
- * and queues so the future UI slice has data. Every digest below is the REAL
- * sha256 of the canonical synthetic string
- * `AFLO-SYNTHETIC-ARTIFACT::<artifactId>::v<artifactVersion>` — precomputed as
- * literals so this module stays free of node:crypto (it is bundled
- * client-side); the seed test recomputes and asserts each one. Digests and
- * identifiers ONLY — never artifact bodies. No real PII (Architecture Rule 9).
+ * Human Review Center seeds (Workstream A PR-5 + ADR-0049 bridges) — items
+ * across several states and queues so the UI slice has data. Two digest
+ * conventions, both precomputed as literals so this module stays free of
+ * node:crypto (it is bundled client-side) and both recomputed + asserted by
+ * the seed tests:
+ *
+ *   NATIVE items — sha256 of the canonical synthetic string
+ *   `AFLO-SYNTHETIC-ARTIFACT::<artifactId>::v<artifactVersion>`.
+ *
+ *   BRIDGED shadows (roadmap_draft, quarterly_report — ADR-0049) — sha256 of
+ *   the canonical domain-row serialization from
+ *   `store/review-bridges.ts` (`canonicalRoadmapSerialization` /
+ *   `canonicalReportSerialization`), so seeded shadows are bit-identical to
+ *   what the bridge would lazily mint. Every bridged domain row in an OPEN
+ *   workflow state (draft / staff_review / ready_for_review) seeds a
+ *   consistent shadow whose state IS the pure mapping of the domain status;
+ *   PUBLISHED seed roadmaps/reports predate the Review Center and carry no
+ *   shadow (lazy creation covers their future transitions) — the
+ *   shadow-consistency invariant test pins all of this.
+ *
+ * Digests and identifiers ONLY — never artifact bodies. No real PII
+ * (Architecture Rule 9).
  */
 function reviewItem(
   overrides: Partial<ReviewItem> &
@@ -1130,20 +1145,38 @@ function reviewItem(
 }
 
 const reviewItems: ReviewItem[] = [
-  // Staff-authored roadmap revision still in draft (Devon Pryor's draft roadmap).
+  // BRIDGED shadow of Devon Pryor's DRAFT roadmap (roadmap.v1.0.0
+  // authoritative; mapping draft → draft). Digest = sha256 of the canonical
+  // roadmap serialization of r-c-pryor.
   reviewItem({
     id: "rvi-pryor-roadmap",
     clientId: "c-pryor",
     artifactType: "roadmap_draft",
     artifactId: "r-c-pryor",
     artifactVersion: "1",
-    artifactDigest: "b322dfcf277d9358fd7476ba6c745f99e86e81aa1845f5975d0cec96218f0752",
+    artifactDigest: "a00a7e2b7565d6aa94b4494910401a2766ddd410fe80226f621a1a6f6de921f8",
     state: "draft",
     sourceFactSnapshots: [{ factId: "credit_profiles.revolving_balance", asOf: daysAgo(9) }],
     ruleVersionsUsed: ["roadmap.v1.0.0"],
     createdByStaffId: "s-boyd",
     createdAt: daysAgo(6),
     updatedAt: daysAgo(6),
+  }),
+  // BRIDGED shadow of Sofia Ramirez's roadmap IN STAFF REVIEW (mapping
+  // staff_review → awaiting_review; submittedAt stamped on queue entry).
+  reviewItem({
+    id: "rvi-ramirez-roadmap",
+    clientId: "c-ramirez",
+    artifactType: "roadmap_draft",
+    artifactId: "r-c-ramirez",
+    artifactVersion: "1",
+    artifactDigest: "6e99c18cc2af5a0c21afb8280f526fa5e508efaca1100ffbd82e64defc8b89e2",
+    state: "awaiting_review",
+    ruleVersionsUsed: ["roadmap.v1.0.0"],
+    createdByStaffId: "s-lin",
+    submittedAt: daysAgo(3),
+    createdAt: daysAgo(3),
+    updatedAt: daysAgo(3),
   }),
   // AI-drafted concierge recommendation gated straight into the queue (HIGH —
   // founder decision 2026-07-23 #1: credit-related guidance).
@@ -1186,15 +1219,46 @@ const reviewItems: ReviewItem[] = [
     createdAt: daysAgo(4),
     updatedAt: daysAgo(3),
   }),
-  // Quarterly report approved with edits — awaiting publication (v2 of the
-  // report artifact; v1's item was superseded by this one).
+  // BRIDGED shadow of Renee Solomon's Q2 report, READY FOR REVIEW (mapping
+  // ready_for_review → awaiting_review). Reports are generated
+  // deterministically from recorded facts — no author (system-authored).
   reviewItem({
     id: "rvi-solomon-report",
     clientId: "c-solomon",
     artifactType: "quarterly_report",
     artifactId: "qr-solomon-q2",
+    artifactVersion: "1",
+    artifactDigest: "f7d2c73c9d150771c1d03569f6bc307c2fd30edc97f10e1e751293bcb841277e",
+    state: "awaiting_review",
+    ruleVersionsUsed: ["report.v1.0.0"],
+    submittedAt: daysAgo(5),
+    createdAt: daysAgo(5),
+    updatedAt: daysAgo(5),
+  }),
+  // BRIDGED shadow of Tanya Okafor's DRAFT Q2 report (mapping draft → draft).
+  reviewItem({
+    id: "rvi-okafor-report",
+    clientId: "c-okafor",
+    artifactType: "quarterly_report",
+    artifactId: "qr-okafor-q2",
+    artifactVersion: "1",
+    artifactDigest: "8197380f97f5c0a6e7f68c1c38bcbd85f10af654b7ecff2680e55364c4c5e28a",
+    state: "draft",
+    ruleVersionsUsed: ["report.v1.0.0"],
+    createdAt: daysAgo(2),
+    updatedAt: daysAgo(2),
+  }),
+  // NATIVE financial summary approved with edits — awaiting publication (v2
+  // of the summary artifact; v1's item was superseded by this one). The demo
+  // artifact registry has since revised the artifact to v3, so publication is
+  // stale-denied end to end (founder decision 4 made visible).
+  reviewItem({
+    id: "rvi-solomon-summary",
+    clientId: "c-solomon",
+    artifactType: "financial_summary",
+    artifactId: "fs-c-solomon-2026-07",
     artifactVersion: "2",
-    artifactDigest: "fe9fc22dbf35bb9612605d2212bcb4d7c999974678b7803bb8df5ac9c36f1994",
+    artifactDigest: "929eb0b9520b243b331de4a75fa25a47cb66994515d70c94c38cfe175d527aac",
     state: "approved",
     createdByStaffId: "s-boyd",
     reviewedByStaffId: "s-mercer",
@@ -1203,7 +1267,7 @@ const reviewItems: ReviewItem[] = [
     latestDecisionReasonCode: "RVD_EDITED_TONE",
     modificationsDigest: [
       {
-        field: "focusForNextQuarter",
+        field: "outlook",
         beforeSha256: "9c2e5f8a8f6d5c0b7a4e3d2c1b0a99887766554433221100ffeeddccbbaa9988",
         afterSha256: "1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f809",
       },
@@ -1283,19 +1347,19 @@ const reviewDecisions: ReviewDecisionRecord[] = [
     decidedAt: daysAgo(3),
   },
   {
-    id: "rvd-solomon-report-1",
+    id: "rvd-solomon-summary-1",
     organizationId: ORG_ID,
-    reviewItemId: "rvi-solomon-report",
+    reviewItemId: "rvi-solomon-summary",
     decision: "approved_with_edits",
     reasonCode: "RVD_EDITED_TONE",
     ruleVersion: "review_center.v1.0.0",
     decidedByStaffId: "s-mercer",
     clientStageAtDecision: "credit_readiness",
-    workflowType: "quarterly_report",
+    workflowType: "financial_summary",
     aiRunId: null,
     agentVersion: null,
-    editedFields: ["focusForNextQuarter"],
-    finalOutputSha256: "fe9fc22dbf35bb9612605d2212bcb4d7c999974678b7803bb8df5ac9c36f1994",
+    editedFields: ["outlook"],
+    finalOutputSha256: "929eb0b9520b243b331de4a75fa25a47cb66994515d70c94c38cfe175d527aac",
     escalatedToRole: null,
     detail: null,
     decidedAt: daysAgo(1),

@@ -15,11 +15,12 @@ test("queue index renders seeded queues, counts, and honest metrics", async ({ p
   await page.goto("/reviews");
   await expect(page.getByRole("heading", { name: "Review Center" })).toBeVisible();
 
-  // Analytics strip from reviewMetrics: 2 awaiting; median 1440 min = 24 h;
-  // approval rate 2 of 4 seeded decisions — honest denominator shown.
+  // Analytics strip from reviewMetrics: 4 awaiting (two native + the two
+  // bridged domain shadows, ADR-0049); median 1440 min = 24 h; approval rate
+  // 2 of 4 seeded decisions — honest denominator shown.
   const tiles = page.getByTestId("review-metrics").locator("> div");
   await expect(tiles.nth(0)).toContainText("Awaiting review");
-  await expect(tiles.nth(0)).toContainText("2");
+  await expect(tiles.nth(0)).toContainText("4");
   await expect(tiles.nth(1)).toContainText("24 h");
   await expect(tiles.nth(2)).toContainText("50%");
   await expect(tiles.nth(2)).toContainText("of 4 decisions");
@@ -31,15 +32,15 @@ test("queue index renders seeded queues, counts, and honest metrics", async ({ p
   await expect(conciergeCard).toContainText("Awaiting review 1");
   await expect(conciergeCard).toContainText("High risk 1");
 
-  // All six seeded items in the table; the escalated item shows its raised
+  // All nine seeded items in the table; the escalated item shows its raised
   // reviewer floor.
-  await expect(page.locator("tbody tr")).toHaveCount(6);
+  await expect(page.locator("tbody tr")).toHaveCount(9);
   const escalatedRow = page.locator("tbody tr").filter({ hasText: "fs-c-okafor-2026-07" });
   await expect(escalatedRow).toContainText("Organization Admin");
 
-  // State filter narrows to the two awaiting items.
+  // State filter narrows to the four awaiting items.
   await page.goto("/reviews?state=awaiting_review");
-  await expect(page.locator("tbody tr")).toHaveCount(2);
+  await expect(page.locator("tbody tr")).toHaveCount(4);
 });
 
 test("item detail shows full provenance and the client-safe boundary", async ({ page }) => {
@@ -92,10 +93,10 @@ test("publishing the approved item succeeds and fills the client projection", as
 });
 
 test("publishing a stale item renders the distinct stale-artifact denial", async ({ page }) => {
-  // rvi-solomon-report was approved at artifact v2, but the demo artifact
+  // rvi-solomon-summary was approved at artifact v2, but the demo artifact
   // source records the artifact as since revised to v3 — the founder's
   // stale-artifact invariant must deny publication.
-  await page.goto("/reviews/rvi-solomon-report");
+  await page.goto("/reviews/rvi-solomon-summary");
   await expect(page.getByText(/The artifact has changed since this review/)).toBeVisible();
 
   await page.getByRole("button", { name: "Publish to client" }).click();

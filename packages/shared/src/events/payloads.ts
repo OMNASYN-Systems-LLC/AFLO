@@ -307,7 +307,12 @@ export interface ReviewItemPublishedPayload {
 
 export interface ReviewItemSupersededPayload {
   reviewItemId: string;
-  supersededByReviewItemId: string;
+  /**
+   * The replacement item, or null for a bridged-shadow supersession with no
+   * replacement (ADR-0049): an ARCHIVED roadmap's shadow is superseded
+   * terminally — the domain row left circulation, nothing replaces it.
+   */
+  supersededByReviewItemId: string | null;
 }
 
 export interface ReviewItemWithdrawnPayload {

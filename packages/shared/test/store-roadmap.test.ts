@@ -14,6 +14,10 @@ function pryor(store: AfloStore) {
   return store.database().roadmaps.find((r) => r.id === "r-c-pryor")!;
 }
 
+function outboxEvents(store: AfloStore) {
+  return store.outbox.map((r) => deserializeEvent(r.serializedEvent));
+}
+
 describe("transitionRoadmap — approval path", () => {
   it("walks draft → staff_review → approved → published with events and audit", () => {
     const store = makeStore();
@@ -25,7 +29,9 @@ describe("transitionRoadmap — approval path", () => {
     });
     expect(submit.ok).toBe(true);
     expect(submit.transition?.reasonCode).toBe("RM_SUBMITTED");
-    expect(store.outbox).toHaveLength(0); // submission is audit-only
+    // Submission emits no DOMAIN event; the bridged review shadow entering
+    // the queue in the same mutation is the only outbox record (ADR-0049).
+    expect(outboxEvents(store).map((e) => e.eventType)).toEqual(["ReviewItemSubmitted"]);
 
     const approve = store.transitionRoadmap({
       organizationId: ORG,
@@ -39,8 +45,7 @@ describe("transitionRoadmap — approval path", () => {
       approvedByStaffId: "s-mercer",
       approvedAt: NOW.toISOString(),
     });
-    const approvedEvent = deserializeEvent(store.outbox.at(-1)!.serializedEvent);
-    expect(approvedEvent.eventType).toBe("RoadmapApproved");
+    const approvedEvent = outboxEvents(store).find((e) => e.eventType === "RoadmapApproved")!;
     expect(approvedEvent.payload).toMatchObject({
       clientId: "c-pryor",
       approvedByMemberId: "s-mercer",
@@ -55,8 +60,7 @@ describe("transitionRoadmap — approval path", () => {
     });
     expect(publish.ok).toBe(true);
     expect(pryor(store).publishedAt).toBe(NOW.toISOString());
-    const publishedEvent = deserializeEvent(store.outbox.at(-1)!.serializedEvent);
-    expect(publishedEvent.eventType).toBe("RoadmapPublished");
+    expect(outboxEvents(store).some((e) => e.eventType === "RoadmapPublished")).toBe(true);
 
     const actions = store.auditFor(ORG).map((a) => a.action);
     expect(actions).toEqual(

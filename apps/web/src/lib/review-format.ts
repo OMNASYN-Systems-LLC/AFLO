@@ -95,6 +95,8 @@ export const REVIEW_DENIAL_MESSAGES: Record<string, string> = {
   RVC_UNKNOWN_STATE: "Unknown review state.",
   RVC_STALE_ARTIFACT: "Artifact changed since approval — new review required.",
   RVC_BLOCKED_ENVELOPE: "Blocked envelope — prohibited actions were detected.",
+  RVC_BRIDGED_ARTIFACT:
+    "This item shadows its domain workflow — move the roadmap/report itself; its review state follows automatically.",
 };
 
 /** Fallbacks for store denial codes that carry no kernel reason code. */
@@ -106,6 +108,8 @@ export const REVIEW_DENIAL_CODE_MESSAGES: Record<string, string> = {
   OPEN_REVIEW_EXISTS: "An open review already exists for this artifact version.",
   BLOCKED_ENVELOPE: "Blocked envelope — prohibited actions were detected.",
   STALE_ARTIFACT: "Artifact changed since approval — new review required.",
+  BRIDGED_ARTIFACT:
+    "This item shadows its domain workflow — move the roadmap/report itself; its review state follows automatically.",
   CLIENT_NOT_FOUND: "Client not found in this organization.",
   PLAYBOOK_NOT_FOUND: "Playbook not found in this organization.",
 };
