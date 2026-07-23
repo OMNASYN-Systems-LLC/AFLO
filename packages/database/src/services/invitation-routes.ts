@@ -65,6 +65,52 @@ import type {
  */
 
 // ---------------------------------------------------------------------------
+// Audit emission (matrix §7 row 1 — the ADR-0042 deferral, closed by ADR-0044)
+// ---------------------------------------------------------------------------
+
+/**
+ * One membership-creation audit event (invitation issued / accepted). Ids and
+ * codes ONLY — never emails, never tokens (raw or digest), never PII. The
+ * production sink is `DrizzleAuditEventRepository` (org-scoped, RLS-enforced);
+ * emission failure never fails the request (the state change already
+ * committed) — it is surfaced via `onAuditFailure` as a logged secondary error.
+ */
+export interface InvitationAuditEvent {
+  organizationId: string;
+  actorMemberId: string | null;
+  action: "invitation.issued" | "invitation.accepted";
+  targetType: "invitation" | "organization_member" | "client_user_link";
+  targetId: string;
+  /** Compact JSON of identifiers/codes only. */
+  detail: string | null;
+  reasonCode: string | null;
+  occurredAt: Date;
+}
+
+/** Optional in the type, REQUIRED in composition (both routes inject it). */
+export interface InvitationAuditSink {
+  record(event: InvitationAuditEvent): Promise<void>;
+}
+
+function defaultAuditFailureLog(error: unknown): void {
+  console.error("[invitations] audit write failed (state change already committed)", error);
+}
+
+/** Emit, never throw: audit failure must not fail an already-committed change. */
+async function emitInvitationAudit(
+  sink: InvitationAuditSink | undefined,
+  onAuditFailure: ((error: unknown) => void) | undefined,
+  event: InvitationAuditEvent,
+): Promise<void> {
+  if (!sink) return;
+  try {
+    await sink.record(event);
+  } catch (error) {
+    (onAuditFailure ?? defaultAuditFailureLog)(error);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Issuance (B6)
 // ---------------------------------------------------------------------------
 
@@ -88,6 +134,10 @@ export interface IssueInvitationRouteDeps {
   generateToken: () => { token: string; tokenHash: string };
   /** Validity window in milliseconds; defaults to DEFAULT_INVITATION_TTL_MS. */
   ttlMs?: number;
+  /** Matrix §7 audit sink — optional in the type, REQUIRED in composition. */
+  auditSink?: InvitationAuditSink;
+  /** Secondary-error channel for a failed audit write (default: console.error). */
+  onAuditFailure?: (error: unknown) => void;
 }
 
 /** Unvalidated request-body fields — the service validates, the route only parses JSON. */
@@ -206,7 +256,25 @@ export async function handleIssueInvitation(
     throw err;
   }
 
-  // 7. The ONE appearance of the raw token (see module doc).
+  // 7. Matrix §7 row 1: the issuance is audited — ids/role only, NEVER the
+  //    email and NEVER the token in any form. A failed write cannot unwind the
+  //    committed issuance; it logs as a secondary error.
+  await emitInvitationAudit(deps.auditSink, deps.onAuditFailure, {
+    organizationId,
+    actorMemberId: ctx.activeMembershipId,
+    action: "invitation.issued",
+    targetType: "invitation",
+    targetId: stored.id,
+    detail: JSON.stringify({
+      afloUserId: ctx.afloUserId,
+      intendedRole: input.intendedRole,
+      reservedClientId,
+    }),
+    reasonCode: null,
+    occurredAt: now,
+  });
+
+  // 8. The ONE appearance of the raw token (see module doc).
   return {
     status: 201,
     body: { ok: true, invitationId: stored.id, token: pair.token, expiresAt: stored.expiresAtIso },
@@ -231,6 +299,10 @@ export interface AcceptInvitationRouteDeps {
   now: () => Date;
   /** Server-issued id for a new staff membership (composition root: randomUUID). */
   newMembershipId: () => string;
+  /** Matrix §7 audit sink — optional in the type, REQUIRED in composition. */
+  auditSink?: InvitationAuditSink;
+  /** Secondary-error channel for a failed audit write (default: console.error). */
+  onAuditFailure?: (error: unknown) => void;
 }
 
 export interface AcceptInvitationRouteInput {
@@ -303,6 +375,24 @@ export async function handleAcceptInvitation(
   });
 
   if (!outcome.ok) return acceptDenial(outcome.reason);
+
+  // 5. Matrix §7 row 1: the membership/link creation is audited — the target
+  //    is the row the acceptance created; ids only, never the email/token.
+  await emitInvitationAudit(deps.auditSink, deps.onAuditFailure, {
+    organizationId: outcome.organizationId,
+    actorMemberId: outcome.kind === "membership" ? outcome.membershipId : null,
+    action: "invitation.accepted",
+    targetType: outcome.kind === "membership" ? "organization_member" : "client_user_link",
+    targetId: outcome.kind === "membership" ? outcome.membershipId : outcome.linkId,
+    detail: JSON.stringify(
+      outcome.kind === "membership"
+        ? { afloUserId: ctx.afloUserId, kind: outcome.kind }
+        : { afloUserId: ctx.afloUserId, kind: outcome.kind, clientId: outcome.clientId },
+    ),
+    reasonCode: null,
+    occurredAt: deps.now(),
+  });
+
   return {
     status: 200,
     body: { ok: true, kind: outcome.kind, organizationId: outcome.organizationId },

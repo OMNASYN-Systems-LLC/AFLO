@@ -11,6 +11,8 @@ import type { MessageSenderRole, ThreadStatus } from "@aflo/rules";
 import {
   AuthorizedMessagingService,
   MessagingAccessDeniedError,
+  type MessagingDenialAuditEvent,
+  type MessagingDenialAuditSink,
 } from "../src/services/authorized-messaging";
 import { ThreadNotFoundError } from "../src/repositories/messaging";
 
@@ -20,6 +22,11 @@ import { ThreadNotFoundError } from "../src/repositories/messaging";
  * THIS layer owns who-may. Proven with a recording stub: a denied call must
  * never reach the repository, and sender/org identity must be derived from the
  * session, never the caller.
+ *
+ * Workstream B9 / ADR-0044 (founder decision 4): every denial path emits
+ * exactly ONE sensitive-denial audit event carrying the DISTINCT internal
+ * reason, while the thrown error (the external surface) is unchanged; an
+ * audit-write failure can never suppress the denial.
  */
 
 const NOW = new Date("2026-07-22T12:00:00.000Z");
@@ -128,10 +135,28 @@ function platformAdminCtx(): SessionContext {
   return ctx;
 }
 
+/** In-memory recording audit sink — test double for the REQUIRED audit port. */
+class RecordingAuditSink implements MessagingDenialAuditSink {
+  events: MessagingDenialAuditEvent[] = [];
+  failWith: Error | null = null;
+
+  async recordSensitiveDenial(event: MessagingDenialAuditEvent): Promise<void> {
+    if (this.failWith) throw this.failWith;
+    this.events.push(event);
+  }
+}
+
 function setup(threads: ConversationThread[] = [thread("t1", "client-1"), thread("t2", "client-2")]) {
   const repo = new RecordingRepo();
+  const sink = new RecordingAuditSink();
+  const auditFailures: unknown[] = [];
   for (const t of threads) repo.threads.set(t.id, t);
-  return { repo, svc: new AuthorizedMessagingService(repo) };
+  return {
+    repo,
+    sink,
+    auditFailures,
+    svc: new AuthorizedMessagingService(repo, sink, (err) => auditFailures.push(err)),
+  };
 }
 
 describe("AuthorizedMessagingService — org + sender are structurally server-derived", () => {
@@ -245,5 +270,204 @@ describe("AuthorizedMessagingService — staff scoping + role policy", () => {
       reason: "no_active_membership",
     });
     expect(repo.calls).toEqual([]); // never reached the repository at all
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Workstream B9 / ADR-0044 — mandatory sensitive-denial audit emission
+// ---------------------------------------------------------------------------
+
+/** A hand-built degenerate/edge SessionContext (states buildSessionContext refuses to mint). */
+function rawCtx(overrides: Partial<SessionContext>): SessionContext {
+  return {
+    sessionId: "s-raw",
+    clerkUserId: "ck-raw",
+    afloUserId: "user-raw",
+    role: "staff_advisor",
+    permissions: new Set(),
+    accountStatus: "active",
+    activeOrganizationId: ORG,
+    activeMembershipId: "mem-raw",
+    membershipStatus: "active",
+    linkedClientId: null,
+    assignedClientIds: null,
+    ...overrides,
+  };
+}
+
+describe("AuthorizedMessagingService — sensitive-denial audit emission (founder decision 4)", () => {
+  it("client probing another client's THREAD → exactly one wrong_client_access event; external error unchanged", async () => {
+    const { sink, svc } = setup();
+    await expect(svc.getThread(clientCtx("client-1"), "t2")).rejects.toMatchObject({
+      reason: "not_owner",
+      permission: "message.read",
+    });
+    expect(sink.events).toHaveLength(1);
+    expect(sink.events[0]).toMatchObject({
+      organizationId: ORG,
+      afloUserId: "user-client",
+      actorRole: "client",
+      actorMembershipId: null,
+      actorClientId: "client-1",
+      reason: "wrong_client_access",
+      engineReason: "not_owner",
+      permission: "message.read",
+      target: { type: "conversation_thread", id: "t2" },
+    });
+  });
+
+  it("client acting FOR another client (createThread / listThreads) → ownership_mismatch on the client target", async () => {
+    const { sink, svc } = setup();
+    await expect(
+      svc.createThread(clientCtx("client-1"), { clientId: "client-2", subject: "x" }, NOW),
+    ).rejects.toThrow(MessagingAccessDeniedError);
+    await expect(svc.listThreads(clientCtx("client-1"), "client-2")).rejects.toThrow(
+      MessagingAccessDeniedError,
+    );
+    expect(sink.events.map((e) => e.reason)).toEqual(["ownership_mismatch", "ownership_mismatch"]);
+    expect(sink.events.map((e) => e.target)).toEqual([
+      { type: "client", id: "client-2" },
+      { type: "client", id: "client-2" },
+    ]);
+  });
+
+  it("assignment-scoped staff on an unassigned client's thread → staff_assignment_mismatch", async () => {
+    const { sink, svc } = setup();
+    const scoped = staffCtx({ assignedClientIds: ["client-1"] });
+    await expect(svc.getThread(scoped, "t2")).rejects.toMatchObject({ reason: "not_assigned" });
+    expect(sink.events).toHaveLength(1);
+    expect(sink.events[0]).toMatchObject({
+      reason: "staff_assignment_mismatch",
+      engineReason: "not_assigned",
+      actorMembershipId: "mem-staff",
+      target: { type: "conversation_thread", id: "t2" },
+    });
+  });
+
+  it("pending membership → invalid_organization_context (closest founder category)", async () => {
+    const { sink, svc } = setup();
+    const pending = buildSessionContext({
+      sessionId: "s-pending",
+      identity: { afloUserId: "user-p", clerkUserId: "ck-p", accountStatus: "active", isPlatformAdmin: false, sessionsInvalidatedBeforeIso: null },
+      membership: { membershipId: "mem-p", organizationId: ORG, memberRole: "staff", status: "pending" },
+    });
+    if (!pending) throw new Error("pending fixture failed to resolve");
+    await expect(svc.listThreads(pending, "client-1")).rejects.toMatchObject({
+      reason: "membership_pending",
+    });
+    expect(sink.events).toHaveLength(1);
+    expect(sink.events[0]).toMatchObject({
+      reason: "invalid_organization_context",
+      engineReason: "membership_pending",
+    });
+  });
+
+  it("revoked membership → revoked_membership", async () => {
+    const { sink, svc } = setup();
+    const revoked = rawCtx({ membershipStatus: "revoked" });
+    await expect(svc.getThread(revoked, "t1")).rejects.toMatchObject({
+      reason: "membership_revoked",
+    });
+    expect(sink.events[0]).toMatchObject({
+      reason: "revoked_membership",
+      engineReason: "membership_revoked",
+    });
+  });
+
+  it("disabled account → disabled_account (defense in depth below the session layer)", async () => {
+    const { sink, svc } = setup();
+    const disabled = rawCtx({ accountStatus: "disabled" });
+    await expect(svc.getThread(disabled, "t1")).rejects.toMatchObject({
+      reason: "account_disabled",
+    });
+    expect(sink.events[0]).toMatchObject({
+      reason: "disabled_account",
+      engineReason: "account_disabled",
+    });
+  });
+
+  it("platform admin probing the tenant surface → platform_admin_cross_tenant_access with a NULL org", async () => {
+    const { sink, svc } = setup();
+    await expect(svc.getThread(platformAdminCtx(), "t1")).rejects.toMatchObject({
+      reason: "no_active_membership",
+    });
+    expect(sink.events).toHaveLength(1);
+    expect(sink.events[0]).toMatchObject({
+      organizationId: null, // the denial IS the missing org context
+      reason: "platform_admin_cross_tenant_access",
+      engineReason: "no_active_membership",
+    });
+  });
+
+  it("non-admin session with no active org → invalid_organization_context", async () => {
+    const { sink, svc } = setup();
+    const orgless = rawCtx({ activeOrganizationId: null, membershipStatus: "none" });
+    await expect(svc.listThreads(orgless, "client-1")).rejects.toMatchObject({
+      reason: "no_active_membership",
+    });
+    expect(sink.events[0]).toMatchObject({
+      organizationId: null,
+      reason: "invalid_organization_context",
+      engineReason: "no_active_membership",
+    });
+  });
+
+  it("client attempting a staff-only close → publication_without_authority", async () => {
+    const { sink, svc } = setup();
+    await expect(svc.setThreadStatus(clientCtx("client-1"), "t1", "close", NOW)).rejects.toMatchObject({
+      reason: "permission_denied",
+    });
+    expect(sink.events).toHaveLength(1);
+    expect(sink.events[0]).toMatchObject({
+      reason: "publication_without_authority",
+      engineReason: "permission_denied",
+      permission: "message.close",
+    });
+  });
+
+  it("degenerate staff identity (no membership id) posting → ambiguous_identity", async () => {
+    const { sink, svc } = setup();
+    const degenerate = rawCtx({ activeMembershipId: null });
+    await expect(svc.postMessage(degenerate, { threadId: "t1", body: "x" }, NOW)).rejects.toMatchObject({
+      reason: "no_active_membership", // external engine code unchanged
+    });
+    expect(sink.events).toHaveLength(1);
+    expect(sink.events[0]).toMatchObject({
+      reason: "ambiguous_identity",
+      engineReason: "no_active_membership",
+      target: { type: "conversation_thread", id: "t1" },
+    });
+  });
+
+  it("audit events carry ids/codes only — never a message body or subject", async () => {
+    const { sink, svc } = setup();
+    await expect(
+      svc.postMessage(clientCtx("client-1"), { threadId: "t2", body: "SECRET-BODY-NEVER-AUDITED" }, NOW),
+    ).rejects.toThrow(MessagingAccessDeniedError);
+    const serialized = JSON.stringify(sink.events);
+    expect(serialized).not.toContain("SECRET-BODY-NEVER-AUDITED");
+    expect(serialized).not.toContain("Checking in"); // the thread subject
+  });
+
+  it("an audit-write FAILURE never suppresses the denial (emit-then-throw, secondary error logged)", async () => {
+    const { sink, auditFailures, svc } = setup();
+    sink.failWith = new Error("audit store down");
+    await expect(svc.getThread(clientCtx("client-1"), "t2")).rejects.toMatchObject({
+      reason: "not_owner",
+    });
+    expect(auditFailures).toEqual([sink.failWith]);
+  });
+
+  it("happy paths and plain not-found emit NOTHING (denials only, no noise)", async () => {
+    const { sink, svc } = setup();
+    await svc.getThread(staffCtx(), "t1");
+    await svc.listThreads(clientCtx("client-1"), "client-1");
+    await svc.postMessage(staffCtx(), { threadId: "t1", body: "hello" }, NOW);
+    await svc.markThreadRead(clientCtx("client-1"), "t1", NOW);
+    expect(await svc.getThread(staffCtx(), "t-missing")).toBeNull(); // not-found ≠ denial
+    await expect(svc.postMessage(staffCtx(), { threadId: "t-missing", body: "x" }, NOW)).rejects.toThrow(
+      ThreadNotFoundError,
+    );
+    expect(sink.events).toEqual([]);
   });
 });

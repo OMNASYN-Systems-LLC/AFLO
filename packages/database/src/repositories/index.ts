@@ -1,3 +1,4 @@
+export * from "./audit-events";
 export * from "./outbox";
 export * from "./seed";
 export * from "./messaging";

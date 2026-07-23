@@ -14,8 +14,10 @@ import {
   handleAcceptInvitation,
   handleIssueInvitation,
   type AcceptInvitationRouteDeps,
+  type InvitationAuditEvent,
   type IssueInvitationRouteDeps,
 } from "../src/services/invitation-routes";
+import { DrizzleAuditEventRepository } from "../src/repositories/audit-events";
 import { DrizzleInvitationRepository } from "../src/repositories/invitation";
 
 /**
@@ -412,6 +414,113 @@ describe("handleAcceptInvitation — acceptance (PGlite end to end)", () => {
       token: tokens.double,
     });
     expect(second).toEqual({ status: 409, body: { ok: false, error: "already_accepted" } });
+  });
+});
+
+describe("matrix §7 audit emission — the ADR-0042 deferral, closed early by ADR-0044", () => {
+  it("201 issuance writes ONE org-scoped invitation.issued row — ids/role only, never email or token", async () => {
+    const auditRepo = new DrizzleAuditEventRepository(db);
+    const pair = generateInvitationToken();
+    const result = await handleIssueInvitation(
+      { ...issueDeps(ownerCtx(), pair), auditSink: auditRepo },
+      { email: "audited.invitee@example.com", intendedRole: "staff_advisor" },
+    );
+    expect(result.status).toBe(201);
+    if (result.status !== 201) return;
+
+    const rows = await auditRepo.listForOrganization(ORG_A);
+    const matches = rows.filter(
+      (r) => r.action === "invitation.issued" && r.targetId === result.body.invitationId,
+    );
+    expect(matches).toHaveLength(1);
+    const row = matches[0]!;
+    expect(row).toMatchObject({
+      organizationId: ORG_A,
+      actorMemberId: ownerMembershipId,
+      targetType: "invitation",
+      reasonCode: null,
+    });
+    expect(JSON.parse(row.detail!)).toEqual({
+      afloUserId: users.owner,
+      intendedRole: "staff_advisor",
+      reservedClientId: null,
+    });
+    // Ids and codes ONLY — the email and the token (raw OR digest) never land.
+    const serialized = JSON.stringify(row);
+    expect(serialized).not.toContain("audited.invitee");
+    expect(serialized).not.toContain(pair.token);
+    expect(serialized).not.toContain(pair.tokenHash);
+  });
+
+  it("200 acceptance writes ONE invitation.accepted row targeting the created membership", async () => {
+    await asSuperuser(async () => {
+      const r = await pg.query<{ id: string }>(
+        `INSERT INTO users (email, display_name) VALUES ('audit-accept@u.co','AuditAccept') RETURNING id`,
+      );
+      users.auditAccept = r.rows[0]!.id;
+      await seedInvitation("auditAccept", { email: "audit-accept@x.co", role: "staff_advisor" });
+    });
+
+    const auditRepo = new DrizzleAuditEventRepository(db);
+    const result = await handleAcceptInvitation(
+      { ...acceptDeps(accepterCtx(users.auditAccept!), "audit-accept@x.co"), auditSink: auditRepo },
+      { token: tokens.auditAccept },
+    );
+    expect(result).toEqual({
+      status: 200,
+      body: { ok: true, kind: "membership", organizationId: ORG_A },
+    });
+
+    const rows = await auditRepo.listForOrganization(ORG_A);
+    const matches = rows.filter((r) => r.action === "invitation.accepted");
+    expect(matches).toHaveLength(1);
+    const row = matches[0]!;
+    expect(row).toMatchObject({ targetType: "organization_member", reasonCode: null });
+    expect(row.actorMemberId).toBe(row.targetId); // the actor IS the created member
+    const member = await asSuperuser(() =>
+      pg.query<{ id: string }>(
+        `SELECT id FROM organization_members WHERE organization_id = $1 AND user_id = $2`,
+        [ORG_A, users.auditAccept],
+      ),
+    );
+    expect(row.targetId).toBe(member.rows[0]!.id);
+    expect(JSON.stringify(row)).not.toContain("audit-accept"); // never the email
+  });
+
+  it("an audit-write failure never fails the COMMITTED request; denials emit nothing", async () => {
+    const failures: unknown[] = [];
+    const result = await handleIssueInvitation(
+      {
+        ...issueDeps(ownerCtx(), generateInvitationToken()),
+        auditSink: {
+          record: async () => {
+            throw new Error("audit store down");
+          },
+        },
+        onAuditFailure: (e) => failures.push(e),
+      },
+      { email: "audit-fail@x.co", intendedRole: "staff_advisor" },
+    );
+    expect(result.status).toBe(201); // the issuance already committed — never unwound
+    expect(failures).toHaveLength(1);
+
+    const recorded: InvitationAuditEvent[] = [];
+    const denied = await handleIssueInvitation(
+      {
+        ...issueDeps(
+          ctxFor({ afloUserId: users.clientUser!, role: "client", organizationId: ORG_A, linkedClientId: clientA1 }),
+          generateInvitationToken(),
+        ),
+        auditSink: {
+          record: async (e) => {
+            recorded.push(e);
+          },
+        },
+      },
+      { email: "denied-audit@x.co", intendedRole: "staff_advisor" },
+    );
+    expect(denied.status).toBe(403);
+    expect(recorded).toEqual([]); // this sink is the §7 row-1 CREATION audit, not the denial surface
   });
 });
 
