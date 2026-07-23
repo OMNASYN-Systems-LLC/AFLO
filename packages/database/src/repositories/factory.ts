@@ -10,6 +10,12 @@ import {
 } from "./resolver";
 import { DrizzlePrincipalDirectory } from "./principal-directory";
 import {
+  DrizzlePlaybookRepository,
+  DrizzleReviewDecisionRepository,
+  DrizzleReviewItemRepository,
+  DrizzleWorkflowDiscoveryRepository,
+} from "./review-center";
+import {
   acceptInvitationByToken,
   type AcceptInvitationByTokenInput,
   type AcceptInvitationByTokenOutcome,
@@ -52,6 +58,11 @@ export interface Repositories {
   principalDirectory: DrizzlePrincipalDirectory;
   webhookEvents: DrizzleWebhookEventRepository;
   sessionRevocations: DrizzleSessionRevocationRepository;
+  /** Review Center / Playbook / Discovery persistence (migration 0009, ADR-0041) — tenant-role, RLS-scoped. */
+  reviewItems: DrizzleReviewItemRepository;
+  reviewDecisions: DrizzleReviewDecisionRepository;
+  playbooks: DrizzlePlaybookRepository;
+  workflowDiscovery: DrizzleWorkflowDiscoveryRepository;
   /** Accept-by-token orchestration (ADR-0032), pre-bound to the two handles. */
   acceptInvitation(input: AcceptInvitationByTokenInput): Promise<AcceptInvitationByTokenOutcome>;
 }
@@ -66,6 +77,10 @@ export function createRepositories(handles: RepositoryHandles): Repositories {
     principalDirectory: new DrizzlePrincipalDirectory(resolverDb),
     webhookEvents: new DrizzleWebhookEventRepository(resolverDb),
     sessionRevocations: new DrizzleSessionRevocationRepository(resolverDb),
+    reviewItems: new DrizzleReviewItemRepository(tenantDb),
+    reviewDecisions: new DrizzleReviewDecisionRepository(tenantDb),
+    playbooks: new DrizzlePlaybookRepository(tenantDb),
+    workflowDiscovery: new DrizzleWorkflowDiscoveryRepository(tenantDb),
     acceptInvitation: (input) => acceptInvitationByToken(resolverDb, tenantDb, input),
   };
 }

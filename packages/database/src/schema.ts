@@ -14,6 +14,7 @@ import {
   uniqueIndex,
   uuid,
   varchar,
+  type AnyPgColumn,
 } from "drizzle-orm/pg-core";
 import {
   actionStatusEnum,
@@ -52,7 +53,13 @@ import {
   partnerReferralStatusEnum,
   referralOutcomeEnum,
   reportStatusEnum,
+  reviewArtifactTypeEnum,
+  reviewDecisionEnum,
+  reviewItemStateEnum,
+  reviewRiskClassEnum,
+  reviewerRoleEnum,
   roadmapStatusEnum,
+  workflowDiscoveryStatusEnum,
 } from "./enums";
 
 /**
@@ -1070,4 +1077,250 @@ export const messages = pgTable(
     index("idx_messages_org_thread_sent").on(t.organizationId, t.threadId, t.sentAt),
     index("idx_messages_org_client").on(t.organizationId, t.clientId),
   ],
+);
+
+// ============================================================================
+// Human Review Center + Professional Playbooks (Workstream A PR-4, ADR-0041)
+//
+// The Review Center is a COORDINATION LAYER, not a second system of record: a
+// review_items row REFERENCES its artifact (artifact_type + artifact_id) and
+// carries integrity/provenance metadata ONLY — never artifact content. Domain
+// kernels (roadmap.v1, report.v1, …) stay authoritative for bridged artifact
+// tables; ReviewItem state is authoritative only for the native artifact
+// types. Playbooks are VERSIONED TENANT IP (the rule_versions (rule_id,
+// version) pattern, org-scoped + RLS — never the global rule_versions table,
+// which would leak tenant IP). All five tables are tenant-owned and get
+// ENABLE+FORCE RLS with the fail-closed org_isolation policy in migration
+// 0009.
+// ============================================================================
+
+/**
+ * Playbook identity. Content lives in playbook_versions; `current_version_id`
+ * is the head = latest PUBLISHED version. Org FK is CASCADE — operational
+ * tenant IP, not compliance evidence.
+ */
+export const playbooks = pgTable(
+  "playbooks",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    /** Stable slug (e.g. "high-utilization-recovery") — the PIPELINE_BACKBONE stable-id convention. */
+    playbookKey: text("playbook_key").notNull(),
+    name: text("name").notNull(),
+    /**
+     * Head = latest PUBLISHED version. Circular FK with playbook_versions —
+     * the `AnyPgColumn` annotation breaks the type-inference cycle; the DDL
+     * constraint is real (ON DELETE SET NULL), added after both tables exist.
+     */
+    currentVersionId: uuid("current_version_id").references((): AnyPgColumn => playbookVersions.id, {
+      onDelete: "set null",
+    }),
+    ...timestamps,
+  },
+  (t) => [uniqueIndex("uq_playbooks_org_key").on(t.organizationId, t.playbookKey)],
+);
+
+/**
+ * Playbook version content (append-only; a version's `content` is immutable
+ * once it leaves `draft`). Status transitions are governed by
+ * playbook.v1.0.0; publication is reachable only through `approved`, and
+ * approval is DENIED while any content field is still `discovery_required`
+ * (`contentBlocksApproval` — the anti-invention control, enforced by the
+ * repository). Version is plain semver ("1.0.0") — tenant content, not a
+ * kernel rule id.
+ */
+export const playbookVersions = pgTable(
+  "playbook_versions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    playbookId: uuid("playbook_id")
+      .notNull()
+      .references(() => playbooks.id, { onDelete: "cascade" }),
+    version: text("version").notNull(),
+    /** PLAYBOOK_VERSION_STATUSES IS REVIEW_ITEM_STATES — one vocabulary, one enum. */
+    status: reviewItemStateEnum("status").notNull().default("draft"),
+    /** Required to publish; the publish transition stamps it when unset. */
+    effectiveDate: timestamp("effective_date", { withTimezone: true }),
+    authorMemberId: uuid("author_member_id")
+      .notNull()
+      .references(() => organizationMembers.id, { onDelete: "restrict" }),
+    approverMemberId: uuid("approver_member_id").references(() => organizationMembers.id, {
+      onDelete: "set null",
+    }),
+    approvedAt: timestamp("approved_at", { withTimezone: true }),
+    /** The typed @aflo/rules PlaybookContent object (validator-gated on write). */
+    content: jsonb("content").notNull(),
+    ...timestamps,
+  },
+  (t) => [uniqueIndex("uq_playbook_versions_playbook_version").on(t.playbookId, t.version)],
+);
+
+/**
+ * Review Center queue items (review_center.v1.0.0). Compliance-sensitive
+ * class: org/client FKs are RESTRICT (the audit_events convention) — review
+ * history must outlive convenience deletes. Provenance columns carry
+ * IDENTIFIERS AND DIGESTS ONLY: fact ids + freshness timestamps (never fact
+ * values), rule versions, model/prompt labels, and sha256 modification
+ * digests (never edited content). At most one OPEN item per artifact
+ * (uq_review_items_open); replacements supersede via the self-FKs.
+ */
+export const reviewItems = pgTable(
+  "review_items",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "restrict" }),
+    /** Null for org-level artifacts. */
+    clientId: uuid("client_id").references(() => clients.id, { onDelete: "restrict" }),
+    artifactType: reviewArtifactTypeEnum("artifact_type").notNull(),
+    /** Any aggregate id — the audit_events.target_id convention. */
+    artifactId: text("artifact_id").notNull(),
+    /** `{ factId, asOf }[]` — fact identifiers + freshness timestamps only, never values. */
+    sourceFactSnapshots: jsonb("source_fact_snapshots").notNull().default(sql`'[]'::jsonb`),
+    ruleVersionsUsed: jsonb("rule_versions_used").notNull().default(sql`'[]'::jsonb`),
+    /** Provenance for AI-drafted artifacts (null = manually authored). */
+    aiRunId: uuid("ai_run_id").references(() => aiRuns.id, { onDelete: "set null" }),
+    /** Stamped once at creation from the immutable ai_runs row (cannot drift; ai_runs stays source of truth). */
+    aiModel: text("ai_model"),
+    aiPromptVersion: text("ai_prompt_version"),
+    /** Null = deterministic/manual — deterministic facts are never "confident". */
+    confidence: numeric("confidence", { precision: 4, scale: 3 }),
+    riskClassification: reviewRiskClassEnum("risk_classification").notNull(),
+    requiredReviewerRole: reviewerRoleEnum("required_reviewer_role").notNull(),
+    state: reviewItemStateEnum("state").notNull().default("draft"),
+    assignedReviewerMemberId: uuid("assigned_reviewer_member_id").references(() => organizationMembers.id, {
+      onDelete: "set null",
+    }),
+    reviewedByMemberId: uuid("reviewed_by_member_id").references(() => organizationMembers.id, {
+      onDelete: "set null",
+    }),
+    reviewedAt: timestamp("reviewed_at", { withTimezone: true }),
+    /** Denormalized head of the append-only review_decisions log (queue display). */
+    latestDecision: reviewDecisionEnum("latest_decision"),
+    latestDecisionReasonCode: text("latest_decision_reason_code"),
+    /** `{ field, beforeSha256, afterSha256 }[]` — digests only, never content (the checksum_sha256 idiom). */
+    modificationsDigest: jsonb("modifications_digest").notNull().default(sql`'[]'::jsonb`),
+    /** Pointer/digest of the published artifact version — never the artifact body. */
+    publishedResultRef: text("published_result_ref"),
+    publishedAt: timestamp("published_at", { withTimezone: true }),
+    /** Provenance when a playbook checkpoint spawned the item. */
+    playbookId: uuid("playbook_id").references(() => playbooks.id, { onDelete: "set null" }),
+    playbookVersion: text("playbook_version"),
+    previousReviewItemId: uuid("previous_review_item_id").references((): AnyPgColumn => reviewItems.id, {
+      onDelete: "set null",
+    }),
+    supersededByReviewItemId: uuid("superseded_by_review_item_id").references(
+      (): AnyPgColumn => reviewItems.id,
+      { onDelete: "set null" },
+    ),
+    /** Outcome tracking — written only by recordReviewOutcome (PR-5). */
+    clientActionRef: text("client_action_ref"),
+    /** "pending" | "completed" | "not_completed". */
+    clientActionStatus: text("client_action_status"),
+    /** "achieved" | "not_achieved" | "unknown". */
+    outcome: text("outcome"),
+    outcomeRecordedAt: timestamp("outcome_recorded_at", { withTimezone: true }),
+    /** Null = orchestrator/system-created (the nullable-actor audit convention). */
+    createdByMemberId: uuid("created_by_member_id").references(() => organizationMembers.id, {
+      onDelete: "set null",
+    }),
+    /** Review-time metric anchor (submission → decision). */
+    submittedAt: timestamp("submitted_at", { withTimezone: true }),
+    ...timestamps,
+  },
+  (t) => [
+    index("idx_review_items_org_type_state").on(t.organizationId, t.artifactType, t.state),
+    index("idx_review_items_org_client").on(t.organizationId, t.clientId),
+    // At most one OPEN review per artifact; replacements supersede.
+    uniqueIndex("uq_review_items_open")
+      .on(t.artifactType, t.artifactId)
+      .where(sql`state IN ('draft', 'awaiting_review')`),
+  ],
+);
+
+/**
+ * Structured review decisions — APPEND-ONLY (`decided_at` only, no
+ * updated_at; the audit_events/notes pattern). Every decision carries a
+ * structured RVD_* reason code, the deciding member, and DIGESTS ONLY
+ * (edited field names, sha256 of the final output — never content).
+ *
+ * DATA GOVERNANCE (founder directive 2026-07-20): review-feedback data is
+ * used ONLY for analytics, rule improvement, prompt improvement, workflow
+ * improvement, and QA — it is NEVER used for uncontrolled model training.
+ */
+export const reviewDecisions = pgTable(
+  "review_decisions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "restrict" }),
+    reviewItemId: uuid("review_item_id")
+      .notNull()
+      .references(() => reviewItems.id, { onDelete: "restrict" }),
+    decision: reviewDecisionEnum("decision").notNull(),
+    /** Structured RVD_* code from REVIEW_DECISION_REASON_CODES. */
+    reasonCode: text("reason_code").notNull(),
+    ruleVersion: text("rule_version").notNull(),
+    decidedByMemberId: uuid("decided_by_member_id")
+      .notNull()
+      .references(() => organizationMembers.id, { onDelete: "restrict" }),
+    clientStageAtDecision: lifecycleStageEnum("client_stage_at_decision"),
+    /** Echo of the item's artifact type for analytics grouping. */
+    workflowType: reviewArtifactTypeEnum("workflow_type").notNull(),
+    aiRunId: uuid("ai_run_id").references(() => aiRuns.id, { onDelete: "set null" }),
+    /** The founder's "ai_output_version" — the run's agent version, echoed for analytics. */
+    agentVersion: text("agent_version"),
+    /** Edited field NAMES only — never edited values. */
+    editedFields: jsonb("edited_fields").notNull().default(sql`'[]'::jsonb`),
+    /** SHA-256 hex of the final approved output — digest only. */
+    finalOutputSha256: varchar("final_output_sha256", { length: 64 }),
+    escalatedToRole: reviewerRoleEnum("escalated_to_role"),
+    detail: text("detail"),
+    decidedAt: timestamp("decided_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("idx_review_decisions_org_item").on(t.organizationId, t.reviewItemId, t.decidedAt)],
+);
+
+/**
+ * Workflow-discovery queue — the anti-invention control's question list
+ * (playbook.v1.0.0 discovery machine). Every `discovery_required` playbook
+ * field is backed by an item asking the founder the concrete question;
+ * `converted` records the playbook version that absorbed the answer.
+ */
+export const workflowDiscoveryItems = pgTable(
+  "workflow_discovery_items",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    playbookId: uuid("playbook_id").references(() => playbooks.id, { onDelete: "set null" }),
+    /** Which content field/step the question blocks. */
+    checkpointRef: text("checkpoint_ref"),
+    question: text("question").notNull(),
+    context: text("context").notNull().default(""),
+    status: workflowDiscoveryStatusEnum("status").notNull().default("open"),
+    /** Null = system/seed-raised. */
+    raisedByMemberId: uuid("raised_by_member_id").references(() => organizationMembers.id, {
+      onDelete: "set null",
+    }),
+    answer: text("answer"),
+    answeredByMemberId: uuid("answered_by_member_id").references(() => organizationMembers.id, {
+      onDelete: "set null",
+    }),
+    answeredAt: timestamp("answered_at", { withTimezone: true }),
+    /** The playbook version that absorbed the answer (WD_CONVERTED). */
+    convertedPlaybookVersionId: uuid("converted_playbook_version_id").references(() => playbookVersions.id, {
+      onDelete: "set null",
+    }),
+    ...timestamps,
+  },
+  (t) => [index("idx_discovery_org_status").on(t.organizationId, t.status)],
 );

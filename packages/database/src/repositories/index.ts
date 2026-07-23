@@ -5,3 +5,4 @@ export * from "./invitation";
 export * from "./resolver";
 export * from "./factory";
 export * from "./principal-directory";
+export * from "./review-center";
