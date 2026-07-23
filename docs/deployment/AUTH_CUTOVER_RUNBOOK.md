@@ -142,6 +142,17 @@ Apply the committed migrations with the repo's `db:migrate` (Drizzle) using
 
 Provision the two roles (§2) on a branch **before** applying `0007` there.
 
+> **Acceptance gate (ADR-0050).** After provisioning + apply on a branch, run
+> the preview acceptance suite against it: `DATABASE_URL_ACCEPTANCE=<branch
+> url> ACCEPTANCE_CONFIRM_NON_MAIN=<branch host> pnpm --filter @aflo/database
+> acceptance` (validate-only by default; the guard refuses any target it
+> cannot affirmatively verify as non-main). **The suite passing against Neon
+> `preview` is the precondition for ever touching Neon `main`** — it checks
+> journal/snapshot integrity, applied-migration hashes, RLS on every tenant
+> table, the two-role grant matrix, the resolver function, key unique
+> indexes, enum lockstep, and a fail-closed runtime smoke. See
+> `docs/adr/ADR-0050-preview-acceptance-suite.md`.
+
 Post-apply verification (per branch, as `aflo_app`):
 
 ```sql
