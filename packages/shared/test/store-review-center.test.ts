@@ -591,6 +591,122 @@ describe("recordReviewDecision — the founder matrix's 'assigned' qualifier (M3
   });
 });
 
+describe("recordReviewDecision — client-controlled input bounds (adversarial review of PR #96, M1)", () => {
+  it("denies more than 32 edited fields — INVALID_INPUT, nothing appended, no state change", () => {
+    const store = makeStore();
+    const res = store.recordReviewDecision({
+      organizationId: ORG,
+      reviewItemId: "rvi-bell-concierge",
+      actorStaffId: "s-mercer",
+      decision: "approved_with_edits",
+      decisionReasonCode: "RVD_EDITED_TONE",
+      editedFields: Array.from({ length: 33 }, (_, i) => `field_${i}`),
+    });
+    expect(res).toMatchObject({ ok: false, denialCode: "INVALID_INPUT" });
+    expect(res.inputErrors?.join(" ")).toContain("32");
+    expect(store.reviewDecisionsFor(ORG, "rvi-bell-concierge")).toHaveLength(0);
+    expect(store.database().reviewItems.find((i) => i.id === "rvi-bell-concierge")!.state).toBe(
+      "awaiting_review",
+    );
+  });
+
+  it("denies an over-length edited-field name (65 chars)", () => {
+    const store = makeStore();
+    const res = store.recordReviewDecision({
+      organizationId: ORG,
+      reviewItemId: "rvi-bell-concierge",
+      actorStaffId: "s-mercer",
+      decision: "approved_with_edits",
+      decisionReasonCode: "RVD_EDITED_TONE",
+      editedFields: ["x".repeat(65)],
+    });
+    expect(res).toMatchObject({ ok: false, denialCode: "INVALID_INPUT" });
+    expect(store.reviewDecisionsFor(ORG, "rvi-bell-concierge")).toHaveLength(0);
+  });
+
+  it("denies a non-identifier edited-field name (charset is letters/digits/._- and spaces)", () => {
+    const store = makeStore();
+    for (const bad of ["summary;drop", "a\nb", "field<script>", "🙂"]) {
+      const res = store.recordReviewDecision({
+        organizationId: ORG,
+        reviewItemId: "rvi-bell-concierge",
+        actorStaffId: "s-mercer",
+        decision: "approved_with_edits",
+        decisionReasonCode: "RVD_EDITED_TONE",
+        editedFields: [bad],
+      });
+      expect(res, bad).toMatchObject({ ok: false, denialCode: "INVALID_INPUT" });
+    }
+    expect(store.reviewDecisionsFor(ORG, "rvi-bell-concierge")).toHaveLength(0);
+  });
+
+  it("denies an over-length detail rather than silently truncating the signed record", () => {
+    const store = makeStore();
+    const res = store.recordReviewDecision({
+      organizationId: ORG,
+      reviewItemId: "rvi-bell-concierge",
+      actorStaffId: "s-mercer",
+      decision: "approved_unchanged",
+      decisionReasonCode: "RVD_ACCURATE",
+      detail: "d".repeat(2001),
+    });
+    expect(res).toMatchObject({ ok: false, denialCode: "INVALID_INPUT" });
+    expect(res.inputErrors?.join(" ")).toContain("2000");
+    expect(store.database().reviewItems.find((i) => i.id === "rvi-bell-concierge")!.state).toBe(
+      "awaiting_review",
+    );
+  });
+
+  it("valid bounded input records unchanged: trimmed, deduplicated field names and a 2000-char detail", () => {
+    const store = makeStore();
+    const res = store.recordReviewDecision({
+      organizationId: ORG,
+      reviewItemId: "rvi-bell-concierge",
+      actorStaffId: "s-mercer",
+      decision: "approved_with_edits",
+      decisionReasonCode: "RVD_EDITED_TONE",
+      editedFields: [" summary ", "summary", "focus.next-quarter"],
+      detail: `  ${"d".repeat(1998)}  `,
+    });
+    expect(res.ok).toBe(true);
+    expect(res.item!.state).toBe("approved");
+    expect(res.decision!.editedFields).toEqual(["summary", "focus.next-quarter"]);
+    expect(res.decision!.detail).toBe("d".repeat(1998)); // trimmed, at the bound, not truncated
+  });
+
+  it("clamps a huge/binary client-controlled decision string in the denied-path audit detail", () => {
+    const store = makeStore();
+    const res = store.recordReviewDecision({
+      organizationId: ORG,
+      reviewItemId: "rvi-bell-concierge",
+      actorStaffId: "s-mercer",
+      decision: `bogus\u0000${"z".repeat(1_000_000)}`,
+      decisionReasonCode: "RVD_ACCURATE",
+    });
+    expect(res).toMatchObject({ ok: false, reasonCode: "RVC_UNKNOWN_DECISION" });
+    const audit = store.auditFor(ORG).at(-1)!;
+    expect(audit.action).toBe("review.decision_denied");
+    expect(audit.detail.length).toBeLessThan(200); // bounded, not megabytes
+    expect(audit.detail).toContain("bogus");
+    expect(audit.detail).toContain("…"); // truncation is visible
+    expect(audit.detail).not.toContain("\u0000"); // control chars stripped
+  });
+
+  it("clamps a huge assignee id in the assign-denied audit detail", () => {
+    const store = makeStore();
+    const res = store.assignReviewer({
+      organizationId: ORG,
+      reviewItemId: "rvi-bell-concierge",
+      reviewerStaffId: "s-ghost-".concat("y".repeat(1_000_000)),
+      actorStaffId: "s-mercer",
+    });
+    expect(res).toMatchObject({ ok: false, denialCode: "ACTOR_NOT_IN_ORG" });
+    const audit = store.auditFor(ORG).at(-1)!;
+    expect(audit.action).toBe("review.assign_denied");
+    expect(audit.detail.length).toBeLessThan(200);
+  });
+});
+
 describe("recordReviewOutcome — measurable outcomes on published items only", () => {
   it("records outcome on the published seed item; denies on a non-published item (audited)", () => {
     const store = makeStore();

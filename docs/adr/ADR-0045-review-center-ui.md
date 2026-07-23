@@ -83,6 +83,38 @@ the authoring/orchestration flows (domain bridges, next Workstream A slices).
 The read surface already renders their results (superseded/withdrawn states,
 previous/superseded-by links, outcomes on published items).
 
+## Review notes (adversarial review of PR #96)
+
+- **M1 — FIXED (bounds live in the STORE, the authority; UI only mirrors).**
+  Unbounded client-controlled strings could flow into the append-only
+  `ReviewDecisionRecord` and the audit trail. `recordReviewDecision` now
+  enforces input bounds BEFORE any policy check or mutation, returning the
+  existing `INVALID_INPUT` denial shape: `editedFields` trimmed +
+  deduplicated, max 32 entries, each 1-64 identifier-ish characters
+  (letters/digits/spaces/`._-`; anything else denied); `detail` trimmed, max
+  2000 characters — over-length is DENIED, never silently truncated, because
+  the durable record must be exactly what the reviewer signed. Denied paths
+  that interpolate raw client input into audit details (`recordReviewDecision`
+  ×3, `assignReviewer` assignee id) clamp each value via `clampForAudit`
+  (control characters stripped, 64-char cap, visible ellipsis) so a
+  multi-megabyte or binary payload cannot pollute the audit log even on
+  denial. The UI mirrors the bounds as `maxLength` UX only (+7 shared
+  tests: over-count / over-length name / non-identifier name / over-length
+  detail denied; valid bounded input unchanged incl. trim+dedupe; both
+  denied-path audit clamps).
+- **L1 (accepted):** for non-revised artifacts the demo artifact source is a
+  tautology (current ≡ reviewed by construction) — real artifact currency,
+  and therefore real staleness, arrives with the domain bridges, which supply
+  version + digest from the bridged domain records.
+- **L3 (accepted):** publication is single-click; a confirmation step is
+  considered for the Clerk slice, where publish becomes a real client-facing
+  event rather than a demo-store mutation.
+- **L4 (accepted):** with a single demo identity (the owner), only the
+  stale-artifact denial is e2e-exercisable through the UI; the role-floor,
+  self-review, and assignment denial renderings are exercised code-level
+  (store tests + the shared denial-message map) — revisit with multi-identity
+  e2e post-Clerk.
+
 ## Consequences
 
 - Playwright critical paths (`apps/web/e2e/review-center.spec.ts`, serial,

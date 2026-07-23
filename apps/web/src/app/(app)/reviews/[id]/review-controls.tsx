@@ -136,17 +136,20 @@ export function DecisionForm({
           <input
             name="editedFields"
             required
+            maxLength={2080}
             placeholder="e.g. focusForNextQuarter, tone"
             className={inputClass}
           />
           <span className="mt-1 block text-[11px] text-ink-faint">
-            Comma-separated field names. Content digests stay with the store record.
+            Comma-separated field names — at most 32, each up to 64 characters. Content digests
+            stay with the store record.
           </span>
         </label>
       ) : null}
       <label className="block">
         <span className={labelClass}>Detail (optional)</span>
-        <textarea name="detail" rows={2} className={inputClass} />
+        {/* UX mirror of the store's 2000-char bound — the store is the gate. */}
+        <textarea name="detail" rows={2} maxLength={2000} className={inputClass} />
       </label>
       <button type="submit" disabled={pending} className={buttonClass}>
         Record decision

@@ -649,6 +649,34 @@ export function reviewerRoleForMemberRole(role: string): ReviewerRole | null {
 /** sha256 hex digest shape: exactly 64 lowercase hex characters. */
 const SHA256_HEX = /^[0-9a-f]{64}$/;
 
+// Bounds for client-controlled review-decision inputs (adversarial review of
+// PR #96, M1): these strings land in the APPEND-ONLY decision record and the
+// audit trail, so over-bound values are DENIED before any mutation — never
+// silently truncated, because the durable record must be exactly what the
+// reviewer signed.
+const MAX_EDITED_FIELDS = 32;
+/** Identifier-ish field name: 1-64 chars of letters, digits, spaces, or ._- */
+const EDITED_FIELD_NAME = /^[A-Za-z0-9._\- ]{1,64}$/;
+const MAX_DECISION_DETAIL_LENGTH = 2000;
+
+/**
+ * Clamp a client-controlled string before interpolating it into an audit
+ * detail: control characters stripped, at most `max` characters kept, with a
+ * trailing ellipsis whenever anything was removed — so a multi-megabyte or
+ * binary payload can never pollute the audit log, even on a denied path
+ * (adversarial review of PR #96, M1). O(max), not O(input).
+ */
+function clampForAudit(value: string, max = 64): string {
+  let out = "";
+  for (const ch of value) {
+    if (out.length >= max) break;
+    const code = ch.codePointAt(0) ?? 0;
+    if (code <= 0x1f || code === 0x7f) continue;
+    out += ch;
+  }
+  return out.length < value.length ? `${out}…` : out;
+}
+
 const CLIENT_ACTION_STATUSES: readonly ClientActionStatus[] = ["pending", "completed", "not_completed"];
 const REVIEW_OUTCOMES: readonly ReviewOutcome[] = ["achieved", "not_achieved", "unknown"];
 
@@ -3750,7 +3778,7 @@ export class AfloStore {
         action: "review.assign_denied",
         targetType: "review_item",
         targetId: item.id,
-        detail: `assignee ${input.reviewerStaffId} is not a member of the organization`,
+        detail: `assignee ${clampForAudit(input.reviewerStaffId)} is not a member of the organization`,
         reasonCode: "RVC_REVIEWER_NOT_MEMBER",
         ruleVersion: REVIEW_CENTER_RULES_VERSION,
         occurredAt: now.toISOString(),
@@ -3800,8 +3828,9 @@ export class AfloStore {
 
   /**
    * THE single decision entry point (mirrors
-   * `DrizzleReviewItemRepository.recordDecisionAndTransition`): reviewer
-   * policy (`canReview` — role floor + high-risk no-self-review) → decision
+   * `DrizzleReviewItemRepository.recordDecisionAndTransition`): input bounds
+   * on the client-controlled strings (PR #96 M1 — deny, never truncate) →
+   * reviewer policy (`canReview` — role floor + high-risk no-self-review) → decision
    * legality (`applyReviewDecision` — modification pairing, structured reason
    * codes, escalation ceiling) → append the APPEND-ONLY decision record AND
    * move the item head in one mutation, so the head can never disagree with
@@ -3815,6 +3844,34 @@ export class AfloStore {
     if (!item) return { ok: false, denialCode: "REVIEW_ITEM_NOT_FOUND", emittedEventIds: [] };
     const actor = this.findActor(input.organizationId, input.actorStaffId);
     if (!actor) return { ok: false, denialCode: "ACTOR_NOT_IN_ORG", emittedEventIds: [] };
+
+    // Input bounds BEFORE any policy check or mutation (adversarial review of
+    // PR #96, M1): edited-field names are trimmed, DEDUPLICATED, capped at 32
+    // entries of 1-64 identifier-ish characters; detail is trimmed and capped
+    // at 2000 characters. Over-bound input is DENIED, never truncated — the
+    // append-only record must be exactly what the reviewer signed. Pure
+    // input-shape validation returns INVALID_INPUT without an audit row (the
+    // established store precedent: the audit log records policy events, not
+    // typos).
+    const inputErrors: string[] = [];
+    const editedFields = [...new Set((input.editedFields ?? []).map((f) => f.trim()))];
+    if (editedFields.length > MAX_EDITED_FIELDS) {
+      inputErrors.push(`editedFields exceeds ${MAX_EDITED_FIELDS} entries`);
+    }
+    const badField = editedFields.find((f) => !EDITED_FIELD_NAME.test(f));
+    if (badField !== undefined) {
+      inputErrors.push(
+        `edited field name ${JSON.stringify(clampForAudit(badField))} must be 1-64 characters of letters, digits, spaces, or ._-`,
+      );
+    }
+    const trimmedDetail = input.detail == null ? null : input.detail.trim();
+    if (trimmedDetail !== null && trimmedDetail.length > MAX_DECISION_DETAIL_LENGTH) {
+      inputErrors.push(`detail exceeds ${MAX_DECISION_DETAIL_LENGTH} characters`);
+    }
+    if (inputErrors.length > 0) {
+      return { ok: false, denialCode: "INVALID_INPUT", inputErrors, emittedEventIds: [] };
+    }
+    const detail = trimmedDetail !== null && trimmedDetail.length > 0 ? trimmedDetail : null;
 
     const reviewPolicy = canReview({
       riskClassification: item.riskClassification,
@@ -3830,7 +3887,7 @@ export class AfloStore {
         action: "review.decision_denied",
         targetType: "review_item",
         targetId: item.id,
-        detail: `${input.decision} on ${item.artifactType}/${item.artifactId} denied (reviewer policy)`,
+        detail: `${clampForAudit(input.decision)} on ${item.artifactType}/${item.artifactId} denied (reviewer policy)`,
         reasonCode: reviewPolicy.reasonCode,
         ruleVersion: reviewPolicy.ruleVersion,
         occurredAt: now.toISOString(),
@@ -3855,7 +3912,7 @@ export class AfloStore {
         action: "review.decision_denied",
         targetType: "review_item",
         targetId: item.id,
-        detail: `${input.decision} denied — item is assigned to ${item.assignedReviewerStaffId} (actor: ${actor.id})`,
+        detail: `${clampForAudit(input.decision)} denied — item is assigned to ${item.assignedReviewerStaffId} (actor: ${actor.id})`,
         reasonCode: "RVC_NOT_ASSIGNED_REVIEWER",
         ruleVersion: REVIEW_CENTER_RULES_VERSION,
         occurredAt: now.toISOString(),
@@ -3868,7 +3925,6 @@ export class AfloStore {
       };
     }
 
-    const editedFields = input.editedFields ?? [];
     const outcome = applyReviewDecision({
       decision: input.decision,
       fromState: item.state,
@@ -3883,7 +3939,7 @@ export class AfloStore {
         action: "review.decision_denied",
         targetType: "review_item",
         targetId: item.id,
-        detail: `${input.decision} (${input.decisionReasonCode}) denied from ${item.state}`,
+        detail: `${clampForAudit(input.decision)} (${clampForAudit(input.decisionReasonCode)}) denied from ${item.state}`,
         reasonCode: outcome.reasonCode,
         ruleVersion: outcome.ruleVersion,
         occurredAt: now.toISOString(),
@@ -3908,7 +3964,7 @@ export class AfloStore {
       editedFields,
       finalOutputSha256: input.finalOutputSha256 ?? null,
       escalatedToRole: outcome.escalatedToRole ?? null,
-      detail: input.detail ?? null,
+      detail,
       decidedAt: now.toISOString(),
     };
     this.db.reviewDecisions.push(decision);
