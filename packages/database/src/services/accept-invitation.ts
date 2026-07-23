@@ -51,7 +51,17 @@ export interface AcceptInvitationByTokenInput {
 export type AcceptInvitationByTokenOutcome =
   | { ok: true; kind: "membership"; organizationId: string; membershipId: string }
   | { ok: true; kind: "client_link"; organizationId: string; clientId: string; linkId: string }
-  | { ok: false; reason: "invalid_token" | "already_bound" | InvitationDenial | MembershipDenial };
+  | {
+      ok: false;
+      reason: "invalid_token" | "already_bound" | InvitationDenial | MembershipDenial;
+      /**
+       * INTERNAL audit context (ADR-0044), populated when the token resolved a
+       * real invitation before the denial. NEVER surfaced in a response body —
+       * the route builds its (anti-oracle uniform) reply from `reason` alone.
+       */
+      organizationId?: string;
+      invitationId?: string;
+    };
 
 /** Raw row shape from `SELECT * FROM find_invitation_by_token(...)`. */
 interface InvitationRow {
@@ -148,11 +158,25 @@ export async function acceptInvitationByToken(
     email: input.email,
     nowIso,
   });
-  if (!accepted.ok) return { ok: false, reason: accepted.reason };
+  if (!accepted.ok) {
+    return {
+      ok: false,
+      reason: accepted.reason,
+      organizationId: invitation.organizationId,
+      invitationId: invitation.id,
+    };
+  }
   const binding = accepted.binding!;
 
   const application = applyAcceptedBinding(binding, { membershipId: input.newMembershipId, nowIso });
-  if (application.kind === "rejected") return { ok: false, reason: application.reason };
+  if (application.kind === "rejected") {
+    return {
+      ok: false,
+      reason: application.reason,
+      organizationId: invitation.organizationId,
+      invitationId: invitation.id,
+    };
+  }
 
   // 4. Atomically claim the invitation + create the link/membership, org-scoped.
   try {

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import {
   acceptInvitationByToken,
+  DrizzleAuditEventRepository,
   handleAcceptInvitation,
   isDatabaseConfigured,
   isResolverConfigured,
@@ -70,6 +71,9 @@ export async function POST(request: Request): Promise<Response> {
       // Pre-bound to the two role-scoped handles: resolver read → tenant write.
       acceptInvitation: (acceptInput) => acceptInvitationByToken(resolver.db, tenant.db, acceptInput),
       verifiedEmail: verifiedSessionEmail,
+      // Matrix §7 row 1 (ADR-0044, closing the ADR-0042 deferral): the created
+      // membership/link is audited org-scoped — ids only, never email/token.
+      auditSink: new DrizzleAuditEventRepository(tenant.db),
       now: () => new Date(),
       newMembershipId: randomUUID,
     },

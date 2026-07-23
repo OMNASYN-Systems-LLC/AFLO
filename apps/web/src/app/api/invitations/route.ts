@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { generateInvitationToken } from "@aflo/auth/invitation-token";
 import {
+  DrizzleAuditEventRepository,
   DrizzleInvitationRepository,
   handleIssueInvitation,
   isDatabaseConfigured,
@@ -68,6 +69,9 @@ export async function POST(request: Request): Promise<Response> {
     {
       sessionProvider: createSessionProvider(resolver.db),
       invitations: new DrizzleInvitationRepository(tenant.db),
+      // Matrix §7 row 1 (ADR-0044, closing the ADR-0042 deferral): issuance is
+      // audited org-scoped — ids/role only, never the email or token.
+      auditSink: new DrizzleAuditEventRepository(tenant.db),
       now: () => new Date(),
       newId: randomUUID,
       generateToken: generateInvitationToken,
