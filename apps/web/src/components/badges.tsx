@@ -6,10 +6,13 @@ import type {
   IntakeStatus,
   LifecycleStage,
   ReportStatus,
+  ReviewItemState,
+  ReviewRiskClass,
   ReviewStatus,
   RoadmapStatus,
 } from "@aflo/shared";
 import { CLIENT_STATUS_LABELS, ENGAGEMENT_LABELS, STAGE_LABELS } from "@/lib/format";
+import { REVIEW_RISK_LABELS, REVIEW_STATE_LABELS } from "@/lib/review-format";
 
 /**
  * Status is never color alone: every badge carries its text label, and tones
@@ -122,6 +125,32 @@ const REPORT_STATUS: Record<ReportStatus, { label: string; tone: Tone }> = {
 export function ReportStatusBadge({ status }: { status: ReportStatus }) {
   const s = REPORT_STATUS[status];
   return <Badge tone={s.tone} label={s.label} />;
+}
+
+/** Human Review Center item states (review_center.v1.0.0). */
+const REVIEW_ITEM_STATE_TONES: Record<ReviewItemState, Tone> = {
+  draft: "neutral",
+  awaiting_review: "warn",
+  approved: "calm",
+  published: "good",
+  rejected: "risk",
+  deferred: "gold",
+  withdrawn: "neutral",
+  superseded: "neutral",
+};
+
+export function ReviewItemStateBadge({ state }: { state: ReviewItemState }) {
+  return <Badge tone={REVIEW_ITEM_STATE_TONES[state]} label={REVIEW_STATE_LABELS[state]} />;
+}
+
+const RISK_TONES: Record<ReviewRiskClass, Tone> = {
+  low: "neutral",
+  medium: "warn",
+  high: "risk",
+};
+
+export function RiskBadge({ risk }: { risk: ReviewRiskClass }) {
+  return <Badge tone={RISK_TONES[risk]} label={REVIEW_RISK_LABELS[risk]} />;
 }
 
 const REVIEW_STATUS: Record<ReviewStatus, { label: string; tone: Tone }> = {
