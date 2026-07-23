@@ -97,8 +97,20 @@ request.
 
 ## 3. Environment variables (per environment, dashboard-only — never the repo)
 
+**Runtime selection first (ADR-0017 + ADR-0048).** There is no implicit runtime
+anymore: every deployment either opts into the demo prototype with
+`APP_ENV=demo`, or explicitly selects the real runtime with `AUTH_MODE=clerk` +
+`REPOSITORY_MODE=postgres` (plus, for production, `APP_ENV=production` and the
+full integration set). Anything ambiguous — including the old "no variables at
+all" prototype default — refuses to boot. The cutover for each environment is
+therefore: **replace `APP_ENV=demo` with the real selection below**; the two
+states can never be active at once (the contract rejects the mix).
+
 | Variable | Purpose | Notes |
 |---|---|---|
+| `APP_ENV` | Runtime mode | `demo` (prototype, explicit opt-in) → replaced by `preview`/`production` at cutover |
+| `AUTH_MODE` | Auth provider selection | `clerk` for the real runtime; never set alongside `APP_ENV=demo` |
+| `REPOSITORY_MODE` | Repository selection | `postgres` for the real runtime; never set alongside `APP_ENV=demo` |
 | `DATABASE_URL` | Pooled runtime connection **as `aflo_app`** | `-pooler` host; validated fail-closed by `getDatabaseConfig` |
 | `DIRECT_DATABASE_URL` | Direct connection for migrations | non-pooled host |
 | `AUTH_RESOLVER_DATABASE_URL` | Pooled connection **as `aflo_auth_resolver`** | resolver pool (new — add when wiring the resolver path) |
@@ -175,7 +187,10 @@ credentials/provisioning:
 
 - Outside tests: **no** demo users/clients, hardcoded sessions, mock auth,
   memory-backed repositories, synthetic runtime fallback, or public
-  protected-file storage. Missing prod/preview config **fails closed**.
+  protected-file storage. Missing prod/preview config **fails closed** — and
+  since ADR-0048 the demo runtime itself is an explicit `APP_ENV=demo` opt-in:
+  an ambiguous or partially configured deployment refuses to boot rather than
+  landing on synthetic data (PR #97 LOW-5, closed).
 - **Digests only** for tokens/session-ids/webhook payloads; **ciphertext only**
   for message bodies. Never commit secrets or real PII.
 - GitHub is the migration authority; **never** hand-author Neon DDL for schema,

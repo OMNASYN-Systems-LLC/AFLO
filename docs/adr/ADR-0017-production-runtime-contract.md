@@ -5,6 +5,14 @@
 **Accepted** — 2026-07-19 (production-conversion directive, Phase 2 —
 "Production Runtime Contract")
 
+> **Amended by ADR-0048 (2026-07-23).** The demo/synthetic runtime is no longer
+> the implicit non-production default: it requires an explicit `APP_ENV=demo`
+> opt-in (mirroring this ADR's explicit `APP_ENV=production`), the provider
+> resolvers return `unresolved` instead of demo-family defaults, and
+> `resolveRuntimeConfig`/`assertRuntimeReady` now also fail closed in
+> development/preview when the runtime is ambiguous. "Permissive outside
+> production" below describes the original design, retained for the record.
+
 ## Context
 
 The founder's production-conversion directive sets a **non-negotiable** rule:

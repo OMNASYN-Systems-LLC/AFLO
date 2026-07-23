@@ -41,7 +41,20 @@ Config-as-code lives in **`apps/web/vercel.json`** (framework, install, and buil
 | Node.js version | 22.x (matches `engines.node >=22` in root `package.json`) |
 | Production branch | `main` |
 
-> **Status: imported and deploying (2026-07-18).** The founder connected the Vercel GitHub integration; project `aflo-web` builds with root directory `apps/web` and the settings above. PR previews and `main` production deployments are green. Environment variables remain unset (none required yet) and enter only via the Vercel dashboard when Clerk/Neon slices activate.
+> **Status: imported and deploying (2026-07-18).** The founder connected the Vercel GitHub integration; project `aflo-web` builds with root directory `apps/web` and the settings above. PR previews and `main` production deployments are green. Real credentials remain unset and enter only via the Vercel dashboard when Clerk/Neon slices activate.
+
+> **REQUIRED dashboard action (ADR-0048, 2026-07-23).** The demo/synthetic
+> runtime is now an EXPLICIT opt-in — a deployment with no runtime variables
+> refuses to boot instead of silently serving synthetic data. For project
+> `aflo-web`, set **`APP_ENV=demo`** in the Vercel dashboard for BOTH the
+> **Preview** and **Production** environments before (or together with) merging
+> the ADR-0048 change — this keeps the prototype previews and the `main`
+> prototype deployment serving. At each environment's real cutover, replace
+> `APP_ENV=demo` with the real selection (`AUTH_MODE=clerk`,
+> `REPOSITORY_MODE=postgres`, and for production `APP_ENV=production` plus the
+> full ADR-0017 set — see `AUTH_CUTOVER_RUNBOOK.md` §3). Builds themselves need
+> no variable (static prerender of the prototype shell is allowed at build
+> time; serving is what the boot gate protects).
 
 pnpm version pinning:
 
@@ -56,7 +69,7 @@ Workspace packages:
 Preview deployments:
 
 - Every PR gets a preview URL automatically. Previews must use preview-scoped env vars (Vercel environments: Development / Preview / Production) and a non-production Neon branch.
-- Preview deployments render synthetic data only.
+- Preview deployments render synthetic data only — and since ADR-0048 that requires the explicit `APP_ENV=demo` opt-in in the Preview environment; a preview with no runtime variables refuses to boot.
 
 ---
 
@@ -111,10 +124,22 @@ Vercel Blob (default) or any S3-compatible store (Cloudflare R2, AWS S3).
 
 All values below are **placeholders**. Real values live only in the Vercel and Railway dashboards (see §8).
 
-**The first visual slice requires no environment variables.** It uses in-memory mock repositories, no auth provider, and makes no external calls. Every variable below is introduced only when the feature that needs it lands; "Required when" states that trigger.
+**Every deployment must select its runtime explicitly (ADR-0017 + ADR-0048).**
+The demo prototype needs exactly one variable — `APP_ENV=demo` — and nothing
+else (in-memory repositories, demo auth, no external calls; local `pnpm dev`
+gets it from the committed `apps/web/.env.development`). The real runtime is
+selected with `AUTH_MODE=clerk` + `REPOSITORY_MODE=postgres` (+
+`APP_ENV=production` and the full set for production). A deployment that sets
+neither refuses to boot. Every other variable below is introduced only when the
+feature that needs it lands; "Required when" states that trigger.
 
 | Name | Service | Required when | Description | Example placeholder |
 |---|---|---|---|---|
+| `APP_ENV` | both | Always (runtime selection) | Runtime mode: `demo` (explicit demo/synthetic opt-in, ADR-0048), `preview`, `production` (explicit go-live, ADR-0017), `development`, `test`. Never inferred from hosting signals | `demo` |
+| `AUTH_MODE` | web | Real runtime selected | `clerk` selects real auth; unset outside the demo opt-in fails closed (`unresolved`) | `clerk` |
+| `REPOSITORY_MODE` | both | Real runtime selected | `postgres` selects the Drizzle/Neon repositories; unset outside the demo opt-in fails closed (`unresolved`) | `postgres` |
+| `SEED_MODE` | both | Optional | `off` is the resolved value everywhere outside `APP_ENV=demo`; `synthetic` is only legal inside the demo opt-in | `off` |
+| `DATABASE_BRANCH` | both | Production hardening | Authoritative Neon branch signal for the preview-database fail-closed check (ADR-0017) | `main` |
 | `WORKER_HEARTBEAT` | worker | The worker stub is deployed to Railway at all | Set to `1` so the stub stays alive between heartbeats; unset, it enumerates its job registry and exits 0 (Railway's on-failure restart policy will **not** restart a clean exit) | `1` |
 | `DATABASE_URL` | both | First Neon-backed repository ships | Pooled Neon connection string for runtime queries | `postgresql://app_user:<password>@ep-example-123-pooler.us-east-2.aws.neon.tech/aflo?sslmode=require` |
 | `DIRECT_DATABASE_URL` | both (CI + worker) | Migrations run against Neon | Direct (non-pooled) Neon connection string for migrations and session-level features | `postgresql://app_owner:<password>@ep-example-123.us-east-2.aws.neon.tech/aflo?sslmode=require` |

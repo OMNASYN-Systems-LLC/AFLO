@@ -1,16 +1,28 @@
 /**
  * Next.js instrumentation — runs once per server instance at startup, before
- * the app serves any request.
+ * the app serves any request. (It does NOT run during `next build`; build-time
+ * prerendering is separately allowed by the demo gate in `lib/data.ts`, and
+ * serving always passes through this gate first.)
  *
- * This is the fail-closed boot gate (production-conversion Phase 2, ADR-0017):
- * it asserts the runtime configuration and, in production, REFUSES TO START when
- * anything is misconfigured — a demo/mock fallback selected, a required secret
- * missing, a preview database, etc. Outside production it is permissive.
+ * This is the fail-closed boot gate (production-conversion Phase 2, ADR-0017,
+ * flipped to explicit demo opt-in by ADR-0048): it asserts the runtime
+ * configuration and REFUSES TO START when anything is misconfigured —
  *
- * Safe for the current prototype: production mode is entered only by an explicit
- * `APP_ENV=production`. With `APP_ENV` unset the runtime resolves to
- * `development`, `assertRuntimeReady` never throws, and the server boots
- * normally.
+ *   - production (`APP_ENV=production`) with a demo/mock fallback selected, a
+ *     required secret missing, or a preview database (ADR-0017);
+ *   - development/preview with an UNRESOLVED runtime axis — no explicit
+ *     `APP_ENV=demo` opt-in and no explicit `AUTH_MODE=clerk` +
+ *     `REPOSITORY_MODE=postgres` selection. This is the PR #97 LOW-5 fix: a
+ *     deployment that intended production but forgot `APP_ENV=production`
+ *     and/or one of the mode variables used to land silently on the
+ *     demo/synthetic runtime; now it refuses to serve (ADR-0048);
+ *   - demo (`APP_ENV=demo`) with a contradictory real selection.
+ *
+ * The demo prototype therefore REQUIRES the explicit `APP_ENV=demo` opt-in:
+ * local `pnpm dev` gets it from the committed `apps/web/.env.development`,
+ * Playwright sets it in its webServer env, and the Vercel prototype
+ * deployments must set it in the dashboard (see docs/deployment/DEPLOYMENT.md
+ * §2). Only `test` mode (vitest) boots with nothing configured.
  */
 export async function register(): Promise<void> {
   // Only the Node.js server runtime evaluates the contract (not the edge runtime).
@@ -27,7 +39,7 @@ export async function register(): Promise<void> {
   } catch (err) {
     if (err instanceof RuntimeConfigError) {
       // Fail closed: log the aggregated problems (env-var names only, no values)
-      // and rethrow so the misconfigured production deployment refuses to serve.
+      // and rethrow so the misconfigured deployment refuses to serve.
       console.error(`[aflo] FATAL: refusing to start — ${err.message}`);
     }
     throw err;
