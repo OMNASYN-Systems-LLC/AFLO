@@ -5,8 +5,10 @@ import { DEMO_STAFF, demoNow } from "@/lib/data";
 import { fmtDate, initials, STAFF_ROLE_LABELS } from "@/lib/format";
 
 // Founder staff navigation: Dashboard, Leads, Clients, Tasks, Reports,
-// Partners, Billing, Settings. The first three are live; the rest surface
-// as their slices land.
+// Partners, Billing, Settings — plus the Human Review Center (founder
+// directive 2026-07-20: human-in-the-loop is first-class workflow
+// architecture). The first four are live; the rest surface as their slices
+// land.
 const COMING_SOON = ["Tasks", "Reports", "Partners", "Billing", "Settings"];
 
 export default function AppShellLayout({ children }: { children: React.ReactNode }) {
@@ -29,6 +31,7 @@ export default function AppShellLayout({ children }: { children: React.ReactNode
           <NavLink href="/dashboard">Dashboard</NavLink>
           <NavLink href="/leads">Lead Pipeline</NavLink>
           <NavLink href="/clients">Clients</NavLink>
+          <NavLink href="/reviews">Review Center</NavLink>
         </nav>
 
         <div className="mt-8">
