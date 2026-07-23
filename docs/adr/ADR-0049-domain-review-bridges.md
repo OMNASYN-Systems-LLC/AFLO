@@ -122,6 +122,30 @@ rather than assuming it). The walks:
   and the shadow may never disagree with them. The stale-publish check is
   likewise native-only — a live shadow is never stale by construction
   (`currentArtifactStateFor` in the web demo registry reflects this).
+  - **Founder-visible consequence (authority asymmetry).** A concrete
+    difference follows: a plain Staff/Advisor **can** publish a high-risk
+    `quarterly_report` (or roadmap) shadow through `transitionReport` /
+    `transitionRoadmap`, because those domain kernels authorize it — whereas
+    a NATIVE high-risk review item requires `organization_admin+` under
+    `canPublishReviewItem` (founder A PR-5 matrix, "Staff cannot publish
+    high-risk artifacts"). This is intentional and charter-compatible (staff
+    action IS the human approval and the shadow records who acted), but the
+    two surfaces do not share one publish floor. If the founder wants the
+    matrix floor to bind bridged reports/roadmaps too, that is a deliberate
+    future change to the domain kernels' publish authorization — not a bridge
+    concern — and is called out here so the asymmetry is not discovered by
+    surprise.
+- **`assignReviewer` and `recordReviewOutcome` are permitted-but-inert on
+  bridged shadows** (they carry no `state` move, so no two-architectures
+  divergence is reachable): outcome recording is legitimate moat data; a
+  reviewer assignment is advisory metadata the domain transition ignores.
+  Only the six state-moving review APIs deny bridged types.
+- **Queue completeness is lazy (seed vs runtime).** Seeded open domain rows
+  carry their shadow; a domain row created at RUNTIME in `draft` gets its
+  shadow on its FIRST transition (lazy creation), so a brand-new draft
+  roadmap/report is not yet in the review queue. The shadow-consistency
+  invariant asserts shadow→domain agreement (no divergence); a future slice
+  may mint the draft shadow at creation for domain→shadow queue completeness.
 
 ### Kernel + catalog changes (additive only)
 

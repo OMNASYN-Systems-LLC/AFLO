@@ -149,6 +149,15 @@ describe("LOCKSTEP — every legal domain transition derives a shadow path of le
       ["ready_for_review", "published"],
       ["ready_for_review", "draft"],
     ];
+    // Completeness guard (LOW-4): derive the kernel's ACTUAL edge set and assert
+    // our hand-listed pairs match it exactly, so a future report.v1 edge cannot
+    // be silently unbridged.
+    const derived = REPORT_STATUSES.flatMap((from) =>
+      REPORT_STATUSES.filter((to) => reportTransition(from, to).allowed).map(
+        (to) => `${from}->${to}`,
+      ),
+    ).sort();
+    expect(REPORT_ALLOWED.map(([f, t]) => `${f}->${t}`).sort()).toEqual(derived);
     for (const [from, to] of REPORT_ALLOWED) {
       expect(reportTransition(from, to).allowed, `${from}→${to}`).toBe(true);
       const edges = shadowEdges(reviewStateForReportStatus(from)!, reviewStateForReportStatus(to)!);
