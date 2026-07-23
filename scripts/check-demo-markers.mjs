@@ -37,10 +37,17 @@ const MARKERS = [
  * The known, tracked demo runtime path (the ONLY place demo identity is allowed
  * in runtime code today). Remove each entry when Clerk replaces it. A new demo
  * marker anywhere NOT listed here fails the build.
+ *
+ * ADR-0052 shrank this from two entries to one: the `DemoAuthProvider` class
+ * AND its construction now live entirely in `packages/auth/src/demo.ts`
+ * (via `createDemoAuthProvider`), so `apps/web/src/lib/data.ts` no longer names
+ * any demo-identity marker and left the allowlist. `data.ts` is now under FULL
+ * guard coverage again — reintroducing a demo marker there fails the build. The
+ * one remaining entry drains to zero when the Clerk-backed provider replaces
+ * the class (runbook §5.2).
  */
 const ALLOWLIST = new Set([
-  "packages/auth/src/demo.ts", // the DemoAuthProvider class itself (prototype auth)
-  "apps/web/src/lib/data.ts", // composition root that instantiates it (the active demo split)
+  "packages/auth/src/demo.ts", // the DemoAuthProvider class + its sole factory (prototype auth)
 ]);
 
 const SCAN_DIRS = ["apps", "packages"];

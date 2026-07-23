@@ -1,5 +1,5 @@
 import {
-  DemoAuthProvider,
+  createDemoAuthProvider,
   requireClientSession,
   requireStaffSession,
   type AuthProvider,
@@ -60,12 +60,29 @@ function assertDemoRuntime(): void {
   );
 }
 
-/** Wrap an object so every METHOD CALL re-checks the demo-runtime gate. */
+/**
+ * Wrap an object so EVERY property access re-checks the demo-runtime gate.
+ *
+ * A method call is gated at CALL time (so a mere reference read stays cheap and
+ * the throw lands where the synthetic work would actually run). A non-function
+ * property is gated at READ time: ADR-0052 closes the ADR-0048 review's LOW-2
+ * gap, where the previous proxy returned data properties (e.g. an accessor or
+ * getter exposing synthetic state) RAW, without the gate — so a synthetic value
+ * could be read outside the opt-in without a method call. Now reading any
+ * non-function property outside the explicit demo opt-in throws exactly like
+ * calling a method does. (No consumer reads a data property off these
+ * singletons today — every call site uses a method — so this only strengthens
+ * the fail-closed posture; it never changes demo/test behavior.)
+ */
 function demoGated<T extends object>(target: T): T {
   return new Proxy(target, {
     get(t, prop, receiver) {
       const value = Reflect.get(t, prop, receiver);
-      if (typeof value !== "function") return value;
+      if (typeof value !== "function") {
+        // LOW-2 (ADR-0048 review, closed by ADR-0052): data props fail closed too.
+        assertDemoRuntime();
+        return value;
+      }
       return (...args: unknown[]) => {
         assertDemoRuntime();
         return (value as (...a: unknown[]) => unknown).apply(t, args);
@@ -74,6 +91,21 @@ function demoGated<T extends object>(target: T): T {
   });
 }
 
+// Rendered-identity constants (inventory §e). Computed EAGERLY at module load
+// from the synthetic dataset; the VALUES themselves are not behind the demo
+// gate, but nothing SERVES them outside the opt-in (ADR-0052): (1) they hold
+// only synthetic ORG id / STAFF identity / a pinned clock, never client PII
+// beyond the dataset already bundled for demo; (2) boot enforcement
+// (`instrumentation.ts`) refuses to SERVE any non-opt-in config before this
+// module can be reached in a served process; (3) pages pass `DEMO_ORG_ID` /
+// `demoNow` only as ARGUMENTS to gated store/repository calls, which throw
+// first outside the opt-in, so a real-cell request 500s before rendering any
+// synthetic byte; (4) the one component that renders identity DIRECTLY — the
+// `(app)` layout shell — now goes through the gated `getDemoShellIdentity()`
+// (below), closing the LOW-2 leak where the shell of a real-cell 500 streamed
+// synthetic staff identity. Result: the real cell serves ZERO synthetic bytes
+// (live-re-verified). Full deletion of these constants is the B11 cutover's
+// job — this module is removed whole when Clerk lands (inventory §h).
 export const DEMO_ORG_ID = syntheticDatabase.organization.id;
 export const demoNow: Date = SYNTHETIC_NOW;
 
@@ -103,6 +135,26 @@ export const DEMO_STAFF: StaffMember = (() => {
 export const DEMO_CLIENT_ID = "c-bell";
 
 /**
+ * Gated shell identity for the `(app)` layout chrome (ADR-0052).
+ *
+ * Every DATA page renders synthetic values only THROUGH a gated store/repository
+ * call, which throws first outside the opt-in — so a real-cell request 500s
+ * before any synthetic byte is produced. The `(app)` layout is the exception:
+ * it renders staff identity + the read clock DIRECTLY (sidebar name/role, header
+ * date), with no preceding gated call, so on origin/main it streamed synthetic
+ * identity ("Danielle Mercer", the pinned date) into the shell of a real-cell
+ * 500 response (the LOW-2 ungated-constant leak, live-proven). Routing the
+ * layout through this accessor makes it fail closed EXACTLY like the pages:
+ * outside `APP_ENV=demo` it throws and no synthetic identity is served; under
+ * the opt-in it returns the personas unchanged, so demo previews render
+ * byte-identically. (B11 deletes this whole module when Clerk lands.)
+ */
+export function getDemoShellIdentity(): { staff: StaffMember; now: Date } {
+  assertDemoRuntime();
+  return { staff: DEMO_STAFF, now: demoNow };
+}
+
+/**
  * Session resolution flows through the @aflo/auth boundary (ADR-0006) — the
  * ONLY source of organization and actor identity for reads and mutations.
  * Never accept ids from the browser. The two demo providers are a
@@ -111,12 +163,12 @@ export const DEMO_CLIENT_ID = "c-bell";
  * explicit demo opt-in (ADR-0048): outside it they throw — a demo identity is
  * never minted in an ambiguous or real runtime.
  */
-const staffAuth: AuthProvider = new DemoAuthProvider({
+const staffAuth: AuthProvider = createDemoAuthProvider({
   kind: "staff",
   organizationId: DEMO_ORG_ID,
   staffId: DEMO_STAFF.id,
 });
-const clientAuth: AuthProvider = new DemoAuthProvider({
+const clientAuth: AuthProvider = createDemoAuthProvider({
   kind: "client",
   organizationId: DEMO_ORG_ID,
   clientId: DEMO_CLIENT_ID,
