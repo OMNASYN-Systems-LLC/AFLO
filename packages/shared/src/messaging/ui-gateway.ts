@@ -1,6 +1,11 @@
 import type { ThreadStatus } from "@aflo/rules";
 import type { ClientThreadView, ConversationThread, Message } from "../domain/messaging";
-import { resolveAuthMode, resolveRepositoryMode, type EnvLike } from "../runtime/runtime";
+import {
+  isDemoRuntimePermitted,
+  resolveAuthMode,
+  resolveRepositoryMode,
+  type EnvLike,
+} from "../runtime/runtime";
 import type {
   AfloStore,
   MarkReadResult,
@@ -15,15 +20,18 @@ import type {
  * ONE narrow contract for everything the staff and portal messaging UI does —
  * list a client's conversations, open a thread, reply, mark read, set thread
  * status — with TWO implementations selected by the EXISTING runtime contract
- * (ADR-0017; no new flag):
+ * (ADR-0017, demo opt-in flipped by ADR-0048; no parallel flag system):
  *
- *   - demo/synthetic runtime → `StoreStaffMessagingGateway` /
- *     `StorePortalMessagingGateway` (this module): the exact `AfloStore` calls
- *     the pages/actions made before the seam existed — behavior unchanged.
+ *   - EXPLICIT demo runtime (`APP_ENV=demo`, or automated tests) →
+ *     `StoreStaffMessagingGateway` / `StorePortalMessagingGateway` (this
+ *     module): the exact `AfloStore` calls the pages/actions made before the
+ *     seam existed — behavior unchanged.
  *   - clerk + postgres runtime → the route-service-backed gateways in
  *     `@aflo/database` (`messaging-ui-gateway.ts`), which invoke the SAME
  *     tested handlers behind `/api/messages/...` (ADR-0044) so authorization
  *     lives in exactly one place.
+ *   - anything else (ambiguous/partial config) → `unavailable`: no gateway is
+ *     selected and every operation fails closed — never demo data (ADR-0048).
  *
  * THE ANTI-ORACLE RULE, PRESERVED END TO END (ADR-0036/0044): the result
  * vocabulary has NO "denied" variant. A denial is not representable to the UI
@@ -83,20 +91,29 @@ export interface PortalMessagingGateway {
 // Runtime selection — derived from the EXISTING contract, never a new flag
 // ---------------------------------------------------------------------------
 
-export type MessagingUiRuntime = "demo" | "persistent";
+export type MessagingUiRuntime = "demo" | "persistent" | "unavailable";
 
 /**
  * Which seam implementation this process uses, derived from the canonical
- * runtime contract (`resolveAuthMode`/`resolveRepositoryMode`, ADR-0017):
- * clerk + postgres → the persistent route-service path; anything else → the
- * demo/synthetic store path. Mirrors `isMessagingRouteConfigured` (ADR-0044):
- * once the REAL runtime is selected, a missing URL/key must fail closed
- * (503-shaped `unavailable`), never fall back to demo data.
+ * runtime contract (`resolveAuthMode`/`resolveRepositoryMode`, ADR-0017 as
+ * flipped by ADR-0048):
+ *
+ *   - clerk + postgres → the persistent route-service path;
+ *   - the EXPLICIT demo opt-in (`APP_ENV=demo`, or automated tests) → the
+ *     demo/synthetic store path;
+ *   - anything else → `unavailable`: the runtime is ambiguous or partially
+ *     selected, and every operation must answer the 503-shaped `unavailable`
+ *     result — NEVER demo data. Demo stopped being the fallback with
+ *     ADR-0048; it is now a deliberate selection, exactly like production.
+ *
+ * Mirrors `isMessagingRouteConfigured` (ADR-0044): once the REAL runtime is
+ * selected, a missing URL/key must also fail closed (`unavailable`).
  */
 export function resolveMessagingUiRuntime(env: EnvLike): MessagingUiRuntime {
-  return resolveAuthMode(env) === "clerk" && resolveRepositoryMode(env) === "postgres"
-    ? "persistent"
-    : "demo";
+  if (resolveAuthMode(env) === "clerk" && resolveRepositoryMode(env) === "postgres") {
+    return "persistent";
+  }
+  return isDemoRuntimePermitted(env) ? "demo" : "unavailable";
 }
 
 // ---------------------------------------------------------------------------

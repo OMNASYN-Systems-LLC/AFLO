@@ -30,7 +30,10 @@ export default defineConfig({
   webServer: {
     command: "pnpm start",
     url: `http://localhost:${PORT}`,
-    env: { PORT: String(PORT) },
+    // APP_ENV=demo is the EXPLICIT demo-runtime opt-in (ADR-0048): without it
+    // the boot gate refuses to start and every demo session/repository access
+    // throws. The e2e suite exercises the demo prototype, so it opts in here.
+    env: { PORT: String(PORT), APP_ENV: "demo" },
     reuseExistingServer: !process.env.CI,
     timeout: 120_000,
   },

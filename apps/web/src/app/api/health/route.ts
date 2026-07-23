@@ -6,13 +6,14 @@ import { resolveRuntimeConfig } from "@aflo/shared";
  * Reports ONLY non-sensitive status — the runtime mode plus a boolean per
  * integration (database / auth / storage / email / worker / observability
  * configured) and the selected provider modes. It never exposes a secret value.
- * `status` is "ok" unless the runtime contract found a fail-closed violation
- * (only possible in production).
+ * `status` is "ok" unless the runtime contract found a fail-closed violation —
+ * production misconfiguration (ADR-0017) or an unresolved/contradictory
+ * runtime axis outside the explicit demo opt-in (ADR-0048).
  *
  * This route only REPORTS; it does not fail closed. Boot-time enforcement
- * (calling `assertRuntimeReady` so a misconfigured production deployment refuses
- * to serve) is the sequenced follow-up — safe to add because production mode is
- * an explicit `APP_ENV=production` opt-in.
+ * lives in `instrumentation.ts` (`assertRuntimeReady`), which refuses to start
+ * a misconfigured deployment — so in practice this route only ever renders
+ * "degraded" in contexts that bypassed boot (none today).
  */
 export const dynamic = "force-dynamic";
 

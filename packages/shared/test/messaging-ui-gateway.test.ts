@@ -26,22 +26,33 @@ function makeStore() {
   return new AfloStore(syntheticDatabase, () => NOW);
 }
 
-describe("resolveMessagingUiRuntime — selection by the EXISTING runtime contract", () => {
-  it("defaults to the demo/store path (empty env, demo auth, memory repositories)", () => {
-    expect(resolveMessagingUiRuntime({})).toBe("demo");
-    expect(resolveMessagingUiRuntime({ AUTH_MODE: "demo", REPOSITORY_MODE: "memory" })).toBe("demo");
+describe("resolveMessagingUiRuntime — selection by the EXISTING runtime contract (ADR-0048 flip)", () => {
+  it("selects the demo/store path ONLY under the explicit opt-in (APP_ENV=demo, or test mode)", () => {
+    expect(resolveMessagingUiRuntime({ APP_ENV: "demo" })).toBe("demo");
+    expect(resolveMessagingUiRuntime({ APP_ENV: "demo", AUTH_MODE: "demo", REPOSITORY_MODE: "memory" })).toBe("demo");
+    expect(resolveMessagingUiRuntime({ NODE_ENV: "test" })).toBe("demo");
+  });
+
+  it("answers unavailable — NEVER demo — for the ambiguous/implicit cells (LOW-5)", () => {
+    expect(resolveMessagingUiRuntime({})).toBe("unavailable");
+    expect(resolveMessagingUiRuntime({ AUTH_MODE: "demo", REPOSITORY_MODE: "memory" })).toBe("unavailable");
+    expect(resolveMessagingUiRuntime({ AUTH_MODE: "clerk" })).toBe("unavailable");
+    expect(resolveMessagingUiRuntime({ REPOSITORY_MODE: "postgres" })).toBe("unavailable");
+    expect(resolveMessagingUiRuntime({ AUTH_MODE: "clerk", REPOSITORY_MODE: "memory" })).toBe("unavailable");
+    expect(resolveMessagingUiRuntime({ AUTH_MODE: "demo", REPOSITORY_MODE: "postgres" })).toBe("unavailable");
+    expect(resolveMessagingUiRuntime({ VERCEL_ENV: "preview" })).toBe("unavailable");
   });
 
   it("selects persistent ONLY when auth is clerk AND repositories are postgres", () => {
     expect(resolveMessagingUiRuntime({ AUTH_MODE: "clerk", REPOSITORY_MODE: "postgres" })).toBe("persistent");
-    expect(resolveMessagingUiRuntime({ AUTH_MODE: "clerk" })).toBe("demo");
-    expect(resolveMessagingUiRuntime({ REPOSITORY_MODE: "postgres" })).toBe("demo");
-    expect(resolveMessagingUiRuntime({ AUTH_MODE: "clerk", REPOSITORY_MODE: "memory" })).toBe("demo");
-    expect(resolveMessagingUiRuntime({ AUTH_MODE: "demo", REPOSITORY_MODE: "postgres" })).toBe("demo");
+    // The real selection wins even beside a (boot-rejected) demo opt-in —
+    // clerk+postgres never silently downgrades to demo data.
+    expect(resolveMessagingUiRuntime({ APP_ENV: "demo", AUTH_MODE: "clerk", REPOSITORY_MODE: "postgres" })).toBe("persistent");
   });
 
   it("uses the canonical resolvers' normalization (case/whitespace)", () => {
     expect(resolveMessagingUiRuntime({ AUTH_MODE: " Clerk ", REPOSITORY_MODE: "POSTGRES" })).toBe("persistent");
+    expect(resolveMessagingUiRuntime({ APP_ENV: " Demo " })).toBe("demo");
   });
 });
 
