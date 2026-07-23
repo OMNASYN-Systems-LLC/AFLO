@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { PoweredByAflo } from "@/components/brand";
 import { NavLink } from "@/components/nav-link";
-import { DEMO_STAFF, demoNow } from "@/lib/data";
+import { getDemoShellIdentity } from "@/lib/data";
 import { fmtDate, initials, STAFF_ROLE_LABELS } from "@/lib/format";
 
 // Founder staff navigation: Dashboard, Leads, Clients, Tasks, Reports,
@@ -11,7 +11,20 @@ import { fmtDate, initials, STAFF_ROLE_LABELS } from "@/lib/format";
 // land.
 const COMING_SOON = ["Tasks", "Reports", "Partners", "Billing", "Settings"];
 
+// Render at REQUEST time, never at build (ADR-0048 / PR #99 M1, extended by
+// ADR-0052): this shell reads demo identity via the GATED `getDemoShellIdentity()`,
+// so — like every `(app)` data page that reads `lib/data.ts` — it must be
+// force-dynamic. Otherwise `next build` would invoke the gated accessor with no
+// opt-in and fail; deferring to request time keeps the accessor's throw where it
+// belongs (a real-cell request, never the build) and bakes zero synthetic bytes.
+export const dynamic = "force-dynamic";
+
 export default function AppShellLayout({ children }: { children: React.ReactNode }) {
+  // Fail closed exactly like the data pages: outside the explicit demo opt-in
+  // this throws BEFORE any synthetic identity renders into the shell (ADR-0052,
+  // closing the LOW-2 ungated-constant leak). Under APP_ENV=demo it returns the
+  // personas unchanged, so demo previews render identically.
+  const { staff, now } = getDemoShellIdentity();
   return (
     <div className="flex min-h-screen">
       <aside className="sticky top-0 flex h-screen w-64 shrink-0 flex-col bg-obsidian px-4 py-6">
@@ -50,12 +63,12 @@ export default function AppShellLayout({ children }: { children: React.ReactNode
         <div className="mt-auto border-t border-charcoal-soft pt-4">
           <div className="flex items-center gap-3 px-2">
             <span className="flex h-8 w-8 items-center justify-center rounded-full bg-charcoal-soft text-xs font-medium text-ivory-ink">
-              {initials(DEMO_STAFF.name)}
+              {initials(staff.name)}
             </span>
             <span className="min-w-0">
-              <span className="block truncate text-sm text-ivory-ink">{DEMO_STAFF.name}</span>
+              <span className="block truncate text-sm text-ivory-ink">{staff.name}</span>
               <span className="block text-[11px] text-ivory-ink-soft">
-                {STAFF_ROLE_LABELS[DEMO_STAFF.role]}
+                {STAFF_ROLE_LABELS[staff.role]}
               </span>
             </span>
           </div>
@@ -70,7 +83,7 @@ export default function AppShellLayout({ children }: { children: React.ReactNode
 
       <div className="flex min-w-0 flex-1 flex-col">
         <header className="flex h-14 items-center justify-between border-b border-line bg-ivory px-8">
-          <p className="text-sm text-ink-soft">{fmtDate(demoNow.toISOString())}</p>
+          <p className="text-sm text-ink-soft">{fmtDate(now.toISOString())}</p>
           <p className="rounded-full border border-gold/40 bg-status-warn-tint px-3 py-1 text-[11px] font-medium text-gold-deep">
             Prototype · synthetic data only
           </p>

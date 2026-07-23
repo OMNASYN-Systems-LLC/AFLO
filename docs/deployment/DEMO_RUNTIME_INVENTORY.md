@@ -1,15 +1,19 @@
 # Demo-Runtime Inventory — the map for the B11 removal slice
 
 Complete inventory of every demo/synthetic runtime surface in ΛFLO (technical:
-AFLO) as of the ADR-0048 fail-closed flip (branch `claude/demo-runtime-inventory`,
-off `main` @ `4a65b2d`). This is the working map for the eventual **B11
-demo-runtime REMOVAL slice**: everything listed here either gets deleted,
-replaced by a persistent implementation, or explicitly retired when the demo
-runtime goes away.
+AFLO). Baselined at the ADR-0048 fail-closed flip and **tightened by ADR-0052
+(demo-runtime removal-proper)**: the demo surface is now UNREACHABLE without the
+explicit `APP_ENV=demo` opt-in, the demo-marker allowlist is down to one entry,
+and the real cell serves zero synthetic bytes (shell included). This is the
+working map for the eventual **B11 demo-runtime REMOVAL slice**: everything
+listed here either gets deleted, replaced by a persistent implementation, or
+explicitly retired when the demo runtime goes away — the credential-gated final
+cutover (§h).
 
-Companion documents: `docs/adr/ADR-0048-demo-runtime-flip.md` (the decision and
-truth table), `docs/adr/ADR-0017-production-runtime-contract.md` (the underlying
-contract), `docs/adr/ADR-0021-demo-marker-ci-guard.md` (the static guard),
+Companion documents: `docs/adr/ADR-0052-demo-runtime-removal.md` (this tightening
+slice), `docs/adr/ADR-0048-demo-runtime-flip.md` (the decision and truth table),
+`docs/adr/ADR-0017-production-runtime-contract.md` (the underlying contract),
+`docs/adr/ADR-0021-demo-marker-ci-guard.md` (the static guard),
 `AUTH_CUTOVER_RUNBOOK.md` (the activation sequence).
 
 ---
@@ -32,12 +36,22 @@ for these markers and fails CI on any hit outside the allowlist:
 | `["'`]demo-org["'`]` | Hardcoded demo org id literal |
 
 Allowlist (the ONLY runtime files that may contain demo identity — **must reach
-zero entries when Clerk activates**, and reaches zero in the B11 removal slice):
+zero entries when Clerk activates**, and reaches zero in the B11 removal slice).
+**ADR-0052 shrank this from two entries to one:** the `DemoAuthProvider` class
+AND its construction now live entirely in `packages/auth/src/demo.ts` (the new
+`createDemoAuthProvider` factory), so `apps/web/src/lib/data.ts` no longer names
+any demo-identity marker and LEFT the allowlist — it is back under full guard
+coverage (a re-introduced marker there now fails CI):
 
 | Allowlisted path | Why it exists | Removal condition |
 |---|---|---|
-| `packages/auth/src/demo.ts` | The `DemoAuthProvider` class itself | Clerk-backed provider replaces it (runbook §5.2) |
-| `apps/web/src/lib/data.ts` | The composition root that instantiates it (now gated on the ADR-0048 opt-in) | Store→repository swap + Clerk sessions (runbook §5.2/§5.5) |
+| `packages/auth/src/demo.ts` | The `DemoAuthProvider` class + its sole construction factory (`createDemoAuthProvider`) | Clerk-backed provider replaces it (runbook §5.2) — drains the allowlist to zero |
+
+Removed from the allowlist by ADR-0052:
+
+| Formerly allowlisted | Why it is now safe |
+|---|---|
+| `apps/web/src/lib/data.ts` | The composition root no longer names `DemoAuthProvider` — it calls `createDemoAuthProvider` (a factory whose name carries no marker). The file holds no demo-identity marker, so it needs no allowlist entry and is fully guarded again. |
 
 ## b. Runtime-mode resolver call sites
 
@@ -62,7 +76,7 @@ selects after the ADR-0048 flip:
 
 | Source | File | Identity minted | Consumers |
 |---|---|---|---|
-| `DemoAuthProvider` (class) | `packages/auth/src/demo.ts` | fixed staff or client principal | instantiated ONLY by `apps/web/src/lib/data.ts` |
+| `DemoAuthProvider` (class) + `createDemoAuthProvider` (factory) | `packages/auth/src/demo.ts` | fixed staff or client principal | constructed ONLY inside its own module; `apps/web/src/lib/data.ts` obtains providers via the factory (ADR-0052 — it no longer names the class) |
 | `getStaffSession()` | `apps/web/src/lib/data.ts` | org `DEMO_ORG_ID` + staff `DEMO_STAFF.id` (synthetic organization owner) | server actions: `(app)/leads/actions.ts`, `(app)/clients/[clientId]/actions.ts`, `(app)/clients/[clientId]/intake/actions.ts`, `(app)/reviews/actions.ts`; messaging seam demo path (`lib/messaging-client.ts`) |
 | `getClientSession()` | `apps/web/src/lib/data.ts` | org `DEMO_ORG_ID` + client `DEMO_CLIENT_ID` (`c-bell`) | `app/portal/page.tsx`; messaging seam demo path (`lib/messaging-client.ts`) |
 
@@ -96,10 +110,11 @@ Constants exported by `apps/web/src/lib/data.ts` and rendered by the UI shell:
 
 | Constant | Value | Rendered by |
 |---|---|---|
-| `DEMO_ORG_ID` | `syntheticDatabase.organization.id` | all repo/store calls; dashboard/layout scoping |
-| `DEMO_STAFF` | synthetic organization owner | `(app)/layout.tsx` (sidebar identity), `(app)/dashboard/page.tsx` (greeting), other `(app)` pages |
+| `DEMO_ORG_ID` | `syntheticDatabase.organization.id` | passed as an ARGUMENT to gated repo/store calls (which throw first outside the opt-in) |
+| `DEMO_STAFF` | synthetic organization owner | `(app)/dashboard/page.tsx` (greeting — after a gated `getSnapshot`, so bounded); the `(app)/layout.tsx` shell now reads it ONLY via the gated `getDemoShellIdentity()` accessor (ADR-0052) |
 | `DEMO_CLIENT_ID` | `"c-bell"` | `app/portal/page.tsx` (portal persona) |
-| `demoNow` | `SYNTHETIC_NOW` | deterministic read clock in every page listed in §c/§d |
+| `demoNow` | `SYNTHETIC_NOW` | deterministic read clock, passed to the gated repo/store calls; the layout header date now comes through `getDemoShellIdentity()` |
+| `getDemoShellIdentity()` (ADR-0052) | `{ staff: DEMO_STAFF, now: demoNow }` behind `assertDemoRuntime()` | `(app)/layout.tsx` — the ONE component that renders identity DIRECTLY (no preceding gated call); the accessor makes it fail closed like the pages |
 
 Files rendering from this surface (all `@/lib/data` importers):
 `(app)/layout.tsx`, `(app)/dashboard/page.tsx`, `(app)/clients/page.tsx`,
@@ -107,15 +122,28 @@ Files rendering from this surface (all `@/lib/data` importers):
 `(app)/leads/page.tsx`, `(app)/reviews/page.tsx`, `(app)/reviews/[id]/page.tsx`,
 `app/portal/page.tsx`, plus the action modules and `lib/messaging-client.ts`.
 
-**No prerendered synthetic data (PR #99 M1 fix):** `/`, `/clients`, and
-`/dashboard` are `export const dynamic = "force-dynamic"` like every other
-data-bearing page, so NOTHING from the demo runtime is baked into a build
-artifact and every render passes the ADR-0048 gate at request time. In a
-deployment that explicitly selected the REAL runtime (`clerk+postgres`, which
-boots), every page, server action, session, and API route fails closed
-(live-verified: all pages 500 with the ADR-0048 refusal, `/api/messages/*`
-503 — zero synthetic bytes served). No AMBIGUOUS deployment serves anything —
-boot refuses first.
+**No prerendered synthetic data (PR #99 M1 fix; extended by ADR-0052):** every
+data-bearing page is `export const dynamic = "force-dynamic"`, and ADR-0052 adds
+the same to `(app)/layout.tsx` (it reads demo identity, so it must not render at
+build) — so NOTHING from the demo runtime is baked into a build artifact and
+every render passes the ADR-0048 gate at request time. The only prerendered
+tokens are the tenant BRAND TITLE ("Golden Key Wealth — powered by AFLO") in the
+static `_not-found`/`_global-error` shells — product chrome, never synthetic
+client/staff PII.
+
+**Real cell now serves ZERO synthetic bytes — including the shell (ADR-0052).**
+On `main`, the `(app)` layout read `DEMO_STAFF`/`demoNow` DIRECTLY (ungated
+module constants), with no preceding gated call, so the shell of a real-cell
+500 response still streamed synthetic staff identity ("Danielle Mercer",
+"Organization Owner", the pinned date) — the LOW-2 ungated-constant leak.
+ADR-0052 routes the layout through the gated `getDemoShellIdentity()` (and marks
+it `force-dynamic`), so under `clerk+postgres` the layout fails closed too.
+Re-verified live: every data page 500s with the refusal AND zero synthetic
+tokens in the body, `/api/messages/*` 503; under `APP_ENV=demo` the same pages
+serve 200 with the shell identity intact. The `demoGated` store/repository Proxy
+was also hardened (ADR-0052): it now gates NON-function property reads too (the
+LOW-2 Proxy gap), so a synthetic value can never be read raw outside the opt-in.
+No AMBIGUOUS deployment serves anything — boot refuses first.
 
 ## f. Truth table — APP_ENV × AUTH_MODE × REPOSITORY_MODE → behavior
 
@@ -163,19 +191,28 @@ without the explicit opt-in is `demo`.
 |---|---|---|
 | Local `pnpm dev` | committed `APP_ENV=demo` (non-secret; `next dev`-only) | `apps/web/.env.development` (gitignore exception) |
 | Playwright e2e | `webServer.env.APP_ENV = "demo"` | `apps/web/playwright.config.ts` |
-| `next build` (CI + local + Vercel) | none needed — no page prerenders store data (`/`, `/dashboard`, `/clients` are `force-dynamic`); the gate has NO build-phase bypass | `apps/web/src/lib/data.ts` + the three page modules |
+| `next build` (CI + local + Vercel) | none needed — no page prerenders store data (every data page AND `(app)/layout.tsx` are `force-dynamic`, ADR-0052); the gate has NO build-phase bypass | `apps/web/src/lib/data.ts` + the page modules + `(app)/layout.tsx` |
 | Vercel PREVIEW deployments (intentional demo) | **dashboard action required:** set `APP_ENV=demo` for the Preview environment of project `aflo-web` | Vercel dashboard (`DEPLOYMENT.md` §2) |
 | Vercel PRODUCTION deployment of the prototype (`main`) | **dashboard action required:** set `APP_ENV=demo` for the Production environment until cutover — without it the prototype deployment refuses to boot after this change | Vercel dashboard (`DEPLOYMENT.md` §2) |
 | Unit tests (vitest) | none needed — `NODE_ENV=test` is mode `test` | — |
 
 ## h. What the B11 removal slice still owes
 
-1. Replace the demo pages (all dynamic — `/`, `/clients`, `/dashboard`
-   included) with persistent-repository implementations (runbook §5.5), then
-   delete `apps/web/src/lib/data.ts`.
+**Consolidated by ADR-0052 (removal-proper, this slice):** the demo surface is
+now UNREACHABLE without `APP_ENV=demo` — the demo-marker allowlist shrank to one
+entry (`packages/auth/src/demo.ts`), the `(app)` shell's synthetic-identity leak
+in the real cell is closed (gated `getDemoShellIdentity()` + `force-dynamic`
+layout), and the `demoGated` Proxy now fails closed on non-function reads too
+(LOW-2). What remains is the CREDENTIAL-GATED final cutover:
+
+1. Replace the demo pages (all dynamic) with persistent-repository
+   implementations (runbook §5.5), then delete `apps/web/src/lib/data.ts`
+   (including `getDemoShellIdentity` + the identity constants).
 2. Replace `getStaffSession`/`getClientSession` with the Clerk-backed provider
-   (runbook §5.2) and delete `packages/auth/src/demo.ts`; shrink the
-   demo-marker allowlist to zero.
+   (runbook §5.2) and delete `packages/auth/src/demo.ts` (the class AND the
+   `createDemoAuthProvider` factory); this drains the demo-marker allowlist from
+   its remaining one entry to **zero**. **(Credential-gated — out of scope for
+   ADR-0052.)**
 3. Retire the `StoreStaffMessagingGateway`/`StorePortalMessagingGateway` demo
    implementations and the `"demo"` arm of `resolveMessagingUiRuntime` (or
    scope them to tests).
