@@ -51,6 +51,8 @@ export interface ActionOutcomeMetricInput {
   playbookId: string | null;
   playbookVersion: string | null;
   completed: boolean;
+  /** Did the client respond/engage with the delivered action (founder: client response). */
+  clientResponded: boolean;
   /** Stage advancement observed after completion (outcome tracking). */
   advancedToStage: LifecycleStage | null;
 }
@@ -86,6 +88,8 @@ export interface PlaybookEffectiveness {
   actionCount: number;
   /** completed actions / actions; null when no actions. */
   actionCompletionRate: number | null;
+  /** responded actions / actions; null when no actions. */
+  clientResponseRate: number | null;
   /** actions followed by a stage advancement / completed actions; null when none completed. */
   stageAdvancementRate: number | null;
 }
@@ -99,6 +103,9 @@ export interface ReviewMetrics {
   /** Items currently awaiting review (queue depth). */
   awaitingReviewCount: number;
   actionCompletionRate: number | null;
+  /** responded actions / all actions; null when no actions (founder: client response). */
+  clientResponseRate: number | null;
+  /** Completed actions followed by a stage advancement (aligned with the per-playbook rate). */
   stageAdvancementCount: number;
   staffProfiles: StaffDecisionProfile[];
   playbookEffectiveness: PlaybookEffectiveness[];
@@ -172,7 +179,7 @@ export function reviewMetricsFor(
     group.push(d);
     typeGroups.set(item.artifactType, group);
   }
-  for (const [type, group] of typeGroups) byArtifactType[type] = decisionMix(group);
+  for (const type of [...typeGroups.keys()].sort()) byArtifactType[type] = decisionMix(typeGroups.get(type)!);
 
   const staffGroups = new Map<string, ReviewDecisionMetricInput[]>();
   for (const d of decisions) {
@@ -184,33 +191,38 @@ export function reviewMetricsFor(
     .map(([reviewerMemberId, group]) => ({ reviewerMemberId, ...decisionMix(group) }))
     .sort((a, b) => a.reviewerMemberId.localeCompare(b.reviewerMemberId));
 
-  const playbookGroups = new Map<string, { items: ReviewItemMetricInput[]; actions: ActionOutcomeMetricInput[] }>();
-  const playbookKey = (id: string, version: string) => `${id}@@${version}`;
+  const playbookGroups = new Map<
+    string,
+    { playbookId: string; playbookVersion: string; items: ReviewItemMetricInput[]; actions: ActionOutcomeMetricInput[] }
+  >();
+  // The key is lookup-only; identity is carried IN the group value, so an id or
+  // version containing the separator can never merge or truncate rows.
+  const playbookKey = (id: string, version: string) => `${id}\u0000${version}`;
   for (const item of items) {
     if (!item.playbookId || !item.playbookVersion) continue;
     const key = playbookKey(item.playbookId, item.playbookVersion);
-    const group = playbookGroups.get(key) ?? { items: [], actions: [] };
+    const group = playbookGroups.get(key) ?? { playbookId: item.playbookId, playbookVersion: item.playbookVersion, items: [], actions: [] };
     group.items.push(item);
     playbookGroups.set(key, group);
   }
   for (const action of actions) {
     if (!action.playbookId || !action.playbookVersion) continue;
     const key = playbookKey(action.playbookId, action.playbookVersion);
-    const group = playbookGroups.get(key) ?? { items: [], actions: [] };
+    const group = playbookGroups.get(key) ?? { playbookId: action.playbookId, playbookVersion: action.playbookVersion, items: [], actions: [] };
     group.actions.push(action);
     playbookGroups.set(key, group);
   }
-  const playbookEffectiveness = [...playbookGroups.entries()]
-    .map(([key, group]) => {
-      const [playbookId, playbookVersion] = key.split("@@") as [string, string];
+  const playbookEffectiveness = [...playbookGroups.values()]
+    .map((group) => {
       const completed = group.actions.filter((a) => a.completed);
       return {
-        playbookId,
-        playbookVersion,
+        playbookId: group.playbookId,
+        playbookVersion: group.playbookVersion,
         itemCount: group.items.length,
         publishedCount: group.items.filter((i) => i.state === "published").length,
         actionCount: group.actions.length,
         actionCompletionRate: rate(completed.length, group.actions.length),
+        clientResponseRate: rate(group.actions.filter((a) => a.clientResponded).length, group.actions.length),
         stageAdvancementRate: rate(completed.filter((a) => a.advancedToStage !== null).length, completed.length),
       };
     })
@@ -223,7 +235,10 @@ export function reviewMetricsFor(
     escalationVolume: decisions.filter((d) => d.decision === "escalated").length,
     awaitingReviewCount: items.filter((i) => i.state === "awaiting_review").length,
     actionCompletionRate: rate(completedActions.length, actions.length),
-    stageAdvancementCount: actions.filter((a) => a.advancedToStage !== null).length,
+    clientResponseRate: rate(actions.filter((a) => a.clientResponded).length, actions.length),
+    // Advancement only counts on COMPLETED actions — same denominator family as
+    // the per-playbook stageAdvancementRate, so the two views cannot disagree.
+    stageAdvancementCount: completedActions.filter((a) => a.advancedToStage !== null).length,
     staffProfiles,
     playbookEffectiveness,
   };

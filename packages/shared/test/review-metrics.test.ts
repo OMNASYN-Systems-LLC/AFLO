@@ -39,7 +39,7 @@ function decision(
 }
 
 function action(overrides: Partial<ActionOutcomeMetricInput> = {}): ActionOutcomeMetricInput {
-  return { reviewItemId: null, playbookId: null, playbookVersion: null, completed: false, advancedToStage: null, ...overrides };
+  return { reviewItemId: null, playbookId: null, playbookVersion: null, completed: false, clientResponded: false, advancedToStage: null, ...overrides };
 }
 
 describe("reviewMetricsFor — empty and degenerate inputs", () => {
@@ -145,6 +145,39 @@ describe("reviewMetricsFor — actions, outcomes, playbook effectiveness", () =>
     );
     expect(metrics.actionCompletionRate).toBeCloseTo(2 / 3);
     expect(metrics.stageAdvancementCount).toBe(1);
+  });
+
+  it("client response rate (founder metric) is null-safe and counted across all actions", () => {
+    expect(reviewMetricsFor([], [], []).clientResponseRate).toBeNull();
+    const metrics = reviewMetricsFor(
+      [],
+      [],
+      [action({ clientResponded: true }), action({ clientResponded: true, completed: true }), action({})],
+    );
+    expect(metrics.clientResponseRate).toBeCloseTo(2 / 3);
+  });
+
+  it("stage advancement only counts on COMPLETED actions (aligned with the per-playbook rate)", () => {
+    const metrics = reviewMetricsFor([], [], [action({ completed: false, advancedToStage: "growth" })]);
+    expect(metrics.stageAdvancementCount).toBe(0);
+  });
+
+  it("playbook identity survives separator-looking ids/versions (no merge, no truncation)", () => {
+    const metrics = reviewMetricsFor(
+      [
+        item({ id: "i1", playbookId: "a@@b", playbookVersion: "c" }),
+        item({ id: "i2", playbookId: "a", playbookVersion: "b@@c" }),
+      ],
+      [],
+      [],
+    );
+    expect(metrics.playbookEffectiveness).toHaveLength(2);
+    expect(metrics.playbookEffectiveness.map((p) => [p.playbookId, p.playbookVersion])).toEqual(
+      expect.arrayContaining([
+        ["a@@b", "c"],
+        ["a", "b@@c"],
+      ]),
+    );
   });
 
   it("groups playbook effectiveness by (playbookId, version) with null-safe rates", () => {
