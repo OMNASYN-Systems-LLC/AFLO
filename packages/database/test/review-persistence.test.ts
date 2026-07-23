@@ -32,7 +32,7 @@ import {
   ReviewItemNotFoundError,
   WorkflowDiscoveryInputError,
   WorkflowDiscoveryTransitionDeniedError,
-  type PlaybookTransitionActor,
+  type PlaybookActor,
 } from "../src/repositories/review-center";
 
 /**
@@ -82,10 +82,10 @@ let memberA = "";
 let memberB = "";
 let adminA = "";
 let ownerA = "";
-// Actor fixtures for transitionVersion (ADR-0047 — the required acting member).
-let STAFF_A: PlaybookTransitionActor;
-let ADMIN_A: PlaybookTransitionActor;
-let OWNER_A: PlaybookTransitionActor;
+// Actor fixtures (ADR-0047 — identity only; roles are read from the DB rows).
+let STAFF_A: PlaybookActor;
+let ADMIN_A: PlaybookActor;
+let OWNER_A: PlaybookActor;
 
 const seed = GOLDEN_KEY_PLAYBOOK_DRAFTS[0]!;
 
@@ -132,9 +132,9 @@ beforeAll(async () => {
   memberB = members.rows[1]!.id;
   adminA = members.rows[2]!.id;
   ownerA = members.rows[3]!.id;
-  STAFF_A = { memberId: memberA, role: "staff" };
-  ADMIN_A = { memberId: adminA, role: "organization_admin" };
-  OWNER_A = { memberId: ownerA, role: "organization_owner" };
+  STAFF_A = { memberId: memberA };
+  ADMIN_A = { memberId: adminA };
+  OWNER_A = { memberId: ownerA };
 
   await pg.exec(`
     CREATE ROLE app_user NOLOGIN;
@@ -357,7 +357,7 @@ describe("playbooks — blocked approval + atomic publish/supersede", () => {
           playbookId,
           version: "0.0.1",
           content: { ...seed.content, purpose: "  " },
-          authorMemberId: memberA,
+          actor: { memberId: memberA },
         },
         NOW,
       ),
@@ -367,7 +367,7 @@ describe("playbooks — blocked approval + atomic publish/supersede", () => {
   it("BLOCKS approval of a Golden Key seed draft (discovery_required fields — ADR-0038 made real)", async () => {
     const draft = await playbookRepo.saveDraftVersion(
       ORG_A,
-      { playbookId, version: "0.1.0", content: seed.content, authorMemberId: memberA },
+      { playbookId, version: "0.1.0", content: seed.content, actor: { memberId: memberA } },
       NOW,
     );
     await playbookRepo.transitionVersion(ORG_A, draft.id, "awaiting_review", NOW, STAFF_A);
@@ -381,7 +381,7 @@ describe("playbooks — blocked approval + atomic publish/supersede", () => {
   it("publishes v1 through draft → awaiting_review → approved → published", async () => {
     const draft = await playbookRepo.saveDraftVersion(
       ORG_A,
-      { playbookId, version: "1.0.0", content: resolvedContent(), authorMemberId: memberA },
+      { playbookId, version: "1.0.0", content: resolvedContent(), actor: { memberId: memberA } },
       NOW,
     );
     v1 = draft.id;
@@ -399,7 +399,7 @@ describe("playbooks — blocked approval + atomic publish/supersede", () => {
   it("publishing v2 supersedes v1 AND moves the head in one transaction", async () => {
     const draft = await playbookRepo.saveDraftVersion(
       ORG_A,
-      { playbookId, version: "2.0.0", content: resolvedContent(), authorMemberId: memberA },
+      { playbookId, version: "2.0.0", content: resolvedContent(), actor: { memberId: memberA } },
       LATER,
     );
     v2 = draft.id;
@@ -415,7 +415,7 @@ describe("playbooks — blocked approval + atomic publish/supersede", () => {
   it("a DENIED publish leaves the published version and the head unchanged", async () => {
     const draft = await playbookRepo.saveDraftVersion(
       ORG_A,
-      { playbookId, version: "3.0.0", content: resolvedContent(), authorMemberId: memberA },
+      { playbookId, version: "3.0.0", content: resolvedContent(), actor: { memberId: memberA } },
       LATER,
     );
     // draft → published does not exist in the kernel: denied, nothing written.
@@ -431,7 +431,7 @@ describe("playbooks — blocked approval + atomic publish/supersede", () => {
     await expect(
       playbookRepo.saveDraftVersion(
         ORG_A,
-        { playbookId, version: "1.0.0", content: resolvedContent(), authorMemberId: memberA },
+        { playbookId, version: "1.0.0", content: resolvedContent(), actor: { memberId: memberA } },
         NOW,
       ),
     ).rejects.toThrow(/already exists/);
@@ -514,7 +514,7 @@ describe("RLS isolation across all five tables", () => {
     const pb = await playbookRepo.createPlaybook(ORG_B, { playbookKey: "org-b-play", name: "B Play" }, NOW);
     await playbookRepo.saveDraftVersion(
       ORG_B,
-      { playbookId: pb.id, version: "1.0.0", content: seed.content, authorMemberId: memberB },
+      { playbookId: pb.id, version: "1.0.0", content: seed.content, actor: { memberId: memberB } },
       NOW,
     );
     const item = await items.create(
@@ -807,7 +807,7 @@ describe("cross-org reference guards (F1) — FK validation bypasses RLS, the re
     await expect(
       playbookRepo.saveDraftVersion(
         ORG_A,
-        { playbookId: orgAPlaybook!.id, version: "9.9.9", content: resolvedContent(), authorMemberId: memberB },
+        { playbookId: orgAPlaybook!.id, version: "9.9.9", content: resolvedContent(), actor: { memberId: memberB } },
         NOW,
       ),
     ).rejects.toBeInstanceOf(MemberNotInOrganizationError);

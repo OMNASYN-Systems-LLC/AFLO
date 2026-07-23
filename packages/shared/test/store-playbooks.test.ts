@@ -196,13 +196,14 @@ describe("founder decision #2 — role floors and separation of duties", () => {
         ownerOverride: { reason: "  ", attestsNotRegulatedAdvice: true },
       }),
     ).toMatchObject({ ok: false, reasonCode: "PB_OVERRIDE_REASON_REQUIRED" });
-    // Complete override → allowed; visible in review history; audited.
+    // Complete override → allowed; visible in review history; audited. The
+    // padded reason proves the L1 clamp: the recorded value is TRIMMED.
     const approved = store.transitionPlaybookVersion({
       organizationId: ORG,
       versionId: id,
       toStatus: "approved",
       actorStaffId: "s-mercer",
-      ownerOverride: { reason: "Sole authorized operator; content is generic education", attestsNotRegulatedAdvice: true },
+      ownerOverride: { reason: "  Sole authorized operator; content is generic education  ", attestsNotRegulatedAdvice: true },
     });
     expect(approved.ok).toBe(true);
     const historyEntry = approved.version!.reviewHistory.at(-1)!;

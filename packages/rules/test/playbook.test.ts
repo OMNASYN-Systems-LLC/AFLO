@@ -7,6 +7,7 @@ import {
   isHighImpactPlaybookContent,
   PLAYBOOK_ACTIONS,
   PLAYBOOK_CONTENT_FIELDS,
+  PLAYBOOK_OVERRIDE_REASON_MAX_LENGTH,
   PLAYBOOK_RULES_VERSION,
   PLAYBOOK_VERSION_STATUSES,
   playbookVersionTransition,
@@ -386,6 +387,29 @@ describe("canActOnPlaybookVersion — founder decision 2026-07-23 #2 (author/app
         ownerOverride: { reason: "Sole operator", attestsNotRegulatedAdvice: false as unknown as true },
       }),
     ).toMatchObject({ allowed: false, reasonCode: "PB_OVERRIDE_REASON_REQUIRED" });
+    // Over-bound reason → denied (the reason lands in durable review history
+    // and audit rows — never silently truncated; ADR-0047 review fix L1).
+    expect(
+      canActOnPlaybookVersion({
+        ...trip,
+        orgPolicyPermitsOverride: true,
+        ownerOverride: {
+          reason: "x".repeat(PLAYBOOK_OVERRIDE_REASON_MAX_LENGTH + 1),
+          attestsNotRegulatedAdvice: true,
+        },
+      }),
+    ).toMatchObject({ allowed: false, reasonCode: "PB_OVERRIDE_REASON_TOO_LONG" });
+    // Exactly at the bound (after trimming) → allowed.
+    expect(
+      canActOnPlaybookVersion({
+        ...trip,
+        orgPolicyPermitsOverride: true,
+        ownerOverride: {
+          reason: `  ${"x".repeat(PLAYBOOK_OVERRIDE_REASON_MAX_LENGTH)}  `,
+          attestsNotRegulatedAdvice: true,
+        },
+      }),
+    ).toMatchObject({ allowed: true, reasonCode: "PB_OWNER_OVERRIDE", usedOwnerOverride: true });
     // Complete override + policy → allowed, marked as the override path.
     expect(canActOnPlaybookVersion({ ...trip, orgPolicyPermitsOverride: true, ownerOverride: override })).toMatchObject({
       allowed: true,

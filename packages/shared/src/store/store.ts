@@ -4856,7 +4856,10 @@ export class AfloStore {
       actorMemberId: actor.id,
       reasonCode: policyReason,
       occurredAt: now.toISOString(),
-      ownerOverride: usedOwnerOverride && input.ownerOverride ? { reason: input.ownerOverride.reason } : null,
+      // The stored value is the kernel-validated TRIMMED reason (bounded by
+      // PLAYBOOK_OVERRIDE_REASON_MAX_LENGTH — over-bound values were denied).
+      ownerOverride:
+        usedOwnerOverride && input.ownerOverride ? { reason: input.ownerOverride.reason.trim() } : null,
     });
 
     for (const event of emitted) this.outbox.push(toOutboxRecord(event, { now }));
@@ -4868,7 +4871,7 @@ export class AfloStore {
         action: "playbook.owner_override",
         targetType: "playbook_version",
         targetId: version.id,
-        detail: `single-operator owner override on ${kernelAction}: ${input.ownerOverride.reason} (attested not regulated professional advice)`,
+        detail: `single-operator owner override on ${kernelAction}: ${input.ownerOverride.reason.trim()} (attested not regulated professional advice)`,
         reasonCode: "PB_OWNER_OVERRIDE",
         ruleVersion: PLAYBOOK_RULES_VERSION,
         occurredAt: now.toISOString(),

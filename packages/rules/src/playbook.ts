@@ -73,7 +73,8 @@ export type PlaybookReasonCode =
   | "PB_AUTHOR_PUBLISHER_SEPARATION"
   | "PB_AUTHOR_APPROVER_SEPARATION"
   | "PB_OVERRIDE_NOT_PERMITTED"
-  | "PB_OVERRIDE_REASON_REQUIRED";
+  | "PB_OVERRIDE_REASON_REQUIRED"
+  | "PB_OVERRIDE_REASON_TOO_LONG";
 
 const ALLOWED: Record<PlaybookVersionStatus, Partial<Record<PlaybookVersionStatus, PlaybookReasonCode>>> = {
   draft: { awaiting_review: "PB_SUBMITTED", withdrawn: "PB_WITHDRAWN", superseded: "PB_SUPERSEDED" },
@@ -149,10 +150,21 @@ const PLAYBOOK_ACTION_FLOOR: Record<PlaybookAction, number> = {
 };
 
 /**
+ * Upper bound on the recorded override reason (trimmed length). The reason
+ * lands in durable review history and audit rows, so an over-bound value is
+ * DENIED in the kernel (`PB_OVERRIDE_REASON_TOO_LONG`) — never silently
+ * truncated — and both enforcement layers inherit the bound automatically.
+ */
+export const PLAYBOOK_OVERRIDE_REASON_MAX_LENGTH = 500;
+
+/**
  * The documented single-operator owner override. `attestsNotRegulatedAdvice`
  * is the literal `true` — the type cannot even represent an override that
  * fails to attest the content is not regulated professional advice (the
- * runtime check still enforces it for untyped callers).
+ * runtime check still enforces it for untyped callers). The recorded reason
+ * must be non-empty after trimming and at most
+ * `PLAYBOOK_OVERRIDE_REASON_MAX_LENGTH` characters; the TRIMMED value is
+ * what the layers store.
  */
 export interface PlaybookOwnerOverride {
   reason: string;
@@ -231,11 +243,12 @@ export function canActOnPlaybookVersion(input: CanActOnPlaybookVersionInput): Ca
   if (!input.orgPolicyPermitsOverride) {
     return { ...base, allowed: false, reasonCode: "PB_OVERRIDE_NOT_PERMITTED" };
   }
-  if (
-    input.ownerOverride.reason.trim().length === 0 ||
-    input.ownerOverride.attestsNotRegulatedAdvice !== true
-  ) {
+  const overrideReason = input.ownerOverride.reason.trim();
+  if (overrideReason.length === 0 || input.ownerOverride.attestsNotRegulatedAdvice !== true) {
     return { ...base, allowed: false, reasonCode: "PB_OVERRIDE_REASON_REQUIRED" };
+  }
+  if (overrideReason.length > PLAYBOOK_OVERRIDE_REASON_MAX_LENGTH) {
+    return { ...base, allowed: false, reasonCode: "PB_OVERRIDE_REASON_TOO_LONG" };
   }
   return { allowed: true, reasonCode: "PB_OWNER_OVERRIDE", usedOwnerOverride: true, ruleVersion: PLAYBOOK_RULES_VERSION };
 }
