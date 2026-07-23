@@ -4,9 +4,16 @@ import {
   DOCUMENT_REVIEW_STATUSES,
   LIFECYCLE_STAGES,
   MESSAGE_SENDER_ROLES,
+  PLAYBOOK_VERSION_STATUSES,
   REPORT_STATUSES,
+  REVIEW_ARTIFACT_TYPES,
+  REVIEW_DECISIONS,
+  REVIEW_ITEM_STATES,
+  REVIEW_RISK_CLASSES,
+  REVIEWER_ROLES,
   ROADMAP_STATUSES,
   THREAD_STATUSES,
+  WORKFLOW_DISCOVERY_STATUSES,
 } from "@aflo/rules";
 import { CONSENT_TYPES, NOTIFICATION_CHANNELS, NOTIFICATION_TYPES } from "@aflo/notifications";
 import { AGENT_NAMES, type AgentStatus, type ReviewStatus } from "@aflo/ai";
@@ -55,7 +62,13 @@ import {
   partnerReferralStatusEnum,
   referralOutcomeEnum,
   reportStatusEnum,
+  reviewArtifactTypeEnum,
+  reviewDecisionEnum,
+  reviewItemStateEnum,
+  reviewRiskClassEnum,
+  reviewerRoleEnum,
   roadmapStatusEnum,
+  workflowDiscoveryStatusEnum,
 } from "../src/enums";
 
 /**
@@ -225,5 +238,52 @@ describe("Phase A1b sibling-package + AI enums", () => {
   it("ai_review_status == ReviewStatus", () => {
     const all: ReviewStatus[] = ["pending_review", "approved", "rejected", "auto_published"];
     expect(aiReviewStatusEnum.enumValues).toEqual(all);
+  });
+});
+
+/**
+ * Review Center + Playbook enums (Workstream A PR-4). All kernel-owned —
+ * built FROM the review_center.v1.0.0 / playbook.v1.0.0 constant arrays, so
+ * these assert the derivation held. `ai_review_status` above remains a
+ * separate frozen vocabulary (auto_published ≠ published) related only by
+ * pure mapping functions.
+ */
+describe("Review Center + Playbook enums", () => {
+  it("review_item_state == REVIEW_ITEM_STATES (order preserved)", () => {
+    expect(reviewItemStateEnum.enumValues).toEqual([...REVIEW_ITEM_STATES]);
+  });
+
+  it("review_item_state also IS PLAYBOOK_VERSION_STATUSES (one vocabulary, no drift)", () => {
+    // playbook_versions.status reuses this enum; the kernel guarantees the
+    // arrays are one and the same object.
+    expect(reviewItemStateEnum.enumValues).toEqual([...PLAYBOOK_VERSION_STATUSES]);
+  });
+
+  it("review_artifact_type == REVIEW_ARTIFACT_TYPES (the ten founder queues)", () => {
+    expect(reviewArtifactTypeEnum.enumValues).toEqual([...REVIEW_ARTIFACT_TYPES]);
+    expect(reviewArtifactTypeEnum.enumValues).toHaveLength(10);
+  });
+
+  it("review_risk_class == REVIEW_RISK_CLASSES (the envelope impact vocabulary)", () => {
+    expect(reviewRiskClassEnum.enumValues).toEqual([...REVIEW_RISK_CLASSES]);
+  });
+
+  it("reviewer_role == REVIEWER_ROLES and stays a subset of member_role", () => {
+    expect(reviewerRoleEnum.enumValues).toEqual([...REVIEWER_ROLES]);
+    for (const role of reviewerRoleEnum.enumValues) {
+      expect(memberRoleEnum.enumValues).toContain(role);
+    }
+    // Clients and partner viewers are never reviewers.
+    expect(reviewerRoleEnum.enumValues).not.toContain("client");
+    expect(reviewerRoleEnum.enumValues).not.toContain("partner_viewer");
+  });
+
+  it("review_decision == REVIEW_DECISIONS (the five structured decisions)", () => {
+    expect(reviewDecisionEnum.enumValues).toEqual([...REVIEW_DECISIONS]);
+    expect(reviewDecisionEnum.enumValues).toHaveLength(5);
+  });
+
+  it("workflow_discovery_status == WORKFLOW_DISCOVERY_STATUSES", () => {
+    expect(workflowDiscoveryStatusEnum.enumValues).toEqual([...WORKFLOW_DISCOVERY_STATUSES]);
   });
 });

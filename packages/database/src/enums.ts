@@ -5,8 +5,14 @@ import {
   LIFECYCLE_STAGES,
   MESSAGE_SENDER_ROLES,
   REPORT_STATUSES,
+  REVIEW_ARTIFACT_TYPES,
+  REVIEW_DECISIONS,
+  REVIEW_ITEM_STATES,
+  REVIEW_RISK_CLASSES,
+  REVIEWER_ROLES,
   ROADMAP_STATUSES,
   THREAD_STATUSES,
+  WORKFLOW_DISCOVERY_STATUSES,
 } from "@aflo/rules";
 import { CONSENT_TYPES, NOTIFICATION_CHANNELS, NOTIFICATION_TYPES } from "@aflo/notifications";
 import { AGENT_NAMES } from "@aflo/ai";
@@ -229,3 +235,36 @@ export const threadStatusEnum = pgEnum("thread_status", tuple(THREAD_STATUSES));
 
 /** Which side authored a message (@aflo/rules MESSAGE_SENDER_ROLES: staff | client). */
 export const messageSenderRoleEnum = pgEnum("message_sender_role", tuple(MESSAGE_SENDER_ROLES));
+
+// --- Human Review Center + Professional Playbooks (Workstream A PR-4) ---
+// Kernel-owned: built from the @aflo/rules review_center.v1.0.0 and
+// playbook.v1.0.0 constant arrays, so the DB enums and the deterministic
+// kernels can never disagree. NOTE: `ai_review_status` above is a DIFFERENT,
+// frozen vocabulary (`auto_published` ≠ `published` — it skipped the gate);
+// the two are related by pure mapping functions only, never unified.
+
+/**
+ * Unified ReviewItem lifecycle (@aflo/rules REVIEW_ITEM_STATES).
+ * PLAYBOOK_VERSION_STATUSES is the SAME kernel array (one review vocabulary,
+ * no drift — asserted in enums.test.ts), so `playbook_versions.status` reuses
+ * this enum rather than declaring an identical twin type.
+ */
+export const reviewItemStateEnum = pgEnum("review_item_state", tuple(REVIEW_ITEM_STATES));
+
+/** The ten founder-directed review queues (@aflo/rules REVIEW_ARTIFACT_TYPES). */
+export const reviewArtifactTypeEnum = pgEnum("review_artifact_type", tuple(REVIEW_ARTIFACT_TYPES));
+
+/** Review risk classification (@aflo/rules REVIEW_RISK_CLASSES — the envelope impact vocabulary). */
+export const reviewRiskClassEnum = pgEnum("review_risk_class", tuple(REVIEW_RISK_CLASSES));
+
+/** Ordered reviewer ranks (@aflo/rules REVIEWER_ROLES — the reviewing subset of member_role). */
+export const reviewerRoleEnum = pgEnum("reviewer_role", tuple(REVIEWER_ROLES));
+
+/** The five structured review decisions (@aflo/rules REVIEW_DECISIONS). */
+export const reviewDecisionEnum = pgEnum("review_decision", tuple(REVIEW_DECISIONS));
+
+/** Workflow-discovery queue status (@aflo/rules WORKFLOW_DISCOVERY_STATUSES). */
+export const workflowDiscoveryStatusEnum = pgEnum(
+  "workflow_discovery_status",
+  tuple(WORKFLOW_DISCOVERY_STATUSES),
+);
