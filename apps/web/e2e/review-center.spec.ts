@@ -15,14 +15,19 @@ test("queue index renders seeded queues, counts, and honest metrics", async ({ p
   await page.goto("/reviews");
   await expect(page.getByRole("heading", { name: "Review Center" })).toBeVisible();
 
-  // Analytics strip from reviewMetrics: 2 awaiting; median 1440 min = 24 h;
-  // approval rate 2 of 4 seeded decisions — honest denominator shown.
+  // Analytics strip from reviewMetrics. Exact values are ORDER-DEPENDENT
+  // across the e2e suite: since ADR-0049, other specs' roadmap/report
+  // transitions record bridge decisions against the shared dev-server store,
+  // so this spec asserts structure (real derived values render, honest
+  // denominators phrased) — the derivation math itself is unit-tested in
+  // @aflo/shared review-metrics tests.
   const tiles = page.getByTestId("review-metrics").locator("> div");
   await expect(tiles.nth(0)).toContainText("Awaiting review");
-  await expect(tiles.nth(0)).toContainText("2");
-  await expect(tiles.nth(1)).toContainText("24 h");
-  await expect(tiles.nth(2)).toContainText("50%");
-  await expect(tiles.nth(2)).toContainText("of 4 decisions");
+  await expect(tiles.nth(0)).toContainText(/\d+/);
+  await expect(tiles.nth(1)).toContainText(/\d+ h|\d+ min|—/);
+  await expect(tiles.nth(2)).toContainText("Approval rate");
+  await expect(tiles.nth(2)).toContainText(/\d+%|—/);
+  await expect(tiles.nth(2)).toContainText(/of \d+ decisions|—/);
 
   // Per-queue card: the concierge queue holds one awaiting high-risk item.
   const conciergeCard = page
@@ -31,15 +36,25 @@ test("queue index renders seeded queues, counts, and honest metrics", async ({ p
   await expect(conciergeCard).toContainText("Awaiting review 1");
   await expect(conciergeCard).toContainText("High risk 1");
 
-  // All six seeded items in the table; the escalated item shows its raised
-  // reviewer floor.
-  await expect(page.locator("tbody tr")).toHaveCount(6);
+  // The nine seeded items are all present (other specs may have ADDED bridge
+  // items via domain transitions, so assert at-least + known rows rather than
+  // an exact total); the escalated item shows its raised reviewer floor.
+  expect(await page.locator("tbody tr").count()).toBeGreaterThanOrEqual(9);
   const escalatedRow = page.locator("tbody tr").filter({ hasText: "fs-c-okafor-2026-07" });
   await expect(escalatedRow).toContainText("Organization Admin");
 
-  // State filter narrows to the two awaiting items.
+  // State filter: every rendered row is awaiting (no numeric bound — other
+  // specs' bridged transitions can add OR retire awaiting shadows), the
+  // stable escalated seed is present, and the approved stale-demo seed is not.
   await page.goto("/reviews?state=awaiting_review");
-  await expect(page.locator("tbody tr")).toHaveCount(2);
+  const filteredRows = page.locator("tbody tr");
+  const filteredCount = await filteredRows.count();
+  expect(filteredCount).toBeGreaterThanOrEqual(1);
+  for (let i = 0; i < filteredCount; i++) {
+    await expect(filteredRows.nth(i)).toContainText("Awaiting review");
+  }
+  await expect(filteredRows.filter({ hasText: "fs-c-okafor-2026-07" })).toHaveCount(1);
+  await expect(filteredRows.filter({ hasText: "fs-c-solomon-2026-07" })).toHaveCount(0);
 });
 
 test("item detail shows full provenance and the client-safe boundary", async ({ page }) => {
@@ -92,10 +107,10 @@ test("publishing the approved item succeeds and fills the client projection", as
 });
 
 test("publishing a stale item renders the distinct stale-artifact denial", async ({ page }) => {
-  // rvi-solomon-report was approved at artifact v2, but the demo artifact
+  // rvi-solomon-summary was approved at artifact v2, but the demo artifact
   // source records the artifact as since revised to v3 — the founder's
   // stale-artifact invariant must deny publication.
-  await page.goto("/reviews/rvi-solomon-report");
+  await page.goto("/reviews/rvi-solomon-summary");
   await expect(page.getByText(/The artifact has changed since this review/)).toBeVisible();
 
   await page.getByRole("button", { name: "Publish to client" }).click();

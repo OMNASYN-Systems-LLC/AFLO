@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { ReviewItem } from "@aflo/shared";
+import { isBridgedArtifactType, type ReviewItem } from "@aflo/shared";
 
 /**
  * Demo artifact source for the Human Review Center (server-only — node:crypto).
@@ -25,12 +25,13 @@ import type { ReviewItem } from "@aflo/shared";
  * approval is stale — publication is denied by the store until a fresh review
  * of the new version exists (supersession path).
  *
- * `qr-solomon-q2`: Renee Solomon's Q2 report artifact moved to v3 after its
- * v2 review was approved with edits — the seeded `rvi-solomon-report` item is
- * therefore stale-on-publish, demonstrating the denial end to end.
+ * `fs-c-solomon-2026-07`: Renee Solomon's financial-summary artifact moved to
+ * v3 after its v2 review was approved with edits — the seeded
+ * `rvi-solomon-summary` item is therefore stale-on-publish, demonstrating the
+ * denial end to end.
  */
 const DEMO_REVISED_ARTIFACT_VERSIONS: Readonly<Record<string, string>> = {
-  "qr-solomon-q2": "3",
+  "fs-c-solomon-2026-07": "3",
 };
 
 /** sha256 hex of the canonical synthetic artifact string (the seed scheme). */
@@ -49,8 +50,16 @@ export interface CurrentArtifactState {
 
 /** The artifact's CURRENT version + digest, per the demo artifact registry. */
 export function currentArtifactStateFor(
-  item: Pick<ReviewItem, "artifactId" | "artifactVersion" | "artifactDigest">,
+  item: Pick<ReviewItem, "artifactType" | "artifactId" | "artifactVersion" | "artifactDigest">,
 ): CurrentArtifactState {
+  // BRIDGED types (ADR-0049): the domain row IS the artifact and the store
+  // syncs the shadow in the same mutation as every domain transition, so a
+  // live shadow is never stale by construction — current = reviewed. (The
+  // store also denies every direct publish on bridged items, so this state
+  // is display-only for them.)
+  if (isBridgedArtifactType(item.artifactType)) {
+    return { version: item.artifactVersion, digest: item.artifactDigest, changedSinceReview: false };
+  }
   const version = DEMO_REVISED_ARTIFACT_VERSIONS[item.artifactId] ?? item.artifactVersion;
   const digest = canonicalSyntheticArtifactDigest(item.artifactId, version);
   return {

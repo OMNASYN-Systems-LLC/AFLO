@@ -89,9 +89,16 @@ describe("transitionReport", () => {
     });
     expect(res.ok).toBe(true);
     expect(store.database().reports.find((r) => r.id === "qr-solomon-q2")?.status).toBe("published");
-    const event = deserializeEvent(store.outbox.at(-1)!.serializedEvent);
-    expect(event.eventType).toBe("ProgressReportPublished");
+    const events = store.outbox.map((r) => deserializeEvent(r.serializedEvent));
+    const event = events.find((e) => e.eventType === "ProgressReportPublished")!;
     expect(event.payload).toMatchObject({ reportId: "qr-solomon-q2", publishedByMemberId: "s-mercer" });
+    // ADR-0049: the bridged shadow was carried awaiting_review → approved →
+    // published in the SAME mutation (report.v1.0.0 has no approved state).
+    expect(events.map((e) => e.eventType)).toEqual([
+      "ProgressReportPublished",
+      "ReviewDecisionRecorded",
+      "ReviewItemPublished",
+    ]);
     expect(store.auditFor(ORG).map((a) => a.action)).toContain("report.published");
   });
 

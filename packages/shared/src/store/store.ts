@@ -92,12 +92,22 @@ import {
 import {
   assembleHandoffPackage,
   generateSigningKey,
+  sha256Hex,
   verifyHandoffPackage,
   type HandoffFacts,
   type HandoffPackage,
   type HandoffVerification,
   type SigningKeyPair,
 } from "@aflo/security";
+import {
+  BRIDGED_ARTIFACT_REVISION,
+  canonicalReportSerialization,
+  canonicalRoadmapSerialization,
+  isBridgedArtifactType,
+  reviewStateForReportStatus,
+  reviewStateForRoadmapStatus,
+  type BridgedArtifactType,
+} from "./review-bridges";
 import { createEvent, type DomainEvent } from "../events";
 import { toOutboxRecord, type OutboxRecord } from "../outbox";
 import { syntheticDatabase, type SyntheticDatabase } from "../data/synthetic";
@@ -689,7 +699,9 @@ export type ReviewCenterDenialCode =
   | "INVALID_INPUT"
   | "OPEN_REVIEW_EXISTS"
   | "BLOCKED_ENVELOPE"
-  | "STALE_ARTIFACT";
+  | "STALE_ARTIFACT"
+  /** ADR-0049: bridged shadows move ONLY via their domain transition. */
+  | "BRIDGED_ARTIFACT";
 
 export interface ReviewItemActionResult {
   ok: boolean;
@@ -1441,6 +1453,29 @@ export class AfloStore {
       occurredAt: now.toISOString(),
     });
 
+    // ADR-0049: the review shadow moves in this SAME mutation, derived from
+    // the destination status via the pure mapping — roadmap.v1.0.0 stays
+    // authoritative; the shadow only mirrors it.
+    const shadowTarget = reviewStateForRoadmapStatus(input.toStatus);
+    if (shadowTarget !== null) {
+      emitted.push(
+        ...this.syncBridgedShadow({
+          organizationId: input.organizationId,
+          clientId: client.id,
+          artifactType: "roadmap_draft",
+          artifactId: roadmap.id,
+          artifactDigest: sha256Hex(canonicalRoadmapSerialization(roadmap)),
+          targetState: shadowTarget,
+          authorStaffId: roadmap.createdByStaffId,
+          aiRunId: roadmap.aiRunId,
+          actorStaffId: actor.id,
+          domainRuleVersion: transition.ruleVersion,
+          publishedResultRef: `roadmaps/${roadmap.id}`,
+          now,
+        }),
+      );
+    }
+
     if (input.toStatus === "published") {
       this.logNotification(
         input.organizationId,
@@ -1809,6 +1844,32 @@ export class AfloStore {
       ruleVersion: transition.ruleVersion,
       occurredAt: now.toISOString(),
     });
+
+    // ADR-0049: the review shadow moves in this SAME mutation. report.v1.0.0
+    // has NO approved intermediate — publishing from ready_for_review carries
+    // the shadow awaiting_review → approved → published atomically here, the
+    // approve leg's decision recorded with the acting staff member.
+    const shadowTarget = reviewStateForReportStatus(input.toStatus);
+    if (shadowTarget !== null) {
+      emitted.push(
+        ...this.syncBridgedShadow({
+          organizationId: input.organizationId,
+          clientId: client.id,
+          artifactType: "quarterly_report",
+          artifactId: report.id,
+          artifactDigest: sha256Hex(canonicalReportSerialization(report)),
+          targetState: shadowTarget,
+          // Reports are generated deterministically from recorded facts —
+          // there is no author column; the shadow is system-authored.
+          authorStaffId: null,
+          aiRunId: null,
+          actorStaffId: actor.id,
+          domainRuleVersion: transition.ruleVersion,
+          publishedResultRef: `reports/${report.id}`,
+          now,
+        }),
+      );
+    }
 
     if (input.toStatus === "published") {
       this.logNotification(
@@ -3487,6 +3548,422 @@ export class AfloStore {
     return this.db.assessments.filter((a) => a.clientId === clientId).at(-1)?.stage ?? null;
   }
 
+  // --- Domain → Review Center bridges (ADR-0049) ----------------------------
+  //
+  // AUTHORITY: domain status authoritative for bridged types; ReviewItem
+  // authoritative for native types (ADR-0034). The §6.5 anti-two-architectures
+  // mitigations, in code:
+  //   (a) transitionRoadmap / transitionReport are THE single store methods —
+  //       each performs the domain write AND the shadow ReviewItem write in
+  //       the same mutation (this helper runs inside them, never separately);
+  //   (b) shadow moves are DERIVED via the pure mappings in review-bridges.ts;
+  //       every public review API DENIES direct calls on bridged items
+  //       (`bridgedGuard`, audited `RVC_BRIDGED_ARTIFACT`);
+  //   (c)+(d) lockstep + shadow-consistency invariant tests pin every mapped
+  //       pair to legal edges in BOTH machines.
+
+  /**
+   * The single LIVE (non-terminal) shadow tracking a bridged domain row. The
+   * open-tuple uniqueness plus the derived-only write path keep this to at
+   * most one (invariant-tested).
+   */
+  private findLiveShadow(
+    organizationId: string,
+    artifactType: BridgedArtifactType,
+    artifactId: string,
+  ): ReviewItem | undefined {
+    return this.db.reviewItems.find(
+      (r) =>
+        r.organizationId === organizationId &&
+        r.artifactType === artifactType &&
+        r.artifactId === artifactId &&
+        (r.state === "draft" || r.state === "awaiting_review" || r.state === "approved" || r.state === "published"),
+    );
+  }
+
+  /**
+   * Deny a direct public review-API call on a bridged item (ADR-0049
+   * mitigation b): a ReviewItem whose artifactType is bridged may only be
+   * moved by its domain transition. Audited; never mutates.
+   */
+  private bridgedDirectDenial(args: {
+    organizationId: string;
+    actorStaffId: string | null;
+    attempted: string;
+    artifactType: string;
+    targetId: string;
+    now: Date;
+  }): ReviewItemActionResult {
+    this.audit({
+      organizationId: args.organizationId,
+      actorStaffId: args.actorStaffId,
+      action: "review.bridged_direct_denied",
+      targetType: "review_item",
+      targetId: args.targetId,
+      detail: `${args.attempted} denied — ${args.artifactType} is a bridged artifact type; its review shadow moves only via the domain transition (domain status is authoritative)`,
+      reasonCode: "RVC_BRIDGED_ARTIFACT",
+      ruleVersion: REVIEW_CENTER_RULES_VERSION,
+      occurredAt: args.now.toISOString(),
+    });
+    return { ok: false, denialCode: "BRIDGED_ARTIFACT", reasonCode: "RVC_BRIDGED_ARTIFACT", emittedEventIds: [] };
+  }
+
+  /**
+   * Derive and apply the review-shadow move for one bridged domain transition
+   * — called ONLY from inside `transitionRoadmap` / `transitionReport`, in the
+   * same mutation as the domain write (mitigation a). The target state comes
+   * from the pure mapping of the domain DESTINATION status; the walk uses
+   * exclusively legal review_center.v1.0.0 edges (lockstep-tested):
+   *
+   *   forward     draft → awaiting_review → approved → published, one edge per
+   *               step (a report publish carries awaiting_review→approved→
+   *               published in this one call; the approve leg records the
+   *               decision with the acting staff member);
+   *   regression  target `draft` from an open/approved shadow — the kernel has
+   *               NO return edges, so the open shadow is SUPERSEDED and a NEW
+   *               linked draft item is minted (the kernel's own revision path);
+   *   archive     target `superseded` — a single legal edge from any live
+   *               state, `supersededByReviewItemId` null (no replacement).
+   *
+   * Lazy creation: a row that never had a shadow gets one on first entry to a
+   * mapped state, born `draft` or `awaiting_review` ONLY (the C1 birth-state
+   * gate holds structurally), then walks forward. Archiving a never-shadowed
+   * row creates nothing — nothing ever entered a queue. `submittedAt` keeps
+   * first-entry semantics. The bridge inherits the DOMAIN workflow's
+   * authorization; canReview/canPublishReviewItem gate native items only —
+   * this is what "domain status is authoritative" means.
+   *
+   * Events are pushed to the outbox here (same mutation) and returned so the
+   * caller can extend its emittedEventIds.
+   */
+  private syncBridgedShadow(args: {
+    organizationId: string;
+    clientId: string;
+    artifactType: BridgedArtifactType;
+    artifactId: string;
+    /** sha256 of the canonical serialization of the domain row (review-bridges.ts). */
+    artifactDigest: string;
+    targetState: ReviewItemState;
+    /** The domain row's author for shadow provenance (null = generated artifact). */
+    authorStaffId: string | null;
+    /** AI provenance carried from the domain row (roadmap.aiRunId); null otherwise. */
+    aiRunId: string | null;
+    /** The acting staff member of the domain transition (server-verified upstream). */
+    actorStaffId: string;
+    /** The domain rule version recorded in the shadow's provenance. */
+    domainRuleVersion: string;
+    /** Stamped on the publish leg — a pointer, never the body. */
+    publishedResultRef: string;
+    now: Date;
+  }): DomainEvent[] {
+    const nowIso = args.now.toISOString();
+    const emitted: DomainEvent[] = [];
+    const policy = resolveReviewPolicy(args.artifactType);
+
+    const emit = (event: DomainEvent) => {
+      this.outbox.push(toOutboxRecord(event, { now: args.now }));
+      emitted.push(event);
+    };
+
+    /** Mint a shadow item (birth draft/awaiting_review only — the C1 gate, structurally). */
+    const mint = (state: "draft" | "awaiting_review", previousReviewItemId: string | null): ReviewItem => {
+      this.counter += 1;
+      const created: ReviewItem = {
+        id: `rvi-${this.counter}`,
+        organizationId: args.organizationId,
+        clientId: args.clientId,
+        artifactType: args.artifactType,
+        artifactId: args.artifactId,
+        artifactVersion: BRIDGED_ARTIFACT_REVISION,
+        artifactDigest: args.artifactDigest,
+        workflowType: args.artifactType,
+        sourceFactSnapshots: [],
+        ruleVersionsUsed: [args.domainRuleVersion],
+        aiRunId: args.aiRunId,
+        aiModel: null,
+        aiPromptVersion: null,
+        confidence: null,
+        riskClassification: policy.riskClassification,
+        requiredReviewerRole: policy.requiredReviewerRole,
+        state,
+        assignedReviewerStaffId: null,
+        reviewedByStaffId: null,
+        reviewedAt: null,
+        latestDecision: null,
+        latestDecisionReasonCode: null,
+        modificationsDigest: [],
+        publishedResultRef: null,
+        publishedAt: null,
+        playbookId: null,
+        playbookVersion: null,
+        previousReviewItemId,
+        supersededByReviewItemId: null,
+        clientActionRef: null,
+        clientActionStatus: null,
+        outcome: null,
+        outcomeRecordedAt: null,
+        createdByStaffId: args.authorStaffId,
+        submittedAt: state === "awaiting_review" ? nowIso : null,
+        createdAt: nowIso,
+        updatedAt: nowIso,
+      };
+      this.db.reviewItems.push(created);
+      emit(
+        createEvent({
+          eventType: "ReviewItemCreated",
+          organizationId: args.organizationId,
+          aggregateId: created.id,
+          actorId: args.actorStaffId,
+          occurredAt: nowIso,
+          payload: {
+            reviewItemId: created.id,
+            clientId: created.clientId,
+            artifactType: created.artifactType,
+            artifactId: created.artifactId,
+            artifactVersion: created.artifactVersion,
+            artifactDigest: created.artifactDigest,
+            workflowType: created.workflowType,
+            riskClassification: created.riskClassification,
+            requiredReviewerRole: created.requiredReviewerRole,
+            state: created.state,
+            previousReviewItemId: created.previousReviewItemId,
+          },
+        }),
+      );
+      this.audit({
+        organizationId: args.organizationId,
+        actorStaffId: args.actorStaffId,
+        action: "review.created",
+        targetType: "review_item",
+        targetId: created.id,
+        detail: `bridged shadow of ${args.artifactType}/${args.artifactId}@${created.artifactVersion} born ${state} (${args.domainRuleVersion} authoritative)`,
+        reasonCode: state === "awaiting_review" ? "RVC_SUBMITTED" : "RVC_REVIEW_ALLOWED",
+        ruleVersion: REVIEW_CENTER_RULES_VERSION,
+        occurredAt: nowIso,
+      });
+      return created;
+    };
+
+    /** Apply ONE legal kernel edge to the shadow; false (audited) on drift. */
+    const applyEdge = (item: ReviewItem, toState: ReviewItemState, supersededById: string | null = null): boolean => {
+      const transition = reviewItemTransition(item.state, toState);
+      if (!transition.allowed) {
+        // Unreachable by construction (lockstep-tested); fail closed if a
+        // corrupt shadow state ever surfaces — audit, never force an edge.
+        this.audit({
+          organizationId: args.organizationId,
+          actorStaffId: args.actorStaffId,
+          action: "review.transition_denied",
+          targetType: "review_item",
+          targetId: item.id,
+          detail: `bridged shadow drift: ${item.state} → ${toState} is not a legal kernel edge`,
+          reasonCode: transition.reasonCode,
+          ruleVersion: transition.ruleVersion,
+          occurredAt: nowIso,
+        });
+        return false;
+      }
+      if (toState === "awaiting_review") {
+        const firstSubmission = item.submittedAt === null;
+        item.state = "awaiting_review";
+        if (firstSubmission) item.submittedAt = nowIso;
+        item.updatedAt = nowIso;
+        emit(
+          createEvent({
+            eventType: "ReviewItemSubmitted",
+            organizationId: args.organizationId,
+            aggregateId: item.id,
+            actorId: args.actorStaffId,
+            occurredAt: nowIso,
+            payload: { reviewItemId: item.id, artifactType: item.artifactType, firstSubmission },
+          }),
+        );
+        this.audit({
+          organizationId: args.organizationId,
+          actorStaffId: args.actorStaffId,
+          action: "review.submitted",
+          targetType: "review_item",
+          targetId: item.id,
+          detail: `bridged shadow of ${args.artifactType}/${args.artifactId} entered the queue with the domain submission`,
+          reasonCode: transition.reasonCode,
+          ruleVersion: transition.ruleVersion,
+          occurredAt: nowIso,
+        });
+        return true;
+      }
+      if (toState === "approved") {
+        // The approve leg records the structured decision with the ACTING
+        // staff member (the domain approver/publisher) — head and log move
+        // together, exactly like recordReviewDecision.
+        this.counter += 1;
+        const decision: ReviewDecisionRecord = {
+          id: `rvd-${this.counter}`,
+          organizationId: args.organizationId,
+          reviewItemId: item.id,
+          decision: "approved_unchanged",
+          reasonCode: "RVD_ACCURATE",
+          ruleVersion: REVIEW_CENTER_RULES_VERSION,
+          decidedByStaffId: args.actorStaffId,
+          clientStageAtDecision: this.stageAtDecisionFor(item.clientId),
+          workflowType: item.workflowType,
+          aiRunId: item.aiRunId,
+          agentVersion: null,
+          editedFields: [],
+          finalOutputSha256: item.artifactDigest,
+          escalatedToRole: null,
+          detail: `Derived from the ${args.domainRuleVersion} approval of ${args.artifactId} (ADR-0049 bridge).`,
+          decidedAt: nowIso,
+        };
+        this.db.reviewDecisions.push(decision);
+        item.state = "approved";
+        item.latestDecision = decision.decision;
+        item.latestDecisionReasonCode = decision.reasonCode;
+        item.reviewedByStaffId = args.actorStaffId;
+        item.reviewedAt = nowIso;
+        item.updatedAt = nowIso;
+        emit(
+          createEvent({
+            eventType: "ReviewDecisionRecorded",
+            organizationId: args.organizationId,
+            aggregateId: item.id,
+            actorId: args.actorStaffId,
+            occurredAt: nowIso,
+            payload: {
+              reviewItemId: item.id,
+              decisionId: decision.id,
+              decision: decision.decision,
+              reasonCode: decision.reasonCode,
+              toState: item.state,
+              escalatedToRole: null,
+              modifiedFieldCount: 0,
+            },
+          }),
+        );
+        this.audit({
+          organizationId: args.organizationId,
+          actorStaffId: args.actorStaffId,
+          action: "review.decided",
+          targetType: "review_item",
+          targetId: item.id,
+          detail: `approved_unchanged (RVD_ACCURATE) derived from the ${args.domainRuleVersion} approval of ${args.artifactId}`,
+          reasonCode: transition.reasonCode,
+          ruleVersion: transition.ruleVersion,
+          occurredAt: nowIso,
+        });
+        return true;
+      }
+      if (toState === "published") {
+        item.state = "published";
+        item.publishedAt = nowIso;
+        item.publishedResultRef = args.publishedResultRef;
+        item.updatedAt = nowIso;
+        emit(
+          createEvent({
+            eventType: "ReviewItemPublished",
+            organizationId: args.organizationId,
+            aggregateId: item.id,
+            actorId: args.actorStaffId,
+            occurredAt: nowIso,
+            payload: {
+              reviewItemId: item.id,
+              artifactType: item.artifactType,
+              artifactId: item.artifactId,
+              artifactVersion: item.artifactVersion,
+              artifactDigest: item.artifactDigest,
+              publishedByStaffId: args.actorStaffId,
+            },
+          }),
+        );
+        this.audit({
+          organizationId: args.organizationId,
+          actorStaffId: args.actorStaffId,
+          action: "review.published",
+          targetType: "review_item",
+          targetId: item.id,
+          detail: `bridged shadow of ${args.artifactType}/${args.artifactId}@${item.artifactVersion} published with the domain publication`,
+          reasonCode: transition.reasonCode,
+          ruleVersion: transition.ruleVersion,
+          occurredAt: nowIso,
+        });
+        return true;
+      }
+      if (toState === "superseded") {
+        item.state = "superseded";
+        item.supersededByReviewItemId = supersededById;
+        item.updatedAt = nowIso;
+        emit(
+          createEvent({
+            eventType: "ReviewItemSuperseded",
+            organizationId: args.organizationId,
+            aggregateId: item.id,
+            actorId: args.actorStaffId,
+            occurredAt: nowIso,
+            payload: { reviewItemId: item.id, supersededByReviewItemId: supersededById },
+          }),
+        );
+        this.audit({
+          organizationId: args.organizationId,
+          actorStaffId: args.actorStaffId,
+          action: "review.superseded",
+          targetType: "review_item",
+          targetId: item.id,
+          detail: `bridged shadow of ${args.artifactType}/${args.artifactId} superseded by the domain transition${
+            supersededById ? ` (replaced by ${supersededById})` : " (no replacement)"
+          }`,
+          reasonCode: transition.reasonCode,
+          ruleVersion: transition.ruleVersion,
+          occurredAt: nowIso,
+        });
+        return true;
+      }
+      return false;
+    };
+
+    let item = this.findLiveShadow(args.organizationId, args.artifactType, args.artifactId);
+
+    if (!item) {
+      if (args.targetState === "superseded") {
+        // Archiving a row that never had a shadow: nothing ever entered a
+        // queue — nothing to supersede (pre-bridge published seeds land here).
+        return emitted;
+      }
+      item = mint(args.targetState === "draft" ? "draft" : "awaiting_review", null);
+      // Fall through — the forward walk closes any remaining distance.
+    }
+
+    if (item.state === args.targetState) return emitted;
+
+    if (args.targetState === "superseded") {
+      applyEdge(item, "superseded");
+      return emitted;
+    }
+
+    if (args.targetState === "draft") {
+      // Domain regression (RM_RETURNED / RM_REOPENED / RP_RETURNED): the
+      // kernel has NO return edges — supersede the open shadow and mint a NEW
+      // linked draft item (the kernel's own revision path), in this same
+      // mutation. The next domain submission reuses the new open item, never
+      // a third one. Replacement first, then the supersession carrying its id
+      // (the supersedeReviewItem precedent).
+      const kernelCheck = reviewItemTransition(item.state, "superseded");
+      if (!kernelCheck.allowed) return emitted; // drift — unreachable, fail closed
+      const replacement = mint("draft", item.id);
+      applyEdge(item, "superseded", replacement.id);
+      return emitted;
+    }
+
+    // Forward walk along the spine — every consecutive pair is a legal edge.
+    const SPINE: ReviewItemState[] = ["draft", "awaiting_review", "approved", "published"];
+    let from = SPINE.indexOf(item.state);
+    const to = SPINE.indexOf(args.targetState);
+    if (from === -1 || to === -1 || to < from) return emitted; // drift — unreachable, fail closed
+    while (from < to) {
+      if (!applyEdge(item, SPINE[from + 1]!)) return emitted;
+      from += 1;
+    }
+    return emitted;
+  }
+
   /**
    * Create a Review Center queue item. Two hard gates run BEFORE anything is
    * written: (1) the blocked-envelope gate — a non-empty
@@ -3518,6 +3995,20 @@ export class AfloStore {
       !this.findReviewItem(input.organizationId, input.previousReviewItemId)
     ) {
       return { ok: false, denialCode: "REVIEW_ITEM_NOT_FOUND", emittedEventIds: [] };
+    }
+
+    // ADR-0049 (mitigation b): bridged shadows are minted ONLY by their
+    // domain transitions — a directly-created item claiming a bridged type
+    // would be a stray second architecture. Audited denial, nothing written.
+    if (isBridgedArtifactType(input.artifactType)) {
+      return this.bridgedDirectDenial({
+        organizationId: input.organizationId,
+        actorStaffId: actor?.id ?? null,
+        attempted: "createReviewItem",
+        artifactType: input.artifactType,
+        targetId: input.artifactId,
+        now,
+      });
     }
 
     // F4 birth-state gate (mirrors the Drizzle runtime assert): the TS union
@@ -3695,6 +4186,16 @@ export class AfloStore {
     if (!item) return { ok: false, denialCode: "REVIEW_ITEM_NOT_FOUND", emittedEventIds: [] };
     const actor = this.findActor(input.organizationId, input.actorStaffId);
     if (!actor) return { ok: false, denialCode: "ACTOR_NOT_IN_ORG", emittedEventIds: [] };
+    if (isBridgedArtifactType(item.artifactType)) {
+      return this.bridgedDirectDenial({
+        organizationId: input.organizationId,
+        actorStaffId: actor.id,
+        attempted: "submitReviewItem",
+        artifactType: item.artifactType,
+        targetId: item.id,
+        now,
+      });
+    }
 
     const transition = reviewItemTransition(item.state, "awaiting_review");
     if (!transition.allowed) {
@@ -3844,6 +4345,16 @@ export class AfloStore {
     if (!item) return { ok: false, denialCode: "REVIEW_ITEM_NOT_FOUND", emittedEventIds: [] };
     const actor = this.findActor(input.organizationId, input.actorStaffId);
     if (!actor) return { ok: false, denialCode: "ACTOR_NOT_IN_ORG", emittedEventIds: [] };
+    if (isBridgedArtifactType(item.artifactType)) {
+      return this.bridgedDirectDenial({
+        organizationId: input.organizationId,
+        actorStaffId: actor.id,
+        attempted: "recordReviewDecision",
+        artifactType: item.artifactType,
+        targetId: item.id,
+        now,
+      });
+    }
 
     // Input bounds BEFORE any policy check or mutation (adversarial review of
     // PR #96, M1): edited-field names are trimmed, DEDUPLICATED, capped at 32
@@ -4031,6 +4542,16 @@ export class AfloStore {
     if (!item) return { ok: false, denialCode: "REVIEW_ITEM_NOT_FOUND", emittedEventIds: [] };
     const actor = this.findActor(input.organizationId, input.actorStaffId);
     if (!actor) return { ok: false, denialCode: "ACTOR_NOT_IN_ORG", emittedEventIds: [] };
+    if (isBridgedArtifactType(item.artifactType)) {
+      return this.bridgedDirectDenial({
+        organizationId: input.organizationId,
+        actorStaffId: actor.id,
+        attempted: "publishReviewItem",
+        artifactType: item.artifactType,
+        targetId: item.id,
+        now,
+      });
+    }
 
     const transition = reviewItemTransition(item.state, "published");
     if (!transition.allowed) {
@@ -4134,6 +4655,16 @@ export class AfloStore {
     if (!item) return { ok: false, denialCode: "REVIEW_ITEM_NOT_FOUND", emittedEventIds: [] };
     const actor = this.findActor(input.organizationId, input.actorStaffId);
     if (!actor) return { ok: false, denialCode: "ACTOR_NOT_IN_ORG", emittedEventIds: [] };
+    if (isBridgedArtifactType(item.artifactType)) {
+      return this.bridgedDirectDenial({
+        organizationId: input.organizationId,
+        actorStaffId: actor.id,
+        attempted: "withdrawReviewItem",
+        artifactType: item.artifactType,
+        targetId: item.id,
+        now,
+      });
+    }
 
     const actorRole = reviewerRoleForMemberRole(actor.role);
     const isAuthor = item.createdByStaffId === actor.id;
@@ -4212,6 +4743,16 @@ export class AfloStore {
     const actor = input.actorStaffId !== null ? this.findActor(input.organizationId, input.actorStaffId) : null;
     if (input.actorStaffId !== null && !actor) {
       return { ok: false, denialCode: "ACTOR_NOT_IN_ORG", emittedEventIds: [] };
+    }
+    if (isBridgedArtifactType(old.artifactType)) {
+      return this.bridgedDirectDenial({
+        organizationId: input.organizationId,
+        actorStaffId: actor?.id ?? null,
+        attempted: "supersedeReviewItem",
+        artifactType: old.artifactType,
+        targetId: old.id,
+        now,
+      });
     }
 
     // A HUMAN actor needs authority to supersede: organization_admin+ always;

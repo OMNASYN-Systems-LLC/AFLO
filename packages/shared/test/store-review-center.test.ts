@@ -2,6 +2,9 @@ import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import {
   AfloStore,
+  canonicalReportSerialization,
+  canonicalRoadmapSerialization,
+  isBridgedArtifactType,
   reviewerRoleForMemberRole,
   type ClientPublishedReviewView,
   type CreateReviewItemInput,
@@ -25,12 +28,15 @@ function makeStore() {
   return new AfloStore(syntheticDatabase, () => NOW);
 }
 
+// NATIVE artifact type on purpose: bridged types (roadmap_draft,
+// quarterly_report) deny every direct review-API call (ADR-0049); the generic
+// surface is proven on financial_summary, which shares the high/staff floor.
 function draftInput(overrides: Partial<CreateReviewItemInput> = {}): CreateReviewItemInput {
   return {
     organizationId: ORG,
     clientId: "c-whitaker",
-    artifactType: "roadmap_draft" as const,
-    artifactId: "r-c-whitaker",
+    artifactType: "financial_summary" as const,
+    artifactId: "fs-c-whitaker-2026-07",
     artifactVersion: "2",
     artifactDigest: DIGEST,
     actorStaffId: "s-boyd",
@@ -39,10 +45,22 @@ function draftInput(overrides: Partial<CreateReviewItemInput> = {}): CreateRevie
 }
 
 describe("seed integrity — valid versions/digests across states and queues", () => {
-  it("every seeded item's digest IS the sha256 of its canonical synthetic string", () => {
+  it("every seeded item's digest IS the sha256 of its canonical source (synthetic string or bridged domain row)", () => {
     expect(syntheticDatabase.reviewItems.length).toBeGreaterThanOrEqual(6);
     for (const item of syntheticDatabase.reviewItems) {
-      const canonical = `AFLO-SYNTHETIC-ARTIFACT::${item.artifactId}::v${item.artifactVersion}`;
+      let canonical: string;
+      if (item.artifactType === "roadmap_draft") {
+        const row = syntheticDatabase.roadmaps.find((r) => r.id === item.artifactId);
+        expect(row, item.id).toBeDefined();
+        canonical = canonicalRoadmapSerialization(row!);
+      } else if (item.artifactType === "quarterly_report") {
+        const row = syntheticDatabase.reports.find((r) => r.id === item.artifactId);
+        expect(row, item.id).toBeDefined();
+        canonical = canonicalReportSerialization(row!);
+      } else {
+        expect(isBridgedArtifactType(item.artifactType), item.id).toBe(false);
+        canonical = `AFLO-SYNTHETIC-ARTIFACT::${item.artifactId}::v${item.artifactVersion}`;
+      }
       expect(item.artifactDigest, item.id).toBe(createHash("sha256").update(canonical).digest("hex"));
     }
   });
@@ -82,7 +100,7 @@ describe("role bridge (§6) + platform-admin structural exclusion", () => {
       decisionReasonCode: "RVD_ACCURATE",
     });
     expect(decide).toMatchObject({ ok: false, denialCode: "ACTOR_NOT_IN_ORG" });
-    const item = store.database().reviewItems.find((i) => i.id === "rvi-solomon-report")!;
+    const item = store.database().reviewItems.find((i) => i.id === "rvi-solomon-summary")!;
     const publish = store.publishReviewItem({
       organizationId: ORG,
       reviewItemId: item.id,
@@ -91,14 +109,14 @@ describe("role bridge (§6) + platform-admin structural exclusion", () => {
       currentArtifactDigest: item.artifactDigest,
     });
     expect(publish).toMatchObject({ ok: false, denialCode: "ACTOR_NOT_IN_ORG" });
-    expect(store.database().reviewItems.find((i) => i.id === "rvi-solomon-report")!.state).toBe("approved");
+    expect(store.database().reviewItems.find((i) => i.id === "rvi-solomon-summary")!.state).toBe("approved");
   });
 });
 
 describe("createReviewItem — gates before anything is written", () => {
   it("creates a draft with the kernel policy floor stamped (caller values can only RAISE)", () => {
     const store = makeStore();
-    // roadmap_draft floor is high/staff; a caller trying to lower is clamped.
+    // financial_summary floor is high/staff; a caller trying to lower is clamped.
     const res = store.createReviewItem(
       draftInput({ riskClassification: "low", requiredReviewerRole: "staff" }),
     );
@@ -107,7 +125,7 @@ describe("createReviewItem — gates before anything is written", () => {
       state: "draft",
       riskClassification: "high",
       requiredReviewerRole: "staff",
-      workflowType: "roadmap_draft", // defaults to artifactType
+      workflowType: "financial_summary", // defaults to artifactType
       createdByStaffId: "s-boyd",
       submittedAt: null,
     });
@@ -206,7 +224,7 @@ describe("createReviewItem — gates before anything is written", () => {
       "ACTOR_NOT_IN_ORG",
     );
     expect(store.createReviewItem(draftInput({ clientId: "c-nope" })).denialCode).toBe("CLIENT_NOT_FOUND");
-    expect(syntheticDatabase.reviewItems.some((i) => i.artifactId === "r-c-whitaker")).toBe(false); // seed untouched
+    expect(syntheticDatabase.reviewItems.some((i) => i.artifactId === "fs-c-whitaker-2026-07")).toBe(false); // seed untouched
   });
 });
 
@@ -260,11 +278,11 @@ describe("assignReviewer — organization_admin+ only (founder matrix)", () => {
 describe("recordReviewDecision — THE single decision entry point", () => {
   it("denies high-risk SELF-review (audited) and an insufficient role for an escalated floor", () => {
     const store = makeStore();
-    // s-boyd authored the seeded draft roadmap item — cannot review it (high risk).
-    store.submitReviewItem({ organizationId: ORG, reviewItemId: "rvi-pryor-roadmap", actorStaffId: "s-boyd" });
+    // s-boyd authors a high-risk item straight into the queue — cannot review it.
+    const authored = store.createReviewItem(draftInput({ state: "awaiting_review" }));
     const self = store.recordReviewDecision({
       organizationId: ORG,
-      reviewItemId: "rvi-pryor-roadmap",
+      reviewItemId: authored.item!.id,
       actorStaffId: "s-boyd",
       decision: "approved_unchanged",
       decisionReasonCode: "RVD_ACCURATE",
@@ -361,7 +379,7 @@ describe("recordReviewDecision — THE single decision entry point", () => {
 describe("publishReviewItem — role floor + the STALE-ARTIFACT invariant", () => {
   it("staff can NEVER publish a high-risk item; the owner can (matching version+digest)", () => {
     const store = makeStore();
-    const item = store.database().reviewItems.find((i) => i.id === "rvi-solomon-report")!;
+    const item = store.database().reviewItems.find((i) => i.id === "rvi-solomon-summary")!;
     const staffTry = store.publishReviewItem({
       organizationId: ORG,
       reviewItemId: item.id,
@@ -377,20 +395,20 @@ describe("publishReviewItem — role floor + the STALE-ARTIFACT invariant", () =
       actorStaffId: "s-mercer",
       currentArtifactVersion: item.artifactVersion,
       currentArtifactDigest: item.artifactDigest,
-      publishedResultRef: "reports/qr-solomon-q2",
+      publishedResultRef: "financial_summaries/fs-c-solomon-2026-07",
     });
     expect(ownerTry.ok).toBe(true);
     expect(ownerTry.item).toMatchObject({
       state: "published",
       publishedAt: NOW.toISOString(),
-      publishedResultRef: "reports/qr-solomon-q2",
+      publishedResultRef: "financial_summaries/fs-c-solomon-2026-07",
     });
     expect(store.auditFor(ORG).at(-1)?.action).toBe("review.published");
   });
 
   it("the founder chain verbatim: artifact changes → review stale → prior approval cannot publish → supersede + fresh review", () => {
     const store = makeStore();
-    const item = store.database().reviewItems.find((i) => i.id === "rvi-solomon-report")!;
+    const item = store.database().reviewItems.find((i) => i.id === "rvi-solomon-summary")!;
     // The artifact changed after approval — a different digest denies, state stays approved.
     const stale = store.publishReviewItem({
       organizationId: ORG,
@@ -461,16 +479,18 @@ describe("publishReviewItem — role floor + the STALE-ARTIFACT invariant", () =
 describe("withdrawReviewItem — author or organization_admin+, open states only", () => {
   it("the author withdraws their draft; a non-author staff member cannot; approved cannot be withdrawn", () => {
     const store = makeStore();
+    // A native draft authored by s-boyd (bridged items deny all direct calls).
+    const authored = store.createReviewItem(draftInput());
     const denied = store.withdrawReviewItem({
       organizationId: ORG,
-      reviewItemId: "rvi-pryor-roadmap",
+      reviewItemId: authored.item!.id,
       actorStaffId: "s-lin", // staff, not the author
     });
     expect(denied).toMatchObject({ ok: false, denialCode: "NOT_AUTHORIZED" });
     expect(store.auditFor(ORG).at(-1)?.action).toBe("review.withdraw_denied");
     const ok = store.withdrawReviewItem({
       organizationId: ORG,
-      reviewItemId: "rvi-pryor-roadmap",
+      reviewItemId: authored.item!.id,
       actorStaffId: "s-boyd", // the author
     });
     expect(ok.ok).toBe(true);
@@ -478,7 +498,7 @@ describe("withdrawReviewItem — author or organization_admin+, open states only
     // approved has no withdrawn edge (kernel) — even for the owner.
     const approved = store.withdrawReviewItem({
       organizationId: ORG,
-      reviewItemId: "rvi-solomon-report",
+      reviewItemId: "rvi-solomon-summary",
       actorStaffId: "s-mercer",
     });
     expect(approved).toMatchObject({ ok: false, reasonCode: "RVC_ILLEGAL_TRANSITION" });
@@ -488,21 +508,22 @@ describe("withdrawReviewItem — author or organization_admin+, open states only
 describe("supersedeReviewItem — human actors need authority (M1)", () => {
   it("staff non-author is denied on an OPEN item (audited); the author is allowed", () => {
     const store = makeStore();
-    // rvi-pryor-roadmap is a draft authored by s-boyd.
+    // A native draft authored by s-boyd.
+    const authored = store.createReviewItem(draftInput());
     const denied = store.supersedeReviewItem({
       organizationId: ORG,
-      reviewItemId: "rvi-pryor-roadmap",
+      reviewItemId: authored.item!.id,
       actorStaffId: "s-lin",
-      replacement: { artifactVersion: "2", artifactDigest: "a".repeat(64) },
+      replacement: { artifactVersion: "3", artifactDigest: "a".repeat(64) },
     });
     expect(denied).toMatchObject({ ok: false, denialCode: "NOT_AUTHORIZED", reasonCode: "RVC_INSUFFICIENT_ROLE" });
     expect(store.auditFor(ORG).at(-1)?.action).toBe("review.supersede_denied");
-    expect(store.database().reviewItems.find((i) => i.id === "rvi-pryor-roadmap")!.state).toBe("draft");
+    expect(store.database().reviewItems.find((i) => i.id === authored.item!.id)!.state).toBe("draft");
     const byAuthor = store.supersedeReviewItem({
       organizationId: ORG,
-      reviewItemId: "rvi-pryor-roadmap",
+      reviewItemId: authored.item!.id,
       actorStaffId: "s-boyd",
-      replacement: { artifactVersion: "2", artifactDigest: "a".repeat(64) },
+      replacement: { artifactVersion: "3", artifactDigest: "a".repeat(64) },
     });
     expect(byAuthor.ok).toBe(true);
     expect(byAuthor.supersededItem!.state).toBe("superseded");
@@ -745,10 +766,15 @@ describe("projections — staff queue vs the client-safe row", () => {
   it("staffReviewQueue filters by state/type/client with full metadata", () => {
     const store = makeStore();
     const awaiting = store.staffReviewQueue(ORG, { state: "awaiting_review" });
-    expect(awaiting.map((i) => i.id).sort()).toEqual(["rvi-bell-concierge", "rvi-okafor-summary"]);
+    expect(awaiting.map((i) => i.id).sort()).toEqual([
+      "rvi-bell-concierge",
+      "rvi-okafor-summary",
+      "rvi-ramirez-roadmap",
+      "rvi-solomon-report",
+    ]);
     expect(awaiting[0]).toHaveProperty("riskClassification");
     expect(awaiting[0]).toHaveProperty("requiredReviewerRole");
-    expect(store.staffReviewQueue(ORG, { clientId: "c-solomon" })).toHaveLength(2);
+    expect(store.staffReviewQueue(ORG, { clientId: "c-solomon" })).toHaveLength(3);
     expect(store.staffReviewQueue(ORG, { artifactType: "document_interpretation" })).toHaveLength(1);
     expect(store.staffReviewQueue("org-other")).toEqual([]); // tenant isolation
   });
@@ -810,9 +836,14 @@ describe("reviewMetrics — the ADR-0040 analytics contract, derived from record
     expect(metrics.overall.escalated).toBe(1);
     expect(metrics.overall.approvalRate).toBe(0.5);
     expect(metrics.escalationVolume).toBe(1);
-    expect(metrics.awaitingReviewCount).toBe(2);
+    // Awaiting: concierge + escalated summary + the two bridged shadows
+    // (Ramirez roadmap in staff review, Solomon report ready for review).
+    expect(metrics.awaitingReviewCount).toBe(4);
     expect(metrics.actionCompletionRate).toBe(1); // the tracked education action completed
     expect(metrics.staffProfiles.map((p) => p.reviewerMemberId)).toEqual(["s-boyd", "s-lin", "s-mercer"]);
-    expect(metrics.byArtifactType.quarterly_report?.editRate).toBe(1);
+    // financial_summary carries the escalation AND the approve-with-edits.
+    expect(metrics.byArtifactType.financial_summary?.total).toBe(2);
+    expect(metrics.byArtifactType.financial_summary?.editRate).toBe(1);
+    expect(metrics.byArtifactType.quarterly_report).toBeUndefined(); // no decided bridged shadows in the seed
   });
 });
