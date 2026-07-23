@@ -1,3 +1,6 @@
+// Session-derived data on every request — never statically rendered (mirrors portal/page.tsx).
+export const dynamic = "force-dynamic";
+
 import {
   documentTransitionsFrom,
   fullName,
