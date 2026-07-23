@@ -170,7 +170,7 @@ export class DrizzleMessagingRepository implements MessagingRepository {
         .from(conversationThreads)
         .where(eq(conversationThreads.clientId, clientId))
         // Active threads first; empty (never-messaged) threads last.
-        .orderBy(sql`${conversationThreads.lastMessageAt} desc nulls last`, sql`${conversationThreads.createdAt} desc`);
+        .orderBy(sql`${conversationThreads.lastMessageAt} desc nulls last`, sql`${conversationThreads.createdAt} desc`, sql`${conversationThreads.id} desc`);
       return rows.map(toThread);
     });
   }

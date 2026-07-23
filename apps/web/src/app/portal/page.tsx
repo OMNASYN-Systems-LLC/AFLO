@@ -1,21 +1,39 @@
 import { notFound } from "next/navigation";
 import { EmptyState, ProgressBar, SectionCard } from "@/components/ui";
 import { demoNow, getClientSession, portalRepository } from "@/lib/data";
+import { portalMessaging } from "@/lib/messaging-client";
 import { ACTION_STATUS_LABELS, fmtDate, fmtDateTime, fmtMonth } from "@/lib/format";
 import { markClientThreadReadAction, sendClientMessageAction } from "./actions";
 
 export const dynamic = "force-dynamic";
 
 /**
+ * Non-ok messaging-seam states (persistent runtime only — the demo store
+ * path always resolves ok). `not_found` copy is deliberately the same
+ * whether threads are missing or access was denied (anti-oracle,
+ * ADR-0044/0046): the UI never says "access denied".
+ */
+const MESSAGING_STATE_COPY = {
+  signed_out: "Sign in to view your secure messages.",
+  not_found: "No secure messages found.",
+  rejected: "Your secure messages could not be loaded.",
+  unavailable: "Secure messaging is not available right now.",
+} as const;
+
+/**
  * The client's own view. Rendered exclusively from the PortalView
  * projection, which is published-only by construction — internal reason
  * codes, review flags, drafts, and staff notes are not representable here.
  * Identity comes from the server-side session, never the browser.
+ * Conversations come through the runtime-selected messaging seam
+ * (ADR-0046) — same client-safe `ClientThreadView` projection either way.
  */
 export default async function PortalPage() {
   const session = await getClientSession();
   const view = await portalRepository.getPortalView(session.organizationId, session.clientId, demoNow);
   if (!view) notFound();
+  const conversationsResult = await portalMessaging().listConversations();
+  const conversations = conversationsResult.kind === "ok" ? conversationsResult.value : [];
 
   const openActions = view.monthlyActions.filter((a) => a.status !== "done");
   const doneActions = view.monthlyActions.length - openActions.length;
@@ -162,11 +180,13 @@ export default async function PortalPage() {
       </SectionCard>
 
       <SectionCard title="Secure messages" subtitle="Your private thread with your advisory team">
-        {view.conversations.length === 0 ? (
+        {conversationsResult.kind !== "ok" ? (
+          <EmptyState message={MESSAGING_STATE_COPY[conversationsResult.kind]} />
+        ) : conversations.length === 0 ? (
           <EmptyState message="No messages yet — your advisor will reach out here when there's something to discuss." />
         ) : (
           <div className="space-y-5">
-            {view.conversations.map((thread, threadIndex) => (
+            {conversations.map((thread, threadIndex) => (
               // Keyed by position (the client-safe projection is id-free); two
               // threads can share a subject, so subject is not a stable key.
               <div key={threadIndex}>

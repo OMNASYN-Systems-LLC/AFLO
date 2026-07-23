@@ -1,3 +1,6 @@
+// Session-derived data on every request — never statically rendered (mirrors portal/page.tsx).
+export const dynamic = "force-dynamic";
+
 import {
   documentTransitionsFrom,
   fullName,
@@ -68,6 +71,7 @@ import {
 import { StageTrack } from "@/components/stage";
 import { EmptyState, ProgressBar, SectionCard } from "@/components/ui";
 import { DEMO_ORG_ID, clientRepository, demoNow, store } from "@/lib/data";
+import { staffMessaging } from "@/lib/messaging-client";
 import {
   ACTION_STATUS_LABELS,
   fmtDate,
@@ -81,6 +85,19 @@ import {
 } from "@/lib/format";
 
 export const metadata = { title: "Client detail" };
+
+/**
+ * Non-ok messaging-seam states (persistent runtime only — the demo store
+ * path always resolves ok). `not_found` copy is deliberately the same
+ * whether the thread list is missing or access was denied (anti-oracle,
+ * ADR-0044/0046): the UI never says "access denied".
+ */
+const MESSAGING_STATE_COPY = {
+  signed_out: "Sign in to view secure messages.",
+  not_found: "No secure messages found.",
+  rejected: "Secure messages could not be loaded.",
+  unavailable: "Secure messaging is not available right now.",
+} as const;
 
 /** Referral status → badge tone. */
 const REFERRAL_TONE = {
@@ -122,13 +139,11 @@ export default async function ClientDetailPage({
   const resolutionReadout = store.resolutionReadoutFor(DEMO_ORG_ID, clientId, demoNow);
   const creditReport = await store.creditReportSummaryFor(DEMO_ORG_ID, clientId, demoNow);
   const opportunities = store.opportunityNoticesFor(DEMO_ORG_ID, clientId, demoNow);
-  const conversations = store
-    .conversationsFor(DEMO_ORG_ID, clientId)
-    .map((thread) => ({
-      thread,
-      messages: store.messagesForThread(DEMO_ORG_ID, thread.id),
-      unread: store.unreadCountForStaff(DEMO_ORG_ID, thread.id),
-    }));
+  // Messaging goes through the runtime-selected seam (ADR-0046) — never the
+  // store or repository directly. Non-ok kinds only occur in the persistent
+  // runtime; `not_found` renders as not-found, NEVER as "access denied".
+  const conversationsResult = await staffMessaging().listClientConversations(clientId);
+  const conversations = conversationsResult.kind === "ok" ? conversationsResult.value : [];
   const upcomingAppointments = store
     .database()
     .appointments.filter((ap) => ap.clientId === clientId && new Date(ap.scheduledAt) > demoNow)
@@ -1447,7 +1462,9 @@ export default async function ClientDetailPage({
             title="Secure messages"
             subtitle="Shared with the client — internal notes stay in the Notes card below"
           >
-            {conversations.length === 0 ? (
+            {conversationsResult.kind !== "ok" ? (
+              <EmptyState message={MESSAGING_STATE_COPY[conversationsResult.kind]} />
+            ) : conversations.length === 0 ? (
               <EmptyState message="No message threads with this client yet." />
             ) : (
               <div className="space-y-6">
@@ -1524,33 +1541,35 @@ export default async function ClientDetailPage({
               </div>
             )}
 
-            <form
-              action={openThreadAction.bind(null, clientId)}
-              className="mt-5 space-y-2 border-t border-line/70 pt-4"
-            >
-              <p className="text-xs font-medium text-ink-soft">Start a new conversation</p>
-              <input
-                name="subject"
-                required
-                maxLength={200}
-                placeholder="Subject"
-                className="w-full rounded-md border border-line bg-card px-3 py-2 text-sm text-ink placeholder:text-ink-faint"
-              />
-              <textarea
-                name="body"
-                required
-                maxLength={5000}
-                rows={2}
-                placeholder="First message to the client…"
-                className="w-full rounded-md border border-line bg-card px-3 py-2 text-sm text-ink placeholder:text-ink-faint"
-              />
-              <button
-                type="submit"
-                className="rounded-md bg-emerald px-3 py-1.5 text-xs font-medium text-ivory-ink transition-colors hover:bg-emerald-deep"
+            {conversationsResult.kind === "ok" ? (
+              <form
+                action={openThreadAction.bind(null, clientId)}
+                className="mt-5 space-y-2 border-t border-line/70 pt-4"
               >
-                Start conversation
-              </button>
-            </form>
+                <p className="text-xs font-medium text-ink-soft">Start a new conversation</p>
+                <input
+                  name="subject"
+                  required
+                  maxLength={200}
+                  placeholder="Subject"
+                  className="w-full rounded-md border border-line bg-card px-3 py-2 text-sm text-ink placeholder:text-ink-faint"
+                />
+                <textarea
+                  name="body"
+                  required
+                  maxLength={5000}
+                  rows={2}
+                  placeholder="First message to the client…"
+                  className="w-full rounded-md border border-line bg-card px-3 py-2 text-sm text-ink placeholder:text-ink-faint"
+                />
+                <button
+                  type="submit"
+                  className="rounded-md bg-emerald px-3 py-1.5 text-xs font-medium text-ivory-ink transition-colors hover:bg-emerald-deep"
+                >
+                  Start conversation
+                </button>
+              </form>
+            ) : null}
           </SectionCard>
 
           <SectionCard title="Notes" subtitle="Internal — never visible in the client portal">
