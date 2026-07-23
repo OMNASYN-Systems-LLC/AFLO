@@ -22,13 +22,26 @@ function allMigrationSql(): string {
   return files.map((f) => readFileSync(join(migrationsDir, f), "utf8")).join("\n");
 }
 
-/** Every pgEnum object exported by the schema (they carry enumName + enumValues). */
+/**
+ * Every pgEnum object exported by the schema (they carry enumName + enumValues).
+ * A drizzle pgEnum is CALLABLE (typeof "function") — the previous
+ * `typeof === "object"` filter matched nothing, making the CREATE TYPE check
+ * vacuous (found while building the ADR-0050 acceptance suite, which shares
+ * this iteration via `declaredEnums()` in src/acceptance/checks.ts).
+ */
 function declaredEnums(): { name: string; values: readonly string[] }[] {
   const out: { name: string; values: readonly string[] }[] = [];
   for (const value of Object.values(enums)) {
-    if (value && typeof value === "object" && "enumName" in value && "enumValues" in value) {
-      const e = value as { enumName: string; enumValues: readonly string[] };
-      if (typeof e.enumName === "string") out.push({ name: e.enumName, values: e.enumValues });
+    if (
+      value &&
+      (typeof value === "object" || typeof value === "function") &&
+      "enumName" in value &&
+      "enumValues" in value
+    ) {
+      const e = value as unknown as { enumName: unknown; enumValues: readonly string[] };
+      if (typeof e.enumName === "string" && Array.isArray(e.enumValues)) {
+        out.push({ name: e.enumName, values: e.enumValues });
+      }
     }
   }
   return out;
@@ -41,8 +54,12 @@ describe("migration integrity", () => {
   });
 
   it("creates a CREATE TYPE for every declared enum (so a clean DB can apply)", () => {
+    const declared = declaredEnums();
+    // Non-vacuous: the schema declares dozens of enums; zero means the
+    // discovery iteration broke, not that there is nothing to check.
+    expect(declared.length).toBeGreaterThan(30);
     const sql = allMigrationSql();
-    const missing = declaredEnums()
+    const missing = declared
       .map((e) => e.name)
       .filter((name) => !sql.includes(`CREATE TYPE "public"."${name}"`));
     expect(missing).toEqual([]);
