@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { getStaffSession, store } from "@/lib/data";
+import { staffMessaging } from "@/lib/messaging-client";
 
 /**
  * Staff readiness-assessment action. Tenant and actor identity come
@@ -127,56 +128,44 @@ export async function addNoteAction(clientId: string, formData: FormData): Promi
 }
 
 /**
- * Secure-messaging actions (messaging.v1.0.0). Staff↔client threads are shared
- * with the client — internal notes stay in the separate `notes` model. Tenant
- * and actor identity come only from the server session; the store re-verifies
- * the thread's org and validates the body. A denial is rejected fail-closed and
- * leaves no trace (no message, event, or audit); only a successful post is
- * audited (`message.posted`). The `threadId` arrives from the form but is
- * re-scoped to the session's org by the store, so a foreign id cannot match.
+ * Secure-messaging actions (messaging.v1.0.0), through the runtime-selected
+ * seam (ADR-0046) — never the store or repository directly. Staff↔client
+ * threads are shared with the client — internal notes stay in the separate
+ * `notes` model. Tenant and actor identity come only from the server-resolved
+ * session inside the seam; the demo path re-verifies the thread's org in the
+ * store, the persistent path authorizes in the route services (ADR-0044). A
+ * denial is fail-closed and — by the seam's vocabulary — indistinguishable
+ * from a missing thread, so this layer adds NO authorization logic and never
+ * distinguishes denial. The `threadId` arrives from the form but is re-scoped
+ * to the session's org below the seam, so a foreign id cannot match.
  */
 export async function postStaffReplyAction(
   clientId: string,
   threadId: string,
   formData: FormData,
 ): Promise<void> {
-  const session = await getStaffSession();
-  store.postReply({
-    organizationId: session.organizationId,
-    threadId,
-    senderRole: "staff",
-    senderId: session.staffId,
-    body: String(formData.get("body") ?? ""),
-  });
+  await staffMessaging().postReply(threadId, String(formData.get("body") ?? ""));
   revalidatePath(`/clients/${clientId}`);
 }
 
 export async function openThreadAction(clientId: string, formData: FormData): Promise<void> {
-  const session = await getStaffSession();
-  store.openThread({
-    organizationId: session.organizationId,
+  await staffMessaging().openThread(
     clientId,
-    subject: String(formData.get("subject") ?? ""),
-    body: String(formData.get("body") ?? ""),
-    actorStaffId: session.staffId,
-  });
+    String(formData.get("subject") ?? ""),
+    String(formData.get("body") ?? ""),
+  );
   revalidatePath(`/clients/${clientId}`);
 }
 
 /**
  * Staff marks a thread's client messages read (read receipts, messaging.v1.0.0).
- * Identity comes only from the session; the store re-verifies org membership,
- * marks only the counterparty's unread messages, emits MessageRead, and audits.
- * Idempotent — marking an already-read thread is a traceless no-op.
+ * Identity is resolved inside the seam; only the counterparty's unread messages
+ * transition, MessageRead is emitted, and the write is audited (store path) /
+ * route-service-authorized (persistent path). Idempotent — marking an
+ * already-read thread is a traceless no-op.
  */
 export async function markThreadReadAction(clientId: string, threadId: string): Promise<void> {
-  const session = await getStaffSession();
-  store.markThreadRead({
-    organizationId: session.organizationId,
-    threadId,
-    readerRole: "staff",
-    readerId: session.staffId,
-  });
+  await staffMessaging().markThreadRead(threadId);
   revalidatePath(`/clients/${clientId}`);
   revalidatePath("/dashboard");
 }
