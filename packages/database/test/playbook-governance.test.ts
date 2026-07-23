@@ -543,9 +543,12 @@ describe("the documented single-operator owner override (org policy PERMITS — 
     const published = rows.filter((r) => r.action === "playbook.version_published");
     expect(published).toHaveLength(2); // v1 publish + v2 publish (which superseded v1)
     for (const row of published) expect(row.actor).toBe(owner2A);
+    // Row order is not deterministic (same-transaction timestamps) — assert as a set:
+    // exactly one plain publish (v1) and one superseding publish (v2 → v1).
     const details = published.map((r) => JSON.parse(r.detail!) as { supersededVersionId: string | null });
-    expect(details[0]!.supersededVersionId).toBeNull();
-    expect(details[1]!.supersededVersionId).not.toBeNull();
+    const superseding = details.filter((d) => d.supersededVersionId !== null);
+    expect(details.filter((d) => d.supersededVersionId === null)).toHaveLength(1);
+    expect(superseding).toHaveLength(1);
     // No override was ever executed in org A — denied attempts audit nothing here.
     expect(rows.filter((r) => r.action === "playbook.owner_override")).toHaveLength(0);
   });
