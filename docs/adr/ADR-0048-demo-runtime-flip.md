@@ -35,9 +35,11 @@ they only lose their unsafe demo DEFAULTS.
 Mechanics (all in `packages/shared/src/runtime/runtime.ts`):
 
 1. `RUNTIME_MODES` gains `demo`. `isDemoRuntimePermitted(env)` is true only for
-   mode `demo` (explicit) and mode `test` (vitest sets `NODE_ENV=test`; no
-   hosted deployment runs with it — `next build`/`next start` force
-   `NODE_ENV=production`).
+   mode `demo` (explicit) and mode `test` (vitest sets `NODE_ENV=test`).
+   Because `next start` only DEFAULTS `NODE_ENV` when it is unset — a pre-set
+   `NODE_ENV=test` (or `APP_ENV=test`) survives into a served process — the
+   web boot gate refuses to SERVE in test mode outright (see item 6); the
+   test-mode permission exists for vitest, which never boots a server.
 2. `AuthMode`/`RepositoryMode` gain `"unresolved"`. The resolvers return the
    demo-family value ONLY under `isDemoRuntimePermitted`; with no explicit real
    selection and no opt-in they return `"unresolved"`, so every consumer
@@ -64,10 +66,15 @@ Mechanics (all in `packages/shared/src/runtime/runtime.ts`):
    operation answers the 503-shaped `unavailable` — never demo data.
 5. `apps/web/src/lib/data.ts` (the demo composition root) gates every exported
    session, store, and repository access on `isDemoRuntimePermitted` — outside
-   the opt-in each access throws (defense-in-depth behind boot). The one
-   allowance: `next build` prerender (`NEXT_PHASE=phase-production-build`), so
-   the prototype's static shell can build without an env var; SERVING always
-   passes boot + this gate first.
+   the opt-in each access throws (defense-in-depth behind boot). There is NO
+   build-phase bypass (PR #99 review M1): `/`, `/dashboard`, and `/clients`
+   are `force-dynamic` like every other data-bearing page, so nothing
+   demo-gated executes during `next build`, no synthetic data is baked into
+   any build artifact, and builds need no env var.
+6. `instrumentation.ts` additionally refuses to SERVE in test mode (PR #99
+   review M2): `NODE_ENV=test`/`APP_ENV=test` in a served process would
+   silently permit the demo runtime; vitest never runs `register()`, so unit
+   tests are untouched.
 
 ## The truth table
 
@@ -80,7 +87,7 @@ Mechanics (all in `packages/shared/src/runtime/runtime.ts`):
 | demo | —/demo | —/memory | **demo** (boots, serves synthetic) |
 | demo | clerk | any | **fail-closed** (boot refuses: contradiction) |
 | demo | any | postgres | **fail-closed** (boot refuses: contradiction) |
-| test / `NODE_ENV=test` | any | any | **demo permitted** (automated tests only) |
+| test / `NODE_ENV=test` | any | any | **demo permitted for vitest only — a SERVED process is refused at boot** (M2) |
 | —/development/preview | — | — | **fail-closed** (was silent demo) |
 | —/development/preview | clerk | — | **fail-closed** (LOW-5 cell, closed) |
 | —/development/preview | — | postgres | **fail-closed** (LOW-5 cell, closed) |
@@ -93,9 +100,11 @@ Mechanics (all in `packages/shared/src/runtime/runtime.ts`):
 Every cell lands in exactly one class; **no cell without the explicit opt-in is
 demo**. Verified live: `next start` with no opt-in → "Failed to prepare
 server", all requests 500; with `APP_ENV=demo` → demo serves; with
-clerk+postgres only → boots, dynamic pages/actions 500 with the refusal error,
-`/api/messages/*` 503, static shell pages serve baked HTML (owed to the removal
-slice — inventory §e).
+clerk+postgres only → boots, and EVERY data-bearing page (`/`, `/dashboard`,
+`/clients` included — all `force-dynamic` since the PR #99 M1 fix) plus every
+action fails with the refusal error while `/api/messages/*` answers 503 — no
+synthetic data is served or baked anywhere in the real cell; with
+`NODE_ENV=test` pre-set → refused at boot (M2).
 
 ## Why this is ADR-0017-consistent
 
@@ -115,7 +124,7 @@ slice — inventory §e).
 | Context | Change |
 |---|---|
 | `pnpm dev` | unchanged UX — committed `apps/web/.env.development` (`APP_ENV=demo`, non-secret, `next dev`-only; gitignore exception) |
-| `pnpm --filter @aflo/web build` | unchanged — prerender allowance, no env needed |
+| `pnpm --filter @aflo/web build` | unchanged — no env needed; no page prerenders store data (the shell pages are `force-dynamic`), so there is no build-phase bypass in the gate |
 | Playwright | `playwright.config.ts` webServer env sets `APP_ENV=demo` |
 | Local `next start` smoke runs | now require `APP_ENV=demo pnpm --filter @aflo/web start` |
 | Vercel preview + prototype production | dashboard must set `APP_ENV=demo` (until real cutover flips each env to its real config) |
@@ -124,7 +133,7 @@ slice — inventory §e).
 ## What the final demo-REMOVAL slice (B11) still owes
 
 See `docs/deployment/DEMO_RUNTIME_INVENTORY.md` §h: replace/delete the demo
-pages and `lib/data.ts` (including the `NEXT_PHASE` allowance), swap in Clerk
+pages and `lib/data.ts`, swap in Clerk
 sessions and drain the demo-marker allowlist to zero, retire the store
 messaging gateways and the seam's `demo` arm, re-home the playbook draft seeds,
 decide whether `APP_ENV=demo` survives as a marked sales-demo runtime, and
@@ -143,5 +152,6 @@ extend boot enforcement to the worker.
    persistent composition — the mirror image of LOW-5 ("no credential
    activation" is a hard constraint of this slice).
 4. **Fail closed only at the seams (no boot change).** Rejected: boot
-   enforcement is the only layer that also covers statically prerendered pages
-   and future unseamed surfaces; runtime guards remain as defense-in-depth.
+   enforcement is the layer that covers future unseamed surfaces uniformly and
+   refuses ambiguous deployments before any request is answered; runtime
+   guards remain as defense-in-depth.

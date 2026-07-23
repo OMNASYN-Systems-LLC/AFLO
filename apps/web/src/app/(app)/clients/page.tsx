@@ -5,6 +5,10 @@ import { fmtDate } from "@/lib/format";
 
 export const metadata = { title: "Clients" };
 
+// Render at REQUEST time so every render passes the ADR-0048 demo-runtime
+// gate — synthetic data must never be baked into the build (PR #99 M1).
+export const dynamic = "force-dynamic";
+
 export default async function ClientsPage() {
   const rows = await clientRepository.list(DEMO_ORG_ID, demoNow);
   const clients = rows.filter((r) => r.kind === "client").length;

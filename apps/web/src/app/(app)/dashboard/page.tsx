@@ -7,6 +7,10 @@ import { fmtDateTime, fmtMonth, fmtPct } from "@/lib/format";
 
 export const metadata = { title: "Dashboard" };
 
+// Render at REQUEST time so every render passes the ADR-0048 demo-runtime
+// gate — synthetic data must never be baked into the build (PR #99 M1).
+export const dynamic = "force-dynamic";
+
 export default async function DashboardPage() {
   const snapshot = await dashboardRepository.getSnapshot(DEMO_ORG_ID, demoNow);
   const { kpis } = snapshot;

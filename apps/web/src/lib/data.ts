@@ -38,12 +38,11 @@ import {
  * (`instrumentation.ts`) refuses ambiguous configs before a request ever gets
  * here, so this gate is the belt-and-braces layer behind it.
  *
- * The ONE allowance: `next build` prerendering (`NEXT_PHASE=
- * phase-production-build`). The prototype's static shell pages render from
- * synthetic data at build time; SERVING them still requires the boot gate and
- * this request-time gate to pass, so no ambiguous deployment ever answers a
- * request with synthetic data. The demo-runtime REMOVAL slice (B11) deletes
- * this module and the allowance with it.
+ * There is NO build-phase bypass (PR #99 review M1): every page that reads
+ * this module is `force-dynamic`, so nothing here executes during
+ * `next build` and no synthetic data is ever baked into a build artifact
+ * that a non-demo deployment could serve. The demo-runtime REMOVAL slice
+ * (B11) deletes this module entirely.
  *
  * The demo READ clock stays pinned to SYNTHETIC_NOW for deterministic
  * rendering of seed data; MUTATIONS stamp real time so the audit trail and
@@ -53,7 +52,6 @@ import {
 /** Refuse demo/synthetic access outside the explicit opt-in (ADR-0048). */
 function assertDemoRuntime(): void {
   if (isDemoRuntimePermitted(process.env)) return;
-  if (process.env.NEXT_PHASE === "phase-production-build") return; // build-time prerender of the prototype shell only
   throw new Error(
     "[aflo] demo runtime refused: this process has not opted into the demo/synthetic runtime " +
       "(APP_ENV=demo) — refusing to serve synthetic data or demo identities (ADR-0048). " +

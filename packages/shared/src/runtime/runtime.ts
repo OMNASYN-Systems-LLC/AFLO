@@ -20,7 +20,8 @@
  *
  * SYMMETRICALLY (ADR-0048, PR #97 review LOW-5): the demo/synthetic runtime is
  * only ever entered by an EXPLICIT `APP_ENV=demo` (or under automated tests,
- * `NODE_ENV=test`/`APP_ENV=test` — never a hosted deployment). Demo identities,
+ * `NODE_ENV=test`/`APP_ENV=test` — and a SERVED process is refused in test
+ * mode by the web boot gate, see `isDemoRuntimePermitted`). Demo identities,
  * in-memory repositories, and synthetic seed are NO LONGER implicit defaults:
  * a deployment that intends production but forgets `APP_ENV=production` and/or
  * one of `AUTH_MODE`/`REPOSITORY_MODE` now FAILS CLOSED at boot instead of
@@ -74,10 +75,13 @@ export function resolveRuntimeMode(env: EnvLike): RuntimeMode {
 /**
  * Is the demo/synthetic runtime EXPLICITLY permitted for this process?
  * True only for the explicit demo opt-in (`APP_ENV=demo`) and for automated
- * tests (mode `test` — vitest sets `NODE_ENV=test`; no hosted deployment runs
- * with it: `next build`/`next start` force `NODE_ENV=production`). Everything
- * that serves demo identities, in-memory repositories, or synthetic seed MUST
- * gate on this — absence of configuration never implies demo (ADR-0048).
+ * tests (mode `test` — vitest sets `NODE_ENV=test`). NOTE: `next start` only
+ * DEFAULTS `NODE_ENV` when it is unset — a pre-set `NODE_ENV=test` survives
+ * into a served process — so the web boot gate (`instrumentation.ts`) refuses
+ * to SERVE in test mode outright; the permission here exists for unit tests,
+ * which never boot a server. Everything that serves demo identities,
+ * in-memory repositories, or synthetic seed MUST gate on this — absence of
+ * configuration never implies demo (ADR-0048).
  */
 export function isDemoRuntimePermitted(env: EnvLike): boolean {
   const mode = resolveRuntimeMode(env);

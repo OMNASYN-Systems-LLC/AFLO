@@ -5,6 +5,12 @@ import { OrganizationBrand } from "@/components/branding";
  * Staff sign-in shell — visual only. Real authentication (Clerk or Auth.js)
  * replaces this screen when the first slice moves past synthetic data.
  */
+
+// Render at REQUEST time, never baked into the build (ADR-0048 / PR #99 M1):
+// nothing from the demo runtime may be prerendered into a build that a
+// non-demo deployment could serve.
+export const dynamic = "force-dynamic";
+
 export default function SignInPage() {
   return (
     <main className="flex min-h-screen items-center justify-center bg-obsidian px-6">

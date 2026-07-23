@@ -96,6 +96,21 @@ describe("instrumentation register() — fail-closed boot gate", () => {
     await expect(register()).resolves.toBeUndefined();
   });
 
+  it("REFUSES to SERVE in test mode — NODE_ENV=test survives `next start` (PR #99 M2)", async () => {
+    // next's bin only DEFAULTS NODE_ENV when unset; a pre-set NODE_ENV=test
+    // reaches the server and would permit the demo runtime. A served process
+    // must never be in test mode (vitest never runs register()).
+    setEnv({ NEXT_RUNTIME: "nodejs", NODE_ENV: "test" });
+    await expect(register()).rejects.toThrow(RuntimeConfigError);
+    await expect(register()).rejects.toThrow(/must never run in test mode/);
+  });
+
+  it("REFUSES to SERVE an explicit APP_ENV=test the same way", async () => {
+    setEnv({ NEXT_RUNTIME: "nodejs", APP_ENV: "test" });
+    await expect(register()).rejects.toThrow(RuntimeConfigError);
+    await expect(register()).rejects.toThrow(/must never run in test mode/);
+  });
+
   it("stays a no-op on the edge runtime (documented gap — no demo/mock providers there)", async () => {
     setEnv({ NEXT_RUNTIME: "edge" }); // otherwise-ambiguous env
     await expect(register()).resolves.toBeUndefined();

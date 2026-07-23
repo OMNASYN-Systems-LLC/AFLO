@@ -53,8 +53,8 @@ Config-as-code lives in **`apps/web/vercel.json`** (framework, install, and buil
 > `APP_ENV=demo` with the real selection (`AUTH_MODE=clerk`,
 > `REPOSITORY_MODE=postgres`, and for production `APP_ENV=production` plus the
 > full ADR-0017 set — see `AUTH_CUTOVER_RUNBOOK.md` §3). Builds themselves need
-> no variable (static prerender of the prototype shell is allowed at build
-> time; serving is what the boot gate protects).
+> no variable — no page prerenders synthetic data (all data-bearing pages are
+> `force-dynamic` and render behind the boot + runtime gates at request time).
 
 pnpm version pinning:
 

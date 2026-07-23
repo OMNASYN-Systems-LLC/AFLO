@@ -67,8 +67,9 @@ selects after the ADR-0048 flip:
 | `getClientSession()` | `apps/web/src/lib/data.ts` | org `DEMO_ORG_ID` + client `DEMO_CLIENT_ID` (`c-bell`) | `app/portal/page.tsx`; messaging seam demo path (`lib/messaging-client.ts`) |
 
 Both session functions now call `assertDemoRuntime()` first (ADR-0048): outside
-the explicit opt-in they throw instead of minting a demo identity (the one
-allowance is `next build` prerender — see §f note).
+the explicit opt-in they throw instead of minting a demo identity. There is no
+build-phase bypass — nothing demo-gated executes during `next build` (PR #99
+M1).
 
 ## d. Synthetic seed entry points
 
@@ -106,14 +107,15 @@ Files rendering from this surface (all `@/lib/data` importers):
 `(app)/leads/page.tsx`, `(app)/reviews/page.tsx`, `(app)/reviews/[id]/page.tsx`,
 `app/portal/page.tsx`, plus the action modules and `lib/messaging-client.ts`.
 
-**Static-shell caveat (owed to the removal slice):** `/`, `/clients`, and
-`/dashboard` are statically prerendered at build time from synthetic data. In a
+**No prerendered synthetic data (PR #99 M1 fix):** `/`, `/clients`, and
+`/dashboard` are `export const dynamic = "force-dynamic"` like every other
+data-bearing page, so NOTHING from the demo runtime is baked into a build
+artifact and every render passes the ADR-0048 gate at request time. In a
 deployment that explicitly selected the REAL runtime (`clerk+postgres`, which
-boots), those three baked HTML shells still serve until the removal slice
-replaces them; every DYNAMIC page, server action, session, and API route in
-that deployment fails closed (verified: dynamic pages 500 with the ADR-0048
-refusal, `/api/messages/*` 503). No AMBIGUOUS deployment serves anything — boot
-refuses first.
+boots), every page, server action, session, and API route fails closed
+(live-verified: all pages 500 with the ADR-0048 refusal, `/api/messages/*`
+503 — zero synthetic bytes served). No AMBIGUOUS deployment serves anything —
+boot refuses first.
 
 ## f. Truth table — APP_ENV × AUTH_MODE × REPOSITORY_MODE → behavior
 
@@ -141,7 +143,7 @@ APP_ENV × opt-in × AUTH_MODE × REPOSITORY_MODE table collapses to three axes.
 | demo | demo | memory | **demo** | same (explicit demo-family values are legal inside the opt-in) |
 | demo | clerk | any | **fail-closed** | boot refuses: contradiction (`APP_ENV=demo` vs real auth) |
 | demo | any | postgres | **fail-closed** | boot refuses: contradiction |
-| test (or `NODE_ENV=test`) | — | — | **demo** (tests only) | vitest processes; never a hosted deployment (`next build`/`start` force `NODE_ENV=production`) |
+| test (or `NODE_ENV=test`) | — | — | **demo permitted (vitest only)** | vitest processes only. A SERVED process in test mode is REFUSED at boot (PR #99 M2): next's CLI only defaults `NODE_ENV` when unset — a pre-set `NODE_ENV=test` survives `next start` — so `instrumentation.register()` (never run by vitest) throws for mode `test` |
 | — | — | — | **fail-closed** | boot refuses: `AUTH_MODE`/`REPOSITORY_MODE` unresolved (was silent demo) |
 | — | clerk | — | **fail-closed** | boot refuses: `REPOSITORY_MODE` unresolved (LOW-5 cell, closed) |
 | — | — | postgres | **fail-closed** | boot refuses: `AUTH_MODE` unresolved (LOW-5 cell, closed) |
@@ -161,16 +163,16 @@ without the explicit opt-in is `demo`.
 |---|---|---|
 | Local `pnpm dev` | committed `APP_ENV=demo` (non-secret; `next dev`-only) | `apps/web/.env.development` (gitignore exception) |
 | Playwright e2e | `webServer.env.APP_ENV = "demo"` | `apps/web/playwright.config.ts` |
-| `next build` (CI + local + Vercel) | none needed — prerender of the prototype shell is allowed via `NEXT_PHASE=phase-production-build` in the `lib/data.ts` gate; serving still requires boot + the runtime gate | `apps/web/src/lib/data.ts` |
+| `next build` (CI + local + Vercel) | none needed — no page prerenders store data (`/`, `/dashboard`, `/clients` are `force-dynamic`); the gate has NO build-phase bypass | `apps/web/src/lib/data.ts` + the three page modules |
 | Vercel PREVIEW deployments (intentional demo) | **dashboard action required:** set `APP_ENV=demo` for the Preview environment of project `aflo-web` | Vercel dashboard (`DEPLOYMENT.md` §2) |
 | Vercel PRODUCTION deployment of the prototype (`main`) | **dashboard action required:** set `APP_ENV=demo` for the Production environment until cutover — without it the prototype deployment refuses to boot after this change | Vercel dashboard (`DEPLOYMENT.md` §2) |
 | Unit tests (vitest) | none needed — `NODE_ENV=test` is mode `test` | — |
 
 ## h. What the B11 removal slice still owes
 
-1. Replace the three static shell pages (`/`, `/clients`, `/dashboard`) and all
-   dynamic demo pages with persistent-repository implementations (runbook §5.5),
-   then delete `apps/web/src/lib/data.ts` and its `NEXT_PHASE` build allowance.
+1. Replace the demo pages (all dynamic — `/`, `/clients`, `/dashboard`
+   included) with persistent-repository implementations (runbook §5.5), then
+   delete `apps/web/src/lib/data.ts`.
 2. Replace `getStaffSession`/`getClientSession` with the Clerk-backed provider
    (runbook §5.2) and delete `packages/auth/src/demo.ts`; shrink the
    demo-marker allowlist to zero.
