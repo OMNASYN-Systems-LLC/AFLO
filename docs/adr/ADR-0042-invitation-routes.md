@@ -87,6 +87,18 @@ identities). **Activation is composition, not new logic**: swap in the Clerk
 `auth()` closure documented in `@aflo/auth/provider-session.ts`, bind the
 verified primary email, set the env — nothing downstream changes.
 
+## Explicit deferral — matrix §7 audit emission (MUST ship with Clerk activation)
+
+AUTHORIZATION_MATRIX §7 row 1 requires an audit event for membership
+creation, including invitations issued and accepted; ADR-0032 deferred that
+emission to this route layer, and this slice defers it ONCE more — to the
+Clerk-activation PR — for one reason only: these routes are provably INERT
+in production today (`clerkSessionSource()` yields null, so every request
+401s and no unaudited state change is reachable). The activation PR that
+supplies the Clerk closure MUST, in the same change, add the audit/outbox
+emission for `invitation.issued` and `invitation.accepted` (digests and ids
+only, never the raw token). This paragraph is the tracked obligation.
+
 ## Consequences
 
 - **18 new tests → 273 database tests** (`invitation-routes.test.ts`, PGlite,

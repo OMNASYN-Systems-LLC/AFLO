@@ -238,6 +238,17 @@ describe("handleIssueInvitation — authorization (owner-only, engine-decided)",
     expect(result).toEqual({ status: 403, body: { ok: false, error: "permission_denied" } });
   });
 
+  it("403 permission_denied for staff_advisor (engine-denied — issuance is owner-only)", async () => {
+    const ctx = ctxFor({ afloUserId: users.owner!, role: "staff_advisor", organizationId: ORG_A, membershipId: ownerMembershipId });
+    const result = await handleIssueInvitation(issueDeps(ctx), {
+      email: "staff-tries@x.co",
+      intendedRole: "client",
+      reservedClientId: clientA1,
+    });
+    expect(result).toEqual({ status: 403, body: { ok: false, error: "permission_denied" } });
+    expect(await invitationCountFor("staff-tries@x.co")).toBe(0);
+  });
+
   it("403 no_active_membership for platform_admin (no tenant context — platform surface only)", async () => {
     const ctx = ctxFor({ afloUserId: users.owner!, role: "platform_admin", organizationId: null });
     const result = await handleIssueInvitation(issueDeps(ctx), {
