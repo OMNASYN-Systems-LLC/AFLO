@@ -27,6 +27,8 @@ import { resolveAuthMode, resolveRepositoryMode } from "@aflo/shared";
  */
 
 export const dynamic = "force-dynamic";
+// node:crypto + pg require the Node.js runtime — pinned against config drift.
+export const runtime = "nodejs";
 
 /**
  * Module-scoped lazy resolver connection: pool construction performs no I/O
@@ -35,7 +37,11 @@ export const dynamic = "force-dynamic";
  */
 let cached: { url: string; handle: ReturnType<typeof createResolverConnection> } | null = null;
 function resolverHandle(url: string): ReturnType<typeof createResolverConnection> {
-  if (!cached || cached.url !== url) cached = { url, handle: createResolverConnection(url) };
+  if (!cached || cached.url !== url) {
+    // Drain a replaced handle (config change in dev) instead of leaking it.
+    void cached?.handle.close().catch(() => undefined);
+    cached = { url, handle: createResolverConnection(url) };
+  }
   return cached.handle;
 }
 

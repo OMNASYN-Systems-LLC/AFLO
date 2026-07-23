@@ -44,6 +44,28 @@ lazy connection (no tenant handle, no field cipher — the brand types make a
 handle swap unrepresentable); reads the raw body exactly once for
 byte-accurate signature verification; secrets never appear in responses.
 
+## Post-review hardening (adversarial review, same day)
+
+Verdict SAFE TO MERGE; the non-blocking findings were folded in anyway:
+
+- A verified `user.deleted` with a missing user id is now marked **FAILED**
+  (500) instead of processed-ignored — Clerk always sends the id, so its
+  absence is an upstream anomaly that must surface in the Svix dashboard,
+  not be buried as processed.
+- The concurrent-redelivery window (two deliveries of one Svix id both
+  reaching dispatch — safe today because every handler is idempotent) is
+  documented in-code with a hard rule: a claim-lock step MUST land before
+  any non-idempotent handler is added.
+- The route drains a replaced pool handle (dev config changes no longer
+  leak) and pins `runtime = "nodejs"`.
+- Known accepted gaps, stated here: an `unmapped_identity` deletion racing
+  an in-flight identity link skips revocation (bounded by short-lived
+  session JWTs; the reconciler backstop is credential-gated), and the
+  failed-redelivery retry gate on REAL Postgres is code-verified against
+  `DrizzleWebhookEventRepository` (conflict → SELECT current status) — a
+  PGlite integration test of that combination is queued for the wiring
+  slice.
+
 ## Consequences
 
 - **9 new tests → 207 database tests**: 401-with-nothing-persisted, digest

@@ -98,6 +98,14 @@ export async function handleClerkWebhook(
   }
 
   // 3. Dispatch, then processed/failed. Failures stay retryable via redelivery.
+  //
+  // CONCURRENCY NOTE (claim-lock deliberately absent): two concurrent
+  // deliveries of the same Svix id can BOTH reach dispatch (A inserts, B reads
+  // status "received"). That is safe TODAY because every handler is
+  // idempotent — revoke is an insert whose read side is existence-based, and
+  // everything else is a no-op. Before adding any NON-idempotent handler, a
+  // claim step (UPDATE … SET status='processing' WHERE status IN
+  // ('received','failed') RETURNING) MUST land first.
   try {
     const outcome = await dispatch(deps, verified, now);
     await deps.webhookEvents.markProcessed(receipt.record.id, deps.now());
@@ -120,7 +128,16 @@ async function dispatch(
   switch (event.type) {
     case "user.deleted": {
       const clerkUserId = typeof event.data.id === "string" ? event.data.id : "";
-      if (!clerkUserId) return { kind: "ignored", detail: "missing_user_id" };
+      if (!clerkUserId) {
+        // Clerk ALWAYS sends data.id on user.deleted — a verified deletion
+        // without one means something upstream is broken. Fail the event
+        // (markFailed + 500) so the anomaly surfaces in the Svix dashboard
+        // instead of being buried as processed. Retries won't fix an immutable
+        // payload; the alerting value is the point.
+        const err = new Error("verified user.deleted event carried no user id");
+        err.name = "MalformedUserDeletedEvent";
+        throw err;
+      }
       const mapping = await deps.identityAccounts.findByProvider("clerk", clerkUserId);
       if (!mapping) return { kind: "ignored", detail: "unmapped_identity" };
       // Provider-side deletion → fail closed NOW: revoke every session.

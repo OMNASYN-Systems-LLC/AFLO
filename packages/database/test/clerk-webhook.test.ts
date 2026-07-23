@@ -172,6 +172,15 @@ describe("handleClerkWebhook — authority-respecting dispatch", () => {
     ]);
   });
 
+  it("a VERIFIED user.deleted with no user id is marked FAILED (anomaly surfaces, not buried)", async () => {
+    const { deps, webhookEvents, sessionRevocations } = setup(() => verifiedEvent("evt_noid", "user.deleted", {}));
+    const result = await handleClerkWebhook(deps, REQ);
+    expect(result.status).toBe(500);
+    expect(result.body).toMatchObject({ outcome: "processing_failed", detail: "MalformedUserDeletedEvent" });
+    expect(webhookEvents.failed).toEqual([{ id: "rec-evt_noid", errorCode: "MalformedUserDeletedEvent" }]);
+    expect(sessionRevocations.revoked).toEqual([]);
+  });
+
   it("user.deleted for an unmapped identity is recorded and ignored", async () => {
     const { deps, sessionRevocations } = setup(() => verifiedEvent("evt_4", "user.deleted", { id: "ck_stranger" }));
     const result = await handleClerkWebhook(deps, REQ);
