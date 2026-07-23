@@ -4614,7 +4614,7 @@ export class AfloStore {
 
     const historyEntry: PlaybookVersionReviewEvent = {
       action: "saved",
-      actorStaffId: actor.id,
+      actorMemberId: actor.id,
       reasonCode: policy.reasonCode,
       occurredAt: now.toISOString(),
       ownerOverride: null,
@@ -4818,7 +4818,7 @@ export class AfloStore {
         prior.updatedAt = now.toISOString();
         prior.reviewHistory.push({
           action: "superseded",
-          actorStaffId: actor.id,
+          actorMemberId: actor.id,
           reasonCode: "PB_SUPERSEDED",
           occurredAt: now.toISOString(),
           ownerOverride: null,
@@ -4853,7 +4853,7 @@ export class AfloStore {
         : (input.toStatus as PlaybookVersionReviewEvent["action"]);
     version.reviewHistory.push({
       action: historyAction,
-      actorStaffId: actor.id,
+      actorMemberId: actor.id,
       reasonCode: policyReason,
       occurredAt: now.toISOString(),
       ownerOverride: usedOwnerOverride && input.ownerOverride ? { reason: input.ownerOverride.reason } : null,

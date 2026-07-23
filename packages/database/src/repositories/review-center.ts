@@ -1,11 +1,15 @@
 import { and, asc, desc, eq } from "drizzle-orm";
 import {
+  canActOnPlaybookVersion,
   contentBlocksApproval,
+  isHighImpactPlaybookContent,
   playbookVersionTransition,
   validatePlaybookContent,
   workflowDiscoveryTransition,
+  type PlaybookAction,
   type PlaybookContent,
   type PlaybookContentFieldKey,
+  type PlaybookOwnerOverride,
   type PlaybookReasonCode,
   type PlaybookVersionStatus,
   type ReviewArtifactType,
@@ -16,10 +20,12 @@ import {
   type WorkflowDiscoveryReasonCode,
   type WorkflowDiscoveryStatus,
 } from "@aflo/rules";
+import { reviewerRoleForMemberRole, type PlaybookVersionReviewEvent } from "@aflo/shared";
 import {
   aiRuns,
   clients,
   organizationMembers,
+  organizations,
   playbookVersions,
   playbooks,
   reviewDecisions,
@@ -53,12 +59,16 @@ import { withOrgContext, type TenantScopedDb } from "../request-context";
  *  - `submitted_at` stamps ONLY on the FIRST entry into `awaiting_review` —
  *    an escalation (same-state persist with the reviewer floor raised via
  *    patch) leaves the review-time metric anchor untouched.
- *  - Playbook-version legality IS enforced here (`transitionVersion` consults
- *    `playbookVersionTransition` and `contentBlocksApproval`), because
- *    publish/supersede/current-head must be one atomic unit and this is the
- *    single write path for versions — the ADR-0038 enforcement boundary made
- *    real: a version with any `discovery_required` field can NEVER be
- *    approved or published, so invented process can never become doctrine.
+ *  - Playbook-version legality AND actor authority ARE enforced here
+ *    (`transitionVersion` consults `playbookVersionTransition`,
+ *    `canActOnPlaybookVersion`, and `contentBlocksApproval` — ADR-0047 closes
+ *    the ADR-0043 known gap), because publish/supersede/current-head must be
+ *    one atomic unit and this is the single write path for versions — the
+ *    ADR-0038 enforcement boundary made real: a version with any
+ *    `discovery_required` field can NEVER be approved or published, so
+ *    invented process can never become doctrine; and the founder's
+ *    author/approver separation (decision 2026-07-23 #2) holds durably, with
+ *    every executed transition appended to the version's `review_history`.
  *  - `review_decisions` is APPEND-ONLY: this module deliberately exposes no
  *    update or delete for decisions — the feedback log cannot be rewritten.
  *
@@ -214,6 +224,49 @@ export class PlaybookTransitionDeniedError extends Error {
   ) {
     super(`playbook version transition denied (${reasonCode}): ${fromStatus} → ${toStatus}`);
     this.name = "PlaybookTransitionDeniedError";
+  }
+}
+
+/**
+ * Thrown when the founder's actor policy (decision 2026-07-23 #2, enforced via
+ * `canActOnPlaybookVersion` and the reviewer-decision floors) DENIES the acting
+ * member the attempted playbook action. Nothing is written (ADR-0047).
+ */
+export class PlaybookActionDeniedError extends Error {
+  constructor(
+    public readonly reasonCode: PlaybookReasonCode,
+    public readonly action: PlaybookGovernedAction,
+    public readonly actorMemberId: string,
+  ) {
+    super(`playbook action denied (${reasonCode}): ${action} by member ${actorMemberId}`);
+    this.name = "PlaybookActionDeniedError";
+  }
+}
+
+/**
+ * Thrown when a caller targets `superseded` directly. Supersession happens
+ * ONLY through publishing a newer version (the store-parity rule, ADR-0043/
+ * ADR-0047) — there is no direct un-publish surface.
+ */
+export class PlaybookDirectSupersessionError extends Error {
+  constructor(public readonly versionId: string) {
+    super(`direct supersession is not a transition surface (version ${versionId}) — publish a newer version instead`);
+    this.name = "PlaybookDirectSupersessionError";
+  }
+}
+
+/**
+ * Thrown when a stored `review_history` value is not the append-only array
+ * this module always writes (corruption tripwire — fail closed, write nothing)
+ * or when an append did not extend the array by exactly one entry.
+ */
+export class PlaybookReviewHistoryCorruptionError extends Error {
+  constructor(
+    public readonly versionId: string,
+    public readonly reason: "not_an_array" | "append_length_mismatch",
+  ) {
+    super(`playbook review history integrity violation (${reason}): version ${versionId}`);
+    this.name = "PlaybookReviewHistoryCorruptionError";
   }
 }
 
@@ -906,6 +959,14 @@ export interface PlaybookVersionRecord {
   authorMemberId: string;
   approverMemberId: string | null;
   approvedAt: string | null;
+  /** Publisher identity (migration 0011) — stamped from the ACTING member on publish. */
+  publishedByMemberId: string | null;
+  /**
+   * Append-only executed-transition log (migration 0011) — the ONE contract
+   * shape shared with the store's `PlaybookVersion.reviewHistory` (ADR-0047).
+   * The founder's owner override is VISIBLE here. Ids/codes only.
+   */
+  reviewHistory: PlaybookVersionReviewEvent[];
   content: PlaybookContent;
   createdAt: string;
   updatedAt: string;
@@ -922,6 +983,50 @@ export interface SaveDraftVersionInput {
   version: string;
   content: PlaybookContent;
   authorMemberId: string;
+}
+
+/**
+ * The governed action a version transition maps to: the kernel's
+ * `PlaybookAction` for submit/approve/publish, plus the reviewer-decision and
+ * withdrawal surfaces the store enforces by role floor (ADR-0043 semantics,
+ * now durable).
+ */
+export type PlaybookGovernedAction = PlaybookAction | "reject" | "defer" | "withdraw";
+
+/**
+ * The ACTING organization member for a playbook version transition
+ * (server-resolved session identity — never client-supplied).
+ *
+ * There is deliberately NO `isAuthor` claim: authorship is DERIVED inside the
+ * repository by comparing `memberId` to the stored `author_member_id` in the
+ * same transaction, so a caller can never launder the founder's separation
+ * rules by mislabeling itself (`isAuthor?: never` makes the claim a compile
+ * error; the runtime derivation ignores any casted extra property).
+ */
+export interface PlaybookTransitionActor {
+  /** Organization-member id — verified org-visible in the transition transaction. */
+  memberId: string;
+  /**
+   * The actor's membership role. Bridged onto the kernel's `ReviewerRole`
+   * vocabulary via `reviewerRoleForMemberRole` (the ADR-0043 §6-trap bridge):
+   * anything outside staff/organization_admin/organization_owner — client,
+   * partner_viewer, the auth layer's `staff_advisor`, garbage — maps to null
+   * and is denied `PB_NO_MEMBERSHIP`.
+   */
+  role: string;
+  isAuthor?: never;
+}
+
+export interface TransitionVersionOptions {
+  /**
+   * The documented single-operator owner override (founder decision
+   * 2026-07-23 #2). Valid ONLY for an organization_owner, ONLY when the
+   * organization's `allow_single_operator_playbook_override` policy flag —
+   * read inside the same transaction — permits it, AND the override carries a
+   * non-empty reason AND attests the content is not regulated professional
+   * advice. A used override is recorded in the version's review history.
+   */
+  ownerOverride?: PlaybookOwnerOverride | null;
 }
 
 type PlaybookRow = typeof playbooks.$inferSelect;
@@ -950,10 +1055,37 @@ function toVersion(row: PlaybookVersionRow): PlaybookVersionRecord {
     authorMemberId: row.authorMemberId,
     approverMemberId: row.approverMemberId,
     approvedAt: isoOrNull(row.approvedAt),
+    publishedByMemberId: row.publishedByMemberId,
+    reviewHistory: assertHistoryArray(row.id, row.reviewHistory),
     content: row.content as PlaybookContent,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
   };
+}
+
+/** Fail closed on a review_history value this module could never have written. */
+function assertHistoryArray(versionId: string, value: unknown): PlaybookVersionReviewEvent[] {
+  if (!Array.isArray(value)) throw new PlaybookReviewHistoryCorruptionError(versionId, "not_an_array");
+  return value as PlaybookVersionReviewEvent[];
+}
+
+/**
+ * APPEND-ONLY in code: always read-modify-append the array loaded in the SAME
+ * transaction — never replace — with a runtime tripwire that the new array is
+ * exactly one entry longer than the old one.
+ */
+function appendReviewHistory(
+  versionId: string,
+  stored: unknown,
+  entry: PlaybookVersionReviewEvent,
+): PlaybookVersionReviewEvent[] {
+  const history = assertHistoryArray(versionId, stored);
+  const previousLength = history.length;
+  const next = [...history, entry];
+  if (next.length !== previousLength + 1) {
+    throw new PlaybookReviewHistoryCorruptionError(versionId, "append_length_mismatch");
+  }
+  return next;
 }
 
 export class DrizzlePlaybookRepository {
@@ -1043,6 +1175,17 @@ export class DrizzlePlaybookRepository {
             status: "draft",
             authorMemberId: input.authorMemberId,
             content: input.content,
+            // Birth entry — store parity (ADR-0047): the shared store records
+            // a "saved" review-history entry when a draft version is created.
+            reviewHistory: [
+              {
+                action: "saved",
+                actorMemberId: input.authorMemberId,
+                reasonCode: "PB_ACTION_ALLOWED",
+                ownerOverride: null,
+                occurredAt: now.toISOString(),
+              } satisfies PlaybookVersionReviewEvent,
+            ],
             createdAt: now,
             updatedAt: now,
           })
@@ -1056,24 +1199,47 @@ export class DrizzlePlaybookRepository {
   }
 
   /**
-   * Transition a version through the playbook.v1.0.0 machine. This is the
-   * enforcement boundary (ADR-0038 made real):
+   * Transition a version through the playbook.v1.0.0 machine UNDER the
+   * founder's actor policy (decision 2026-07-23 #2 — ADR-0047 closes the
+   * ADR-0043 known gap: enforcement now exists at the durable layer too).
+   * This is the enforcement boundary (ADR-0038 made real):
    *  (a) legality comes from `playbookVersionTransition` — an illegal move is
    *      denied with the kernel's reason code, never performed;
-   *  (b) `approved`/`published` are DENIED while `contentBlocksApproval` is
+   *  (b) WHO may act is decided by `canActOnPlaybookVersion` for
+   *      submit/approve/publish — role floors, author/publisher separation,
+   *      high-impact author/approver separation (`isHighImpactPlaybookContent`
+   *      on the stored content), and the documented single-operator owner
+   *      override gated by the org policy flag read INSIDE this transaction.
+   *      Reject/defer are reviewer decisions (organization_admin+); withdraw
+   *      is the author or organization_admin+. `isAuthor` is DERIVED here by
+   *      comparing the actor to the stored `author_member_id` — never a
+   *      caller claim. A denial throws a typed error and writes NOTHING;
+   *  (c) `approved`/`published` are DENIED while `contentBlocksApproval` is
    *      non-empty — a version with any `discovery_required` field can never
    *      present an unresolved question as settled process;
-   *  (c) publishing is ATOMIC: superseding the currently published version and
-   *      moving the playbook's `current_version_id` head happen in the SAME
-   *      `withOrgContext` transaction as the publish itself — a failure
-   *      anywhere rolls back everything.
+   *  (d) direct `superseded` is NOT a surface — supersession happens only
+   *      through publishing a newer version (store parity);
+   *  (e) approval stamps `approver_member_id`/`approved_at` and publication
+   *      stamps `published_by_member_id` FROM THE ACTOR — never optional,
+   *      never anonymous;
+   *  (f) every executed transition APPENDS one `{action, actorMemberId,
+   *      reasonCode, ownerOverride, occurredAt}` entry to the version's
+   *      `review_history` (read-modify-append in the SAME transaction —
+   *      append-only in code, guarded), so a used owner override is VISIBLE
+   *      in review history, per the founder directive;
+   *  (g) publishing is ATOMIC: superseding the currently published version
+   *      (with its own "superseded" history entry) and moving the playbook's
+   *      `current_version_id` head happen in the SAME `withOrgContext`
+   *      transaction as the publish itself — a failure anywhere rolls back
+   *      everything.
    */
   async transitionVersion(
     organizationId: string,
     versionId: string,
     toStatus: PlaybookVersionStatus,
     now: Date,
-    options?: { approverMemberId?: string },
+    actor: PlaybookTransitionActor,
+    options?: TransitionVersionOptions,
   ): Promise<PlaybookVersionRecord> {
     return withOrgContext(this.db, organizationId, async (tx) => {
       const rows = await tx
@@ -1084,11 +1250,65 @@ export class DrizzlePlaybookRepository {
       const current = rows[0];
       if (!current) throw new PlaybookVersionNotFoundError(versionId);
 
+      // The member FK bypasses RLS — verify the ACTOR is in THIS org before
+      // any authority decision or write (the F1 idiom).
+      await assertMemberInOrg(tx, actor.memberId);
+
+      // (d) Direct supersession is not a transition surface.
+      if (toStatus === "superseded") throw new PlaybookDirectSupersessionError(versionId);
+
       const transition = playbookVersionTransition(current.status, toStatus);
       if (!transition.allowed) {
         throw new PlaybookTransitionDeniedError(transition.reasonCode, current.status, toStatus);
       }
 
+      // (b) Founder actor policy. isAuthor is DERIVED from the stored row.
+      const actorRole = reviewerRoleForMemberRole(actor.role);
+      const isAuthor = current.authorMemberId === actor.memberId;
+      const ownerOverride = options?.ownerOverride ?? null;
+      const kernelAction: PlaybookAction | null =
+        toStatus === "awaiting_review"
+          ? "submit"
+          : toStatus === "approved"
+            ? "approve"
+            : toStatus === "published"
+              ? "publish"
+              : null;
+      let historyReasonCode: string = transition.reasonCode;
+      let usedOwnerOverride = false;
+      if (kernelAction !== null) {
+        const policy = canActOnPlaybookVersion({
+          action: kernelAction,
+          actorRole,
+          actorIsAuthor: isAuthor,
+          highImpact: isHighImpactPlaybookContent(current.content as PlaybookContent),
+          ownerOverride,
+          // The org policy flag is read INSIDE this transaction — never a
+          // caller claim (organizations is a tenant root, not RLS-scoped).
+          orgPolicyPermitsOverride: await this.orgPermitsOwnerOverride(tx, organizationId),
+        });
+        if (!policy.allowed) {
+          throw new PlaybookActionDeniedError(policy.reasonCode, kernelAction, actor.memberId);
+        }
+        usedOwnerOverride = policy.usedOwnerOverride;
+        if (usedOwnerOverride) historyReasonCode = "PB_OWNER_OVERRIDE";
+      } else {
+        // reject/defer are reviewer decisions ("Organization Admin may review
+        // and approve"); withdraw = author or organization_admin+ (ADR-0043).
+        const isAdminPlus = actorRole === "organization_admin" || actorRole === "organization_owner";
+        const governedAction: PlaybookGovernedAction =
+          toStatus === "rejected" ? "reject" : toStatus === "deferred" ? "defer" : "withdraw";
+        const allowed = toStatus === "withdrawn" ? isAuthor || isAdminPlus : isAdminPlus;
+        if (!allowed) {
+          throw new PlaybookActionDeniedError(
+            actorRole === null ? "PB_NO_MEMBERSHIP" : "PB_ROLE_INSUFFICIENT",
+            governedAction,
+            actor.memberId,
+          );
+        }
+      }
+
+      // (c) ADR-0038/0041 boundary — never weakened.
       if (toStatus === "approved" || toStatus === "published") {
         const blocked = contentBlocksApproval(current.content as PlaybookContent);
         if (blocked.length > 0) throw new PlaybookApprovalBlockedError(blocked);
@@ -1099,27 +1319,59 @@ export class DrizzlePlaybookRepository {
         updatedAt: now,
       };
       if (toStatus === "approved") {
+        // (e) The approver IS the actor — no longer optional or anonymous.
         set.approvedAt = now;
-        if (options?.approverMemberId !== undefined) {
-          // The member FK bypasses RLS — verify the approver is in THIS org.
-          await assertMemberInOrg(tx, options.approverMemberId);
-          set.approverMemberId = options.approverMemberId;
-        }
+        set.approverMemberId = actor.memberId;
       }
       if (toStatus === "published") {
         // A published version must carry an effective date; stamp when unset.
         if (current.effectiveDate === null) set.effectiveDate = now;
-        // Supersede the currently published version (at most one, by this flow).
-        await tx
-          .update(playbookVersions)
-          .set({ status: "superseded", updatedAt: now })
+        // (e) The publisher IS the actor.
+        set.publishedByMemberId = actor.memberId;
+        // Supersede the currently published version (at most one, by this
+        // flow), appending its own history entry (read-modify-append).
+        const priorPublished = await tx
+          .select({ id: playbookVersions.id, reviewHistory: playbookVersions.reviewHistory })
+          .from(playbookVersions)
           .where(
             and(
               eq(playbookVersions.playbookId, current.playbookId),
               eq(playbookVersions.status, "published"),
             ),
           );
+        for (const prior of priorPublished) {
+          await tx
+            .update(playbookVersions)
+            .set({
+              status: "superseded",
+              reviewHistory: appendReviewHistory(prior.id, prior.reviewHistory, {
+                action: "superseded",
+                actorMemberId: actor.memberId,
+                reasonCode: "PB_SUPERSEDED",
+                ownerOverride: null,
+                occurredAt: now.toISOString(),
+              }),
+              updatedAt: now,
+            })
+            .where(eq(playbookVersions.id, prior.id));
+        }
       }
+
+      // (f) Append the executed transition to the version's review history —
+      // the owner override is VISIBLE here (founder decision, verbatim). The
+      // cast mirrors the store's: "draft" is never a transition target (the
+      // kernel has no edge into it) and "superseded" was rejected above.
+      const historyAction: PlaybookVersionReviewEvent["action"] =
+        toStatus === "awaiting_review"
+          ? "submitted"
+          : (toStatus as PlaybookVersionReviewEvent["action"]);
+      set.reviewHistory = appendReviewHistory(versionId, current.reviewHistory, {
+        action: historyAction,
+        actorMemberId: actor.memberId,
+        reasonCode: historyReasonCode,
+        ownerOverride: usedOwnerOverride && ownerOverride ? { reason: ownerOverride.reason } : null,
+        occurredAt: now.toISOString(),
+      });
 
       const updated = await tx
         .update(playbookVersions)
@@ -1128,8 +1380,8 @@ export class DrizzlePlaybookRepository {
         .returning();
 
       if (toStatus === "published") {
-        // Move the head in the SAME transaction — publish + supersede + head
-        // move commit or roll back as one unit.
+        // (g) Move the head in the SAME transaction — publish + supersede +
+        // head move commit or roll back as one unit.
         await tx
           .update(playbooks)
           .set({ currentVersionId: versionId, updatedAt: now })
@@ -1138,6 +1390,20 @@ export class DrizzlePlaybookRepository {
 
       return toVersion(updated[0]!);
     });
+  }
+
+  /**
+   * Read the organization's single-operator override policy flag inside the
+   * transition transaction (migration 0011). Fail closed: an unknown org —
+   * impossible under a server-resolved organizationId — reads as false.
+   */
+  private async orgPermitsOwnerOverride(tx: TenantScopedDb, organizationId: string): Promise<boolean> {
+    const rows = await tx
+      .select({ allow: organizations.allowSingleOperatorPlaybookOverride })
+      .from(organizations)
+      .where(eq(organizations.id, organizationId))
+      .limit(1);
+    return rows[0]?.allow ?? false;
   }
 }
 

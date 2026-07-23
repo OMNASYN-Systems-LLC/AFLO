@@ -225,6 +225,35 @@ describe("founder decision #2 — role floors and separation of duties", () => {
   });
 });
 
+describe("review-history entries — the ONE cross-layer contract shape (ADR-0047)", () => {
+  it("every entry is exactly {action, actorMemberId, reasonCode, ownerOverride, occurredAt}", () => {
+    const store = makeStore();
+    const saved = draftVersion(store, "s-boyd");
+    const id = saved.version!.id;
+    store.transitionPlaybookVersion({ organizationId: ORG, versionId: id, toStatus: "awaiting_review", actorStaffId: "s-boyd" });
+    const entries = store.database().playbookVersions.find((v) => v.id === id)!.reviewHistory;
+    expect(entries.length).toBeGreaterThan(0);
+    // The exact key set the DURABLE layer writes to playbook_versions.review_history
+    // (DrizzlePlaybookRepository) — one contract, no drift.
+    for (const entry of entries) {
+      expect(Object.keys(entry).sort()).toEqual([
+        "action",
+        "actorMemberId",
+        "occurredAt",
+        "ownerOverride",
+        "reasonCode",
+      ]);
+    }
+    expect(entries.at(-1)).toEqual({
+      action: "submitted",
+      actorMemberId: "s-boyd",
+      reasonCode: "PB_SUBMITTED",
+      ownerOverride: null,
+      occurredAt: NOW.toISOString(),
+    });
+  });
+});
+
 describe("ADR-0038/0041 boundary — contentBlocksApproval on approve AND publish (never weakened)", () => {
   it("a Golden Key seed draft (discovery_required fields) can NEVER be approved, even by the owner", () => {
     const store = makeStore();

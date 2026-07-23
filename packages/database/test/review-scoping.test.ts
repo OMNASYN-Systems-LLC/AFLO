@@ -107,7 +107,30 @@ describe("snapshot chain (the PR #88 lesson)", () => {
     const journal = JSON.parse(readFileSync(join(migrationsDir, "meta", "_journal.json"), "utf8")) as {
       entries: { idx: number; tag: string }[];
     };
-    expect(journal.entries.at(-1)).toMatchObject({ idx: 10, tag: "0010_review_scoping" });
+    expect(journal.entries.find((e) => e.idx === 10)).toMatchObject({ tag: "0010_review_scoping" });
+  });
+
+  it("0011_snapshot.json chains prevId to 0010's id and the journal carries the 0011 entry (ADR-0047)", () => {
+    const s10 = JSON.parse(readFileSync(join(migrationsDir, "meta", "0010_snapshot.json"), "utf8")) as {
+      id: string;
+    };
+    const s11 = JSON.parse(readFileSync(join(migrationsDir, "meta", "0011_snapshot.json"), "utf8")) as {
+      id: string;
+      prevId: string;
+      tables: Record<string, { columns: Record<string, unknown> }>;
+    };
+    expect(s11.prevId).toBe(s10.id);
+    expect(s11.id).not.toBe(s10.id);
+    // The snapshot mirrors the 0011 DDL exactly — the governance columns exist.
+    expect(s11.tables["public.playbook_versions"]!.columns).toHaveProperty("published_by_member_id");
+    expect(s11.tables["public.playbook_versions"]!.columns).toHaveProperty("review_history");
+    expect(s11.tables["public.organizations"]!.columns).toHaveProperty(
+      "allow_single_operator_playbook_override",
+    );
+    const journal = JSON.parse(readFileSync(join(migrationsDir, "meta", "_journal.json"), "utf8")) as {
+      entries: { idx: number; tag: string }[];
+    };
+    expect(journal.entries.at(-1)).toMatchObject({ idx: 11, tag: "0011_playbook_governance" });
   });
 });
 

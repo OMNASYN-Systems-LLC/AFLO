@@ -32,6 +32,7 @@ import {
   ReviewItemNotFoundError,
   WorkflowDiscoveryInputError,
   WorkflowDiscoveryTransitionDeniedError,
+  type PlaybookTransitionActor,
 } from "../src/repositories/review-center";
 
 /**
@@ -79,6 +80,12 @@ let clientA = "";
 let clientB = "";
 let memberA = "";
 let memberB = "";
+let adminA = "";
+let ownerA = "";
+// Actor fixtures for transitionVersion (ADR-0047 — the required acting member).
+let STAFF_A: PlaybookTransitionActor;
+let ADMIN_A: PlaybookTransitionActor;
+let OWNER_A: PlaybookTransitionActor;
 
 const seed = GOLDEN_KEY_PLAYBOOK_DRAFTS[0]!;
 
@@ -111,15 +118,23 @@ beforeAll(async () => {
   clientA = clients.rows[0]!.id;
   clientB = clients.rows[1]!.id;
   const users = await pg.query<{ id: string }>(
-    `INSERT INTO users (email, display_name) VALUES ('a@x.co','A'), ('b@x.co','B') RETURNING id`,
+    `INSERT INTO users (email, display_name) VALUES
+       ('a@x.co','A'), ('b@x.co','B'), ('a-admin@x.co','AA'), ('a-owner@x.co','AO') RETURNING id`,
   );
   const members = await pg.query<{ id: string }>(
     `INSERT INTO organization_members (organization_id, user_id, role) VALUES
        ('${ORG_A}', '${users.rows[0]!.id}', 'staff'),
-       ('${ORG_B}', '${users.rows[1]!.id}', 'staff') RETURNING id`,
+       ('${ORG_B}', '${users.rows[1]!.id}', 'staff'),
+       ('${ORG_A}', '${users.rows[2]!.id}', 'organization_admin'),
+       ('${ORG_A}', '${users.rows[3]!.id}', 'organization_owner') RETURNING id`,
   );
   memberA = members.rows[0]!.id;
   memberB = members.rows[1]!.id;
+  adminA = members.rows[2]!.id;
+  ownerA = members.rows[3]!.id;
+  STAFF_A = { memberId: memberA, role: "staff" };
+  ADMIN_A = { memberId: adminA, role: "organization_admin" };
+  OWNER_A = { memberId: ownerA, role: "organization_owner" };
 
   await pg.exec(`
     CREATE ROLE app_user NOLOGIN;
@@ -355,10 +370,10 @@ describe("playbooks — blocked approval + atomic publish/supersede", () => {
       { playbookId, version: "0.1.0", content: seed.content, authorMemberId: memberA },
       NOW,
     );
-    await playbookRepo.transitionVersion(ORG_A, draft.id, "awaiting_review", NOW);
-    await expect(playbookRepo.transitionVersion(ORG_A, draft.id, "approved", NOW)).rejects.toBeInstanceOf(
-      PlaybookApprovalBlockedError,
-    );
+    await playbookRepo.transitionVersion(ORG_A, draft.id, "awaiting_review", NOW, STAFF_A);
+    await expect(
+      playbookRepo.transitionVersion(ORG_A, draft.id, "approved", NOW, ADMIN_A),
+    ).rejects.toBeInstanceOf(PlaybookApprovalBlockedError);
     // The version is untouched by the denied move.
     expect((await playbookRepo.getVersionById(ORG_A, draft.id))?.status).toBe("awaiting_review");
   });
@@ -370,14 +385,13 @@ describe("playbooks — blocked approval + atomic publish/supersede", () => {
       NOW,
     );
     v1 = draft.id;
-    await playbookRepo.transitionVersion(ORG_A, v1, "awaiting_review", NOW);
-    const approved = await playbookRepo.transitionVersion(ORG_A, v1, "approved", NOW, {
-      approverMemberId: memberA,
-    });
-    expect(approved.approverMemberId).toBe(memberA);
+    await playbookRepo.transitionVersion(ORG_A, v1, "awaiting_review", NOW, STAFF_A);
+    const approved = await playbookRepo.transitionVersion(ORG_A, v1, "approved", NOW, ADMIN_A);
+    expect(approved.approverMemberId).toBe(adminA); // stamped FROM the actor
     expect(approved.approvedAt).toBe(NOW.toISOString());
-    const published = await playbookRepo.transitionVersion(ORG_A, v1, "published", NOW);
+    const published = await playbookRepo.transitionVersion(ORG_A, v1, "published", NOW, OWNER_A);
     expect(published.status).toBe("published");
+    expect(published.publishedByMemberId).toBe(ownerA); // stamped FROM the actor
     expect(published.effectiveDate).toBe(NOW.toISOString()); // stamped when unset
     expect((await playbookRepo.getByKey(ORG_A, seed.playbookKey))?.currentVersionId).toBe(v1);
   });
@@ -389,9 +403,9 @@ describe("playbooks — blocked approval + atomic publish/supersede", () => {
       LATER,
     );
     v2 = draft.id;
-    await playbookRepo.transitionVersion(ORG_A, v2, "awaiting_review", LATER);
-    await playbookRepo.transitionVersion(ORG_A, v2, "approved", LATER, { approverMemberId: memberA });
-    await playbookRepo.transitionVersion(ORG_A, v2, "published", LATER);
+    await playbookRepo.transitionVersion(ORG_A, v2, "awaiting_review", LATER, STAFF_A);
+    await playbookRepo.transitionVersion(ORG_A, v2, "approved", LATER, ADMIN_A);
+    await playbookRepo.transitionVersion(ORG_A, v2, "published", LATER, OWNER_A);
 
     expect((await playbookRepo.getVersionById(ORG_A, v1))?.status).toBe("superseded");
     expect((await playbookRepo.getVersionById(ORG_A, v2))?.status).toBe("published");
@@ -405,9 +419,9 @@ describe("playbooks — blocked approval + atomic publish/supersede", () => {
       LATER,
     );
     // draft → published does not exist in the kernel: denied, nothing written.
-    await expect(playbookRepo.transitionVersion(ORG_A, draft.id, "published", LATER)).rejects.toBeInstanceOf(
-      PlaybookTransitionDeniedError,
-    );
+    await expect(
+      playbookRepo.transitionVersion(ORG_A, draft.id, "published", LATER, OWNER_A),
+    ).rejects.toBeInstanceOf(PlaybookTransitionDeniedError);
     expect((await playbookRepo.getVersionById(ORG_A, draft.id))?.status).toBe("draft");
     expect((await playbookRepo.getVersionById(ORG_A, v2))?.status).toBe("published");
     expect((await playbookRepo.getByKey(ORG_A, seed.playbookKey))?.currentVersionId).toBe(v2);
