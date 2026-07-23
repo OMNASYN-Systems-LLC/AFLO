@@ -16,8 +16,10 @@ publish a playbook version; and the open-review unique index was global, not
 org-scoped (an ADR-0041 known accepted gap flagged for this slice). The
 founder's continuous execution authorization resolved the four open decisions
 this slice depends on. This PR implements them EXACTLY and wires the shared
-store (the prototype's Neon-shaped mutation layer) to the kernels, mirroring
-the Drizzle repository semantics.
+store (the prototype's Neon-shaped mutation layer) to the kernels — mirroring
+the Drizzle repository semantics where they exist, and exceeding them for
+actor policy, which is store-level until the committed follow-up persistence
+slice (see Known gaps).
 
 ## Founder decisions (verbatim, now resolved defaults)
 
@@ -117,9 +119,15 @@ version string + sha256 digest only.
 
 ### Store wiring (`@aflo/shared`) — the founder implement-list
 
-`AfloStore` gains the native review lifecycle, mirroring the Drizzle
-semantics (findRecord/findActor org checks, kernel-decided legality, audited
-denials, mutation + `createEvent` outbox + `audit()` together):
+`AfloStore` gains the native review lifecycle, following the store contract
+(findRecord/findActor org checks, kernel-decided legality, audited denials,
+mutation + `createEvent` outbox + `audit()` together). It mirrors the Drizzle
+repository semantics where they exist (F2 submitted-at, F3 atomic
+decision+head, F4 birth states, the staleness check) and EXCEEDS them for
+actor policy — `canReview`, `canPublishReviewItem`,
+`canActOnPlaybookVersion`, the assignment qualifier, and the review-history/
+override record are store-level enforcement that the durable layer does not
+yet carry (see Known gaps):
 
 - **Types** (`domain/types.ts`, mirroring migrations 0009+0010 field-for-field,
   camelCase/ISO): `ReviewItem`, `ReviewDecisionRecord`, `Playbook`,
@@ -127,26 +135,42 @@ denials, mutation + `createEvent` outbox + `audit()` together):
   is VISIBLE), `WorkflowDiscoveryItem`. `Organization` gains
   `allowSingleOperatorPlaybookOverride` (default **false**, including the
   Golden Key seed).
-- **Methods:** `createReviewItem` (blocked-envelope gate — non-empty
-  `prohibitedActionsDetected` → audited `RVC_BLOCKED_ENVELOPE` denial, the
-  item is NEVER created; org-scoped 5-tuple open-uniqueness enforced;
-  risk/role floors from `resolveReviewPolicy`, raisable only),
-  `submitReviewItem` (`submittedAt` stamps ONLY on FIRST entry into
-  awaiting_review — the #92 F2 lesson), `assignReviewer`
-  (organization_admin+ per the founder matrix), `recordReviewDecision` (THE
-  single decision entry point: `canReview` → `applyReviewDecision` → append
-  decision record + move head atomically, mirroring
-  `recordDecisionAndTransition`; high-risk self-review denied; escalation
-  raises the floor one rank with the owner ceiling; **deferral records a
-  structured decision and, per the kernel, lands in the terminal `deferred`
-  state (ADR-0034) — escalation is the decision that changes no state**),
-  `publishReviewItem` (kernel legality → `canPublishReviewItem` floor →
-  stale-artifact check; a stale denial is audited
-  `review.publish_denied_stale`/`RVC_STALE_ARTIFACT` and the item stays
-  `approved`), `withdrawReviewItem` (author or organization_admin+, open
-  states only), `supersedeReviewItem` (system-invokable replacement path:
-  new item for the changed version + `supersededByReviewItemId` back-link),
-  `recordReviewOutcome` (published items only, vocabulary-validated),
+- **Methods:** `createReviewItem` (the F4 birth-state gate at RUNTIME — a
+  cast can never mint an item directly in approved/published, which would
+  bypass the kernel, both publication gates, AND the open-tuple unique;
+  blocked-envelope gate — non-empty `prohibitedActionsDetected` → audited
+  `RVC_BLOCKED_ENVELOPE` denial, the item is NEVER created; org-scoped
+  5-tuple open-uniqueness enforced; risk/role floors from
+  `resolveReviewPolicy`, raisable only), `submitReviewItem` (`submittedAt`
+  stamps ONLY on FIRST entry into awaiting_review — the #92 F2 lesson),
+  `assignReviewer` (organization_admin+ per the founder matrix; assignee
+  must be an org member holding a reviewer role, both denials audited),
+  `recordReviewDecision` (THE single decision entry point: `canReview` →
+  the assignment qualifier → `applyReviewDecision` → append decision record
+  + move head atomically, mirroring `recordDecisionAndTransition`;
+  high-risk self-review denied; **when the item HAS an assigned reviewer,
+  only the assignee or organization_admin+ may decide it
+  (`RVC_NOT_ASSIGNED_REVIEWER`, audited) — the founder matrix's "assigned"
+  qualifier enforced as a pure NARROWING on top of the §4 role floors;
+  unassigned items keep the accepted role-floor behavior unchanged. The
+  matrix row's "medium-risk" qualifier remains interpreted through the
+  approved AUTHORIZATION_MATRIX §4 role-floor table (staff floors exist on
+  high types per the accepted matrix) — flagged here for founder
+  visibility**; escalation raises the floor one rank with the owner ceiling;
+  deferral records a structured decision and, per the kernel, lands in the
+  terminal `deferred` state (ADR-0034) — escalation is the decision that
+  changes no state), `publishReviewItem` (kernel legality →
+  `canPublishReviewItem` floor → stale-artifact check; a stale denial is
+  audited `review.publish_denied_stale`/`RVC_STALE_ARTIFACT` and the item
+  stays `approved`), `withdrawReviewItem` (author or organization_admin+,
+  open states only), `supersedeReviewItem` (replacement path: new item for
+  the changed version + `supersededByReviewItemId` back-link; a NULL actor
+  is the system/orchestrator path, while a HUMAN actor must be
+  organization_admin+ — or the item's author while the item is still OPEN;
+  superseding approved/published content un-publishes reviewed material and
+  is therefore admin+ regardless of authorship, denials audited
+  `review.supersede_denied`), `recordReviewOutcome` (published items only,
+  vocabulary-validated),
   `createPlaybookDraft`, `savePlaybookVersion` (draft-only content mutation
   behind `validatePlaybookContent`), `transitionPlaybookVersion` (through
   `canActOnPlaybookVersion` + `contentBlocksApproval` on approve AND publish
@@ -179,11 +203,22 @@ denials, mutation + `createEvent` outbox + `audit()` together):
   outcome_recorded/transition_denied/decision_denied/publish_denied_stale`,
   `playbook.version_saved/version_published/owner_override/transition_denied`,
   `discovery.raised/resolved`) plus the store's denial-precision additions
-  `review.creation_denied` (blocked envelope + open-tuple conflicts),
-  `review.assign_denied`, `review.publish_denied` (role floor),
-  `review.withdraw_denied`, `review.outcome_denied`, `playbook.created`,
-  `playbook.version_transitioned`, `discovery.transition_denied` — every
-  material denial is audited, never a silent no-op.
+  `review.creation_denied` (invalid birth state, blocked envelope, and
+  open-tuple conflicts), `review.assign_denied` (actor floor, assignee not a
+  member, assignee not a reviewer), `review.publish_denied` (role floor),
+  `review.withdraw_denied`, `review.supersede_denied`,
+  `review.outcome_denied` (state precondition), `playbook.created`,
+  `playbook.version_transitioned`, `discovery.transition_denied`. **The
+  audited set, exactly:** every kernel transition/decision denial, every
+  authorization denial (role floors, separation, assignment, self-review,
+  override chain), the blocked-envelope and stale-artifact gates, the
+  birth-state gate, and open-tuple conflicts. Pure input-shape validation
+  (malformed digests/versions, empty strings, unknown vocabulary values) and
+  uniqueness/immutability conflicts surfaced as typed results
+  (`PLAYBOOK_KEY_EXISTS`, `VERSION_NOT_DRAFT`) return `INVALID_INPUT`-class
+  denials WITHOUT an audit row — the established store precedent for
+  validator failures, kept deliberately so the audit log stays a record of
+  policy events, not typos.
 - **Seeds:** six synthetic ReviewItems across states (draft,
   awaiting_review incl. an escalated admin-floor item, approved, published
   with a recorded outcome, rejected) and six queues, with four consistent
@@ -203,9 +238,70 @@ them: for bridged artifact types the DOMAIN status remains authoritative
 (ADR-0034's authority statement governs), and the store's native surface
 never touches the existing domain workflows.
 
+## Post-review hardening (adversarial review of PR #95, same day)
+
+The pre-merge adversarial review returned 1 CRITICAL + 3 MEDIUM + 6 LOW; all
+code findings folded before merge:
+
+1. **CRITICAL — store birth-state bypass.** `createReviewItem` took
+   `input.state ?? "draft"` with no runtime gate, so a cast could mint an
+   item directly in `published`/`approved` — bypassing the kernel,
+   `canReview`, `canPublishReviewItem`, the staleness check, AND the 5-tuple
+   open-uniqueness (which guards only the open states) — and
+   `clientPublishedReviews`' `?? updatedAt` fallback would then have served
+   it with a fabricated publication date. Fixed: the Drizzle F4 runtime gate
+   is mirrored in the store (audited denial, nothing written), and the
+   client projection now serves ONLY items carrying a real `publishedAt`
+   stamp (no fallback — fail closed).
+2. **MEDIUM — supersession authority.** Any org staff member could supersede
+   any item, including PUBLISHED ones (an un-publish, and a bypass of
+   `withdrawReviewItem`'s author-or-admin+ gate). Fixed as described in the
+   method list: system path (null actor) unchanged; human actors need
+   admin+ or open-state authorship; audited.
+3. **MEDIUM — durable-layer gap.** Documented below as the committed next
+   slice (Known gaps).
+4. **MEDIUM — assignment qualifier.** `recordReviewDecision` ignored
+   `assignedReviewerStaffId`. Fixed as the narrowing described in the method
+   list (`RVC_NOT_ASSIGNED_REVIEWER`).
+5. **LOW.** Assignee-side `assignReviewer` denials now audited; the audit
+   claim names the exact audited set (above); `WD_RAISED` added to the
+   kernel's WorkflowDiscovery reason-code catalog as a documented
+   store-surface code (kept out of the registry's transition-emission list,
+   which mirrors machine emissions exactly); L1/L2 recorded under Review
+   notes.
+
+## Known gaps — committed next Workstream A persistence slice
+
+- **Founder decision 2's enforcement is STORE-LEVEL ONLY today.** The
+  durable layer (`playbook_versions` schema + 
+  `DrizzlePlaybookRepository.transitionVersion`, ADR-0041) has no publisher
+  identity column, no review-history/override record, takes no actor, and
+  calls no `canActOnPlaybookVersion`. Until the follow-up migration adds
+  `published_by_member_id` plus an append-only version review-history (or
+  derives it from `audit_events`) and routes the Drizzle publish path
+  through `canActOnPlaybookVersion`, author/approver separation and the
+  owner override exist only in the store surface. That migration +
+  repository slice is the committed next Workstream A persistence slice —
+  nothing in this PR blocks it (additive columns; the store's semantics are
+  the specification it implements).
+
+## Review notes (founder awareness, no action this slice)
+
+- **L1:** the `conciergeRiskFor` LOW/MEDIUM informational path is
+  intentionally UNREACHABLE in this slice — content flags are not yet
+  threaded through policy resolution, so the `DEFAULT_REVIEW_POLICIES` HIGH
+  fail-safe governs every concierge item today. The flags thread in with the
+  concierge workflow slice.
+- **L2:** high-impact playbook detection keys off AUTHOR-SUPPLIED review
+  checkpoints (`isHighImpactPlaybookContent`). An author omitting high-risk
+  checkpoints lowers only the approve-separation trigger — bounded by the
+  organization_admin+ approve floor and the UNCONDITIONAL author/publisher
+  separation on publish, and checkpoint floors themselves are
+  validator-clamped upward. Flagged for founder awareness.
+
 ## Consequences
 
-- **Tests: 151 rules (+15), 280 shared (+31), 283 database (+9).** New
+- **Tests: 151 rules (+15), 286 shared (+37), 283 database (+9).** New
   coverage: the seven concierge criteria one-by-one + the informational
   passthrough; the publication floor matrix; the full
   `canActOnPlaybookVersion` matrix incl. both separation rules, the

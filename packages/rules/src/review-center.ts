@@ -129,8 +129,13 @@ export type ReviewCenterReasonCode =
   //    its artifact version + sha256 digest; if the artifact changed since
   //    approval, the prior approval cannot publish the changed content. The
   //    correct path is supersession + a fresh ReviewItem for the new version.
+  //  - RVC_NOT_ASSIGNED_REVIEWER: the item HAS an assigned reviewer and the
+  //    (otherwise qualified) actor is neither the assignee nor
+  //    organization_admin+ — the founder matrix's "assigned" qualifier,
+  //    narrowing authorization ON TOP of canReview (never widening it).
   | "RVC_BLOCKED_ENVELOPE"
-  | "RVC_STALE_ARTIFACT";
+  | "RVC_STALE_ARTIFACT"
+  | "RVC_NOT_ASSIGNED_REVIEWER";
 
 /**
  * Structured decision reason codes (founder: "reason codes must be

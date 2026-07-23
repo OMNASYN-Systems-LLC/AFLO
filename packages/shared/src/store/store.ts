@@ -3492,6 +3492,32 @@ export class AfloStore {
       return { ok: false, denialCode: "REVIEW_ITEM_NOT_FOUND", emittedEventIds: [] };
     }
 
+    // F4 birth-state gate (mirrors the Drizzle runtime assert): the TS union
+    // allows only the two birth states, but a cast could mint an item
+    // directly in "approved"/"published" — bypassing the kernel, canReview,
+    // canPublishReviewItem, the staleness check, AND the open-tuple unique
+    // (which guards only draft/awaiting_review). Denied, audited, no row.
+    const state = input.state ?? "draft";
+    if (state !== "draft" && state !== "awaiting_review") {
+      this.audit({
+        organizationId: input.organizationId,
+        actorStaffId: actor?.id ?? null,
+        action: "review.creation_denied",
+        targetType: "review_item",
+        targetId: input.artifactId,
+        detail: `invalid initial review state "${state}" for ${input.artifactType}/${input.artifactId} — items are born draft or awaiting_review only`,
+        reasonCode: "INVALID_INITIAL_STATE",
+        ruleVersion: REVIEW_CENTER_RULES_VERSION,
+        occurredAt: now.toISOString(),
+      });
+      return {
+        ok: false,
+        denialCode: "INVALID_INPUT",
+        inputErrors: [`invalid initial review state "${state}" — must be "draft" or "awaiting_review"`],
+        emittedEventIds: [],
+      };
+    }
+
     // Blocked-envelope gate (audited; the item NEVER exists, in no queue).
     const prohibited = input.prohibitedActionsDetected ?? [];
     if (prohibited.length > 0) {
@@ -3550,7 +3576,6 @@ export class AfloStore {
       return { ok: false, denialCode: "OPEN_REVIEW_EXISTS", emittedEventIds: [] };
     }
 
-    const state = input.state ?? "draft";
     this.counter += 1;
     const item: ReviewItem = {
       id: `rvi-${this.counter}`,
@@ -3718,8 +3743,32 @@ export class AfloStore {
     }
 
     const reviewer = this.findActor(input.organizationId, input.reviewerStaffId);
-    if (!reviewer) return { ok: false, denialCode: "ACTOR_NOT_IN_ORG", emittedEventIds: [] };
+    if (!reviewer) {
+      this.audit({
+        organizationId: input.organizationId,
+        actorStaffId: actor.id,
+        action: "review.assign_denied",
+        targetType: "review_item",
+        targetId: item.id,
+        detail: `assignee ${input.reviewerStaffId} is not a member of the organization`,
+        reasonCode: "RVC_REVIEWER_NOT_MEMBER",
+        ruleVersion: REVIEW_CENTER_RULES_VERSION,
+        occurredAt: now.toISOString(),
+      });
+      return { ok: false, denialCode: "ACTOR_NOT_IN_ORG", emittedEventIds: [] };
+    }
     if (reviewerRoleForMemberRole(reviewer.role) === null) {
+      this.audit({
+        organizationId: input.organizationId,
+        actorStaffId: actor.id,
+        action: "review.assign_denied",
+        targetType: "review_item",
+        targetId: item.id,
+        detail: `assignee ${reviewer.id} does not hold a reviewer role (${reviewer.role})`,
+        reasonCode: "RVC_ROLE_NOT_REVIEWER",
+        ruleVersion: REVIEW_CENTER_RULES_VERSION,
+        occurredAt: now.toISOString(),
+      });
       return { ok: false, denialCode: "NOT_AUTHORIZED", reasonCode: "RVC_ROLE_NOT_REVIEWER", emittedEventIds: [] };
     }
     if (item.state !== "draft" && item.state !== "awaiting_review") {
@@ -3787,6 +3836,36 @@ export class AfloStore {
         occurredAt: now.toISOString(),
       });
       return { ok: false, denialCode: "NOT_AUTHORIZED", reasonCode: reviewPolicy.reasonCode, emittedEventIds: [] };
+    }
+
+    // The founder matrix's "assigned" qualifier — NARROWING only, on top of
+    // canReview: when the item HAS an assigned reviewer, only that assignee
+    // or organization_admin+ may decide it. Unassigned items keep the
+    // AUTHORIZATION_MATRIX §4 role-floor behavior unchanged.
+    const decidingRole = reviewerRoleForMemberRole(actor.role);
+    if (
+      item.assignedReviewerStaffId !== null &&
+      item.assignedReviewerStaffId !== actor.id &&
+      decidingRole !== "organization_admin" &&
+      decidingRole !== "organization_owner"
+    ) {
+      this.audit({
+        organizationId: input.organizationId,
+        actorStaffId: actor.id,
+        action: "review.decision_denied",
+        targetType: "review_item",
+        targetId: item.id,
+        detail: `${input.decision} denied — item is assigned to ${item.assignedReviewerStaffId} (actor: ${actor.id})`,
+        reasonCode: "RVC_NOT_ASSIGNED_REVIEWER",
+        ruleVersion: REVIEW_CENTER_RULES_VERSION,
+        occurredAt: now.toISOString(),
+      });
+      return {
+        ok: false,
+        denialCode: "NOT_AUTHORIZED",
+        reasonCode: "RVC_NOT_ASSIGNED_REVIEWER",
+        emittedEventIds: [],
+      };
     }
 
     const editedFields = input.editedFields ?? [];
@@ -4079,6 +4158,35 @@ export class AfloStore {
       return { ok: false, denialCode: "ACTOR_NOT_IN_ORG", emittedEventIds: [] };
     }
 
+    // A HUMAN actor needs authority to supersede: organization_admin+ always;
+    // the item's AUTHOR only while the item is still OPEN (draft/
+    // awaiting_review — the same circle withdrawReviewItem draws). Replacing
+    // an approved/published item un-publishes reviewed content, so it is
+    // admin+ regardless of authorship; staff non-authors have no path. A null
+    // actor is the system/orchestrator replacement path (unchanged).
+    if (actor) {
+      const actorRole = reviewerRoleForMemberRole(actor.role);
+      const isAdminPlus = actorRole === "organization_admin" || actorRole === "organization_owner";
+      const isOpenAuthor =
+        old.createdByStaffId === actor.id && (old.state === "draft" || old.state === "awaiting_review");
+      if (!isAdminPlus && !isOpenAuthor) {
+        this.audit({
+          organizationId: input.organizationId,
+          actorStaffId: actor.id,
+          action: "review.supersede_denied",
+          targetType: "review_item",
+          targetId: old.id,
+          detail: `supersession of ${old.state} item requires organization_admin+${
+            old.state === "draft" || old.state === "awaiting_review" ? " or the author" : ""
+          } (actor role: ${actor.role})`,
+          reasonCode: "RVC_INSUFFICIENT_ROLE",
+          ruleVersion: REVIEW_CENTER_RULES_VERSION,
+          occurredAt: now.toISOString(),
+        });
+        return { ok: false, denialCode: "NOT_AUTHORIZED", reasonCode: "RVC_INSUFFICIENT_ROLE", emittedEventIds: [] };
+      }
+    }
+
     const transition = reviewItemTransition(old.state, "superseded");
     if (!transition.allowed) {
       this.audit({
@@ -4252,13 +4360,22 @@ export class AfloStore {
     const record = this.findRecord(organizationId, clientId);
     if (!record) return [];
     return this.db.reviewItems
-      .filter((r) => r.organizationId === organizationId && r.clientId === clientId && r.state === "published")
+      .filter(
+        (r) =>
+          r.organizationId === organizationId &&
+          r.clientId === clientId &&
+          r.state === "published" &&
+          // publishReviewItem always stamps publishedAt; an item lacking the
+          // stamp is malformed and is NEVER served to a client (fail closed —
+          // no updatedAt fallback that would paper over a missing stamp).
+          r.publishedAt !== null,
+      )
       .map((r) => ({
         reviewItemId: r.id,
         artifactType: r.artifactType,
         artifactId: r.artifactId,
         publishedResultRef: r.publishedResultRef,
-        publishedAt: r.publishedAt ?? r.updatedAt,
+        publishedAt: r.publishedAt!,
         clientActionRef: r.clientActionRef,
         clientActionStatus: r.clientActionStatus,
         outcome: r.outcome,

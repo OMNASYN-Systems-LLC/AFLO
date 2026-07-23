@@ -504,7 +504,15 @@ export type WorkflowDiscoveryReasonCode =
   | "WD_REOPENED"
   | "WD_SAME_STATUS"
   | "WD_UNKNOWN_STATUS"
-  | "WD_ILLEGAL_TRANSITION";
+  | "WD_ILLEGAL_TRANSITION"
+  /**
+   * Store-surface code: a discovery item was RAISED (born `open`). Creation
+   * is not a transition, so the machine never emits this — it is catalogued
+   * here so the store's raise audit speaks the kernel vocabulary (and it is
+   * deliberately absent from the registry's transition reason-code list,
+   * which mirrors machine emissions exactly).
+   */
+  | "WD_RAISED";
 
 const DISCOVERY_ALLOWED: Record<
   WorkflowDiscoveryStatus,

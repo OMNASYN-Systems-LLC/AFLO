@@ -159,6 +159,39 @@ describe("createReviewItem — gates before anything is written", () => {
     expect(successor.item!.submittedAt).toBe(NOW.toISOString()); // direct-to-queue IS the submission
   });
 
+  it("F4 birth-state gate: a cast can NEVER mint an item directly in approved/published (audited, no row)", () => {
+    const store = makeStore();
+    const before = store.database().reviewItems.length;
+    for (const minted of ["published", "approved", "rejected", "superseded"]) {
+      const res = store.createReviewItem(draftInput({ state: minted as "draft" }));
+      expect(res, minted).toMatchObject({ ok: false, denialCode: "INVALID_INPUT" });
+      expect(store.auditFor(ORG).at(-1), minted).toMatchObject({
+        action: "review.creation_denied",
+        reasonCode: "INVALID_INITIAL_STATE",
+      });
+    }
+    expect(store.database().reviewItems).toHaveLength(before); // nothing written
+    // The two legal birth states still work (orchestrator direct-to-queue path).
+    expect(store.createReviewItem(draftInput({ state: "awaiting_review" })).item!.state).toBe("awaiting_review");
+    expect(store.createReviewItem(draftInput({ artifactVersion: "9", state: "draft" })).item!.state).toBe("draft");
+  });
+
+  it("clientPublishedReviews NEVER serves an item lacking its publishedAt stamp (no updatedAt fallback)", () => {
+    const store = makeStore();
+    // Corrupt a copy of the published seed item directly in the live db: state
+    // published but no stamp — the projection must fail closed and skip it.
+    const published = store.database().reviewItems.find((i) => i.id === "rvi-solomon-education")!;
+    store.database().reviewItems.push({
+      ...structuredClone(published),
+      id: "rvi-corrupted",
+      artifactVersion: "99",
+      publishedAt: null,
+    });
+    const rows = store.clientPublishedReviews(ORG, "c-solomon");
+    expect(rows.map((r) => r.reviewItemId)).toEqual(["rvi-solomon-education"]);
+    expect(rows[0]!.publishedAt).toBe(published.publishedAt); // the real stamp, never updatedAt
+  });
+
   it("validates version/digest shape and org/actor/client scoping fail-closed", () => {
     const store = makeStore();
     expect(store.createReviewItem(draftInput({ artifactVersion: " " }))).toMatchObject({
@@ -372,11 +405,12 @@ describe("publishReviewItem — role floor + the STALE-ARTIFACT invariant", () =
       action: "review.publish_denied_stale",
       reasonCode: "RVC_STALE_ARTIFACT",
     });
-    // The correct path: supersession + a fresh ReviewItem for the new version.
+    // The correct path: supersession + a fresh ReviewItem for the new version
+    // (system/orchestrator-invoked — the replacement carries no author).
     const superseded = store.supersedeReviewItem({
       organizationId: ORG,
       reviewItemId: item.id,
-      actorStaffId: "s-boyd",
+      actorStaffId: null,
       replacement: { artifactVersion: "3", artifactDigest: "f".repeat(64) },
     });
     expect(superseded.ok).toBe(true);
@@ -390,7 +424,7 @@ describe("publishReviewItem — role floor + the STALE-ARTIFACT invariant", () =
       artifactVersion: "3",
       previousReviewItemId: item.id,
     });
-    // Approve the NEW review (owner; s-boyd created it so no self-review) and publish against matching facts.
+    // Approve the NEW review (system-created — no author, no self-review) and publish against matching facts.
     const approved = store.recordReviewDecision({
       organizationId: ORG,
       reviewItemId: superseded.item!.id,
@@ -448,6 +482,112 @@ describe("withdrawReviewItem — author or organization_admin+, open states only
       actorStaffId: "s-mercer",
     });
     expect(approved).toMatchObject({ ok: false, reasonCode: "RVC_ILLEGAL_TRANSITION" });
+  });
+});
+
+describe("supersedeReviewItem — human actors need authority (M1)", () => {
+  it("staff non-author is denied on an OPEN item (audited); the author is allowed", () => {
+    const store = makeStore();
+    // rvi-pryor-roadmap is a draft authored by s-boyd.
+    const denied = store.supersedeReviewItem({
+      organizationId: ORG,
+      reviewItemId: "rvi-pryor-roadmap",
+      actorStaffId: "s-lin",
+      replacement: { artifactVersion: "2", artifactDigest: "a".repeat(64) },
+    });
+    expect(denied).toMatchObject({ ok: false, denialCode: "NOT_AUTHORIZED", reasonCode: "RVC_INSUFFICIENT_ROLE" });
+    expect(store.auditFor(ORG).at(-1)?.action).toBe("review.supersede_denied");
+    expect(store.database().reviewItems.find((i) => i.id === "rvi-pryor-roadmap")!.state).toBe("draft");
+    const byAuthor = store.supersedeReviewItem({
+      organizationId: ORG,
+      reviewItemId: "rvi-pryor-roadmap",
+      actorStaffId: "s-boyd",
+      replacement: { artifactVersion: "2", artifactDigest: "a".repeat(64) },
+    });
+    expect(byAuthor.ok).toBe(true);
+    expect(byAuthor.supersededItem!.state).toBe("superseded");
+  });
+
+  it("NO staff member — author included — may supersede a PUBLISHED item; admin+ may", () => {
+    const store = makeStore();
+    // rvi-solomon-education is published and was created by s-lin.
+    const authorTry = store.supersedeReviewItem({
+      organizationId: ORG,
+      reviewItemId: "rvi-solomon-education",
+      actorStaffId: "s-lin",
+      replacement: { artifactVersion: "2", artifactDigest: "b".repeat(64) },
+    });
+    expect(authorTry).toMatchObject({ ok: false, denialCode: "NOT_AUTHORIZED" });
+    expect(store.auditFor(ORG).at(-1)?.action).toBe("review.supersede_denied");
+    expect(store.database().reviewItems.find((i) => i.id === "rvi-solomon-education")!.state).toBe("published");
+    const adminTry = store.supersedeReviewItem({
+      organizationId: ORG,
+      reviewItemId: "rvi-solomon-education",
+      actorStaffId: "s-mercer",
+      replacement: { artifactVersion: "2", artifactDigest: "b".repeat(64) },
+    });
+    expect(adminTry.ok).toBe(true);
+    expect(adminTry.supersededItem!.state).toBe("superseded");
+  });
+});
+
+describe("recordReviewDecision — the founder matrix's 'assigned' qualifier (M3, narrowing only)", () => {
+  it("on an ASSIGNED item, a non-assignee staff reviewer is denied; the assignee decides", () => {
+    const store = makeStore();
+    store.assignReviewer({
+      organizationId: ORG,
+      reviewItemId: "rvi-bell-concierge",
+      reviewerStaffId: "s-lin",
+      actorStaffId: "s-mercer",
+    });
+    // s-boyd passes canReview (staff floor, not the author) but is NOT the assignee.
+    const denied = store.recordReviewDecision({
+      organizationId: ORG,
+      reviewItemId: "rvi-bell-concierge",
+      actorStaffId: "s-boyd",
+      decision: "approved_unchanged",
+      decisionReasonCode: "RVD_ACCURATE",
+    });
+    expect(denied).toMatchObject({
+      ok: false,
+      denialCode: "NOT_AUTHORIZED",
+      reasonCode: "RVC_NOT_ASSIGNED_REVIEWER",
+    });
+    expect(store.auditFor(ORG).at(-1)).toMatchObject({
+      action: "review.decision_denied",
+      reasonCode: "RVC_NOT_ASSIGNED_REVIEWER",
+    });
+    expect(store.reviewDecisionsFor(ORG, "rvi-bell-concierge")).toHaveLength(0);
+    const byAssignee = store.recordReviewDecision({
+      organizationId: ORG,
+      reviewItemId: "rvi-bell-concierge",
+      actorStaffId: "s-lin",
+      decision: "approved_unchanged",
+      decisionReasonCode: "RVD_ACCURATE",
+    });
+    expect(byAssignee.ok).toBe(true);
+    expect(byAssignee.item!.state).toBe("approved");
+  });
+
+  it("organization_admin+ may decide DESPITE an assignment; unassigned items keep the role-floor behavior", () => {
+    const store = makeStore();
+    const created = store.createReviewItem(draftInput({ actorStaffId: "s-lin", state: "awaiting_review" }));
+    store.assignReviewer({
+      organizationId: ORG,
+      reviewItemId: created.item!.id,
+      reviewerStaffId: "s-boyd",
+      actorStaffId: "s-mercer",
+    });
+    const byOwner = store.recordReviewDecision({
+      organizationId: ORG,
+      reviewItemId: created.item!.id,
+      actorStaffId: "s-mercer", // not the assignee — admin+ overrides the narrowing
+      decision: "rejected",
+      decisionReasonCode: "RVD_INACCURATE_FACTS",
+    });
+    expect(byOwner.ok).toBe(true);
+    // Unassigned behavior is unchanged — proven throughout this file (e.g. the
+    // seeded, unassigned items decided by any floor-qualified reviewer).
   });
 });
 
