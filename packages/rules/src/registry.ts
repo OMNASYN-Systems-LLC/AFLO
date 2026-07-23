@@ -478,6 +478,74 @@ export const RULE_REGISTRY: readonly RuleDefinition[] = [
       },
     ],
   },
+  {
+    id: "review_center.publication_policy",
+    version: REVIEW_CENTER_RULES_VERSION,
+    effectiveDate: "2026-07-23",
+    description:
+      "Publication role floor (founder matrix, Workstream A PR-5): who may publish an APPROVED review item. High-risk items require organization_admin+ REGARDLESS of the item's required reviewer role (Staff Advisor cannot publish high-risk artifacts); medium/low require rank ≥ the item's required reviewer role. Deny-by-default: no membership or a non-reviewer role never publishes. The state-move legality (published only via approved) stays with review_center.item_lifecycle.",
+    inputs: ["actorRole", "risk", "requiredRole"],
+    output: "CanReviewResult { allowed, reasonCode, ruleVersion }",
+    reasonCodes: [
+      "RVC_REVIEW_ALLOWED",
+      "RVC_REVIEWER_NOT_MEMBER",
+      "RVC_ROLE_NOT_REVIEWER",
+      "RVC_INSUFFICIENT_ROLE",
+    ],
+    sources: [],
+    changeHistory: [
+      {
+        version: "review_center.v1.0.0",
+        date: "2026-07-23",
+        note: "Publication floor per the founder matrix (store wiring slice).",
+      },
+    ],
+  },
+  {
+    id: "review_center.concierge_risk",
+    version: REVIEW_CENTER_RULES_VERSION,
+    effectiveDate: "2026-07-23",
+    description:
+      "Concierge recommendation risk classification (founder decision 2026-07-23 #1, verbatim criteria): ANY of the seven content flags true (credit guidance, debt prioritization, readiness-stage implications, partner/product routing, financial action recommendations, housing/funding readiness implications, materially consequential) → HIGH, requiring explicit authorized human approval before publication; all false (purely informational education, navigation, or administrative support) → the caller-chosen low/medium. Unknown flags never reach this rule — the DEFAULT_REVIEW_POLICIES fail-safe keeps concierge_recommendation HIGH.",
+    inputs: ["flags: ConciergeContentFlags", 'informationalClass: "low" | "medium"'],
+    output: "ReviewRiskClass",
+    reasonCodes: [],
+    sources: [],
+    changeHistory: [
+      {
+        version: "review_center.v1.0.0",
+        date: "2026-07-23",
+        note: "Founder-resolved concierge HIGH-risk policy (continuous execution authorization).",
+      },
+    ],
+  },
+  {
+    id: "playbook.actor_policy",
+    version: PLAYBOOK_RULES_VERSION,
+    effectiveDate: "2026-07-23",
+    description:
+      "Playbook author/approver separation (founder decision 2026-07-23 #2, verbatim): Staff Advisor drafts/revises/submits, Organization Admin+ approves, Organization Owner publishes; the author may never publish their own version; high-impact versions (any high-risk review checkpoint) require separate author and approver identities; Platform Admin/Worker/clients (null role) always denied. Documented single-operator owner override relaxes ONLY the separation rules, ONLY for an owner, ONLY when org policy permits AND a non-empty reason is recorded AND the content is attested not regulated professional advice — recorded, audited, and visible in review history (the store's job).",
+    inputs: ["action", "actorRole", "actorIsAuthor", "highImpact", "ownerOverride", "orgPolicyPermitsOverride"],
+    output: "CanActOnPlaybookVersionResult { allowed, reasonCode, usedOwnerOverride, ruleVersion }",
+    reasonCodes: [
+      "PB_ACTION_ALLOWED",
+      "PB_OWNER_OVERRIDE",
+      "PB_NO_MEMBERSHIP",
+      "PB_ROLE_INSUFFICIENT",
+      "PB_AUTHOR_PUBLISHER_SEPARATION",
+      "PB_AUTHOR_APPROVER_SEPARATION",
+      "PB_OVERRIDE_NOT_PERMITTED",
+      "PB_OVERRIDE_REASON_REQUIRED",
+    ],
+    sources: [],
+    changeHistory: [
+      {
+        version: "playbook.v1.0.0",
+        date: "2026-07-23",
+        note: "Founder-resolved author/approver separation + owner override (store wiring slice).",
+      },
+    ],
+  },
 ] as const;
 
 export function getRule(id: string): RuleDefinition | undefined {

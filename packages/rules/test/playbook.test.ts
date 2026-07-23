@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
+  canActOnPlaybookVersion,
   contentBlocksApproval,
   FIELD_PROVENANCE_STATES,
   getRule,
+  isHighImpactPlaybookContent,
+  PLAYBOOK_ACTIONS,
   PLAYBOOK_CONTENT_FIELDS,
   PLAYBOOK_RULES_VERSION,
   PLAYBOOK_VERSION_STATUSES,
@@ -13,6 +16,7 @@ import {
   WORKFLOW_DISCOVERY_STATUSES,
   workflowDiscoveryTransition,
   workflowDiscoveryTransitionsFrom,
+  type CanActOnPlaybookVersionInput,
   type PlaybookContent,
 } from "../src";
 
@@ -277,6 +281,185 @@ describe("validatePlaybookContent — structural + provenance contract", () => {
   });
 });
 
+describe("canActOnPlaybookVersion — founder decision 2026-07-23 #2 (author/approver separation)", () => {
+  const base: CanActOnPlaybookVersionInput = {
+    action: "draft",
+    actorRole: "staff",
+    actorIsAuthor: false,
+    highImpact: false,
+    ownerOverride: null,
+    orgPolicyPermitsOverride: false,
+  };
+  const override = { reason: "Sole operator; no second reviewer exists.", attestsNotRegulatedAdvice: true as const };
+
+  it("role floors: draft/revise/submit = staff+, approve = organization_admin+, publish = owner only", () => {
+    for (const action of ["draft", "revise", "submit"] as const) {
+      expect(canActOnPlaybookVersion({ ...base, action }).allowed, action).toBe(true);
+    }
+    expect(canActOnPlaybookVersion({ ...base, action: "approve" })).toMatchObject({
+      allowed: false,
+      reasonCode: "PB_ROLE_INSUFFICIENT",
+    });
+    expect(canActOnPlaybookVersion({ ...base, action: "approve", actorRole: "organization_admin" }).allowed).toBe(true);
+    expect(canActOnPlaybookVersion({ ...base, action: "publish", actorRole: "organization_admin" })).toMatchObject({
+      allowed: false,
+      reasonCode: "PB_ROLE_INSUFFICIENT",
+    });
+    expect(canActOnPlaybookVersion({ ...base, action: "publish", actorRole: "organization_owner" }).allowed).toBe(true);
+  });
+
+  it("a null role (Worker, Platform Admin, client — no qualifying membership) is denied for EVERY action", () => {
+    for (const action of PLAYBOOK_ACTIONS) {
+      const result = canActOnPlaybookVersion({ ...base, action, actorRole: null });
+      expect(result.allowed, action).toBe(false);
+      expect(result.reasonCode, action).toBe("PB_NO_MEMBERSHIP");
+    }
+    // ...even with a (bogus) override attached — Platform Admin can never
+    // approve or publish tenant content.
+    expect(
+      canActOnPlaybookVersion({
+        ...base,
+        action: "publish",
+        actorRole: null,
+        ownerOverride: override,
+        orgPolicyPermitsOverride: true,
+      }).reasonCode,
+    ).toBe("PB_NO_MEMBERSHIP");
+  });
+
+  it("the author may never publish their own version (PB_AUTHOR_PUBLISHER_SEPARATION)", () => {
+    expect(
+      canActOnPlaybookVersion({ ...base, action: "publish", actorRole: "organization_owner", actorIsAuthor: true }),
+    ).toMatchObject({ allowed: false, reasonCode: "PB_AUTHOR_PUBLISHER_SEPARATION" });
+    // A different owner-publisher is fine.
+    expect(
+      canActOnPlaybookVersion({ ...base, action: "publish", actorRole: "organization_owner", actorIsAuthor: false })
+        .allowed,
+    ).toBe(true);
+  });
+
+  it("high-impact versions require approver ≠ author; low-impact self-approval by an admin is allowed", () => {
+    expect(
+      canActOnPlaybookVersion({
+        ...base,
+        action: "approve",
+        actorRole: "organization_admin",
+        actorIsAuthor: true,
+        highImpact: true,
+      }),
+    ).toMatchObject({ allowed: false, reasonCode: "PB_AUTHOR_APPROVER_SEPARATION" });
+    expect(
+      canActOnPlaybookVersion({
+        ...base,
+        action: "approve",
+        actorRole: "organization_admin",
+        actorIsAuthor: true,
+        highImpact: false,
+      }).allowed,
+    ).toBe(true);
+  });
+
+  it("owner override: permitted ONLY with org policy + non-empty reason + regulated-advice attestation", () => {
+    const trip: CanActOnPlaybookVersionInput = {
+      ...base,
+      action: "publish",
+      actorRole: "organization_owner",
+      actorIsAuthor: true,
+    };
+    // Org policy off → denied even with a complete override.
+    expect(canActOnPlaybookVersion({ ...trip, ownerOverride: override })).toMatchObject({
+      allowed: false,
+      reasonCode: "PB_OVERRIDE_NOT_PERMITTED",
+    });
+    // Empty reason / missing attestation → denied.
+    expect(
+      canActOnPlaybookVersion({
+        ...trip,
+        orgPolicyPermitsOverride: true,
+        ownerOverride: { reason: "  ", attestsNotRegulatedAdvice: true },
+      }),
+    ).toMatchObject({ allowed: false, reasonCode: "PB_OVERRIDE_REASON_REQUIRED" });
+    expect(
+      canActOnPlaybookVersion({
+        ...trip,
+        orgPolicyPermitsOverride: true,
+        ownerOverride: { reason: "Sole operator", attestsNotRegulatedAdvice: false as unknown as true },
+      }),
+    ).toMatchObject({ allowed: false, reasonCode: "PB_OVERRIDE_REASON_REQUIRED" });
+    // Complete override + policy → allowed, marked as the override path.
+    expect(canActOnPlaybookVersion({ ...trip, orgPolicyPermitsOverride: true, ownerOverride: override })).toMatchObject({
+      allowed: true,
+      reasonCode: "PB_OWNER_OVERRIDE",
+      usedOwnerOverride: true,
+    });
+    // High-impact self-approval by the owner rides the same override.
+    expect(
+      canActOnPlaybookVersion({
+        ...base,
+        action: "approve",
+        actorRole: "organization_owner",
+        actorIsAuthor: true,
+        highImpact: true,
+        orgPolicyPermitsOverride: true,
+        ownerOverride: override,
+      }),
+    ).toMatchObject({ allowed: true, usedOwnerOverride: true });
+  });
+
+  it("the override never relaxes ROLE floors (admin cannot publish via override) and never applies to non-owners", () => {
+    expect(
+      canActOnPlaybookVersion({
+        ...base,
+        action: "publish",
+        actorRole: "organization_admin",
+        ownerOverride: override,
+        orgPolicyPermitsOverride: true,
+      }),
+    ).toMatchObject({ allowed: false, reasonCode: "PB_ROLE_INSUFFICIENT" });
+    expect(
+      canActOnPlaybookVersion({
+        ...base,
+        action: "approve",
+        actorRole: "organization_admin",
+        actorIsAuthor: true,
+        highImpact: true,
+        ownerOverride: override,
+        orgPolicyPermitsOverride: true,
+      }),
+    ).toMatchObject({ allowed: false, reasonCode: "PB_AUTHOR_APPROVER_SEPARATION" });
+  });
+
+  it("a normal allow never claims the override path", () => {
+    const result = canActOnPlaybookVersion({
+      ...base,
+      action: "publish",
+      actorRole: "organization_owner",
+      ownerOverride: override,
+      orgPolicyPermitsOverride: true,
+    });
+    expect(result).toMatchObject({ allowed: true, reasonCode: "PB_ACTION_ALLOWED", usedOwnerOverride: false });
+  });
+});
+
+describe("isHighImpactPlaybookContent — the deterministic high-impact definition", () => {
+  it("high iff any humanReviewCheckpoints entry has riskClassification 'high'", () => {
+    expect(isHighImpactPlaybookContent(content())).toBe(true); // fixture checkpoint is high
+    const medium = content({
+      humanReviewCheckpoints: [
+        {
+          id: "cp1",
+          afterStep: "a1",
+          artifactType: "educational_assignment",
+          riskClassification: "medium",
+          requiredReviewerRole: "staff",
+        },
+      ],
+    });
+    expect(isHighImpactPlaybookContent(medium)).toBe(false);
+    expect(isHighImpactPlaybookContent(content({ humanReviewCheckpoints: [] }))).toBe(false);
+  });
+});
+
 describe("workflow discovery lifecycle", () => {
   it("full matrix matches the allow-list exactly; converted is terminal", () => {
     const LEGAL = new Set(["open>answered", "open>dismissed", "answered>converted", "answered>open", "dismissed>open"]);
@@ -293,8 +476,13 @@ describe("workflow discovery lifecycle", () => {
 });
 
 describe("registry lockstep", () => {
-  it("registers the three playbook rules at the implementation version", () => {
-    for (const id of ["playbook.version_transition", "playbook.content_validation", "playbook.discovery"]) {
+  it("registers the playbook rules at the implementation version", () => {
+    for (const id of [
+      "playbook.version_transition",
+      "playbook.content_validation",
+      "playbook.discovery",
+      "playbook.actor_policy",
+    ]) {
       const rule = getRule(id);
       expect(rule, id).toBeDefined();
       expect(rule!.version).toBe(PLAYBOOK_RULES_VERSION);

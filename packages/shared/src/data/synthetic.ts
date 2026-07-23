@@ -24,13 +24,18 @@ import type {
   MonthlyAction,
   Organization,
   PartnerReferral,
+  Playbook,
+  PlaybookVersion,
   QuarterlyReport,
   ReadinessAssessmentRecord,
+  ReviewDecisionRecord,
+  ReviewItem,
   Roadmap,
   RoadmapMilestone,
   SimulationSettings,
   StaffMember,
   VirtualTransaction,
+  WorkflowDiscoveryItem,
 } from "../domain/types";
 import type { ConversationThread, Message } from "../domain/messaging";
 import { roundUpAmountCents } from "@aflo/rules";
@@ -115,6 +120,19 @@ export interface SyntheticDatabase {
   conversationThreads: ConversationThread[];
   /** Messages within those threads — client-facing content only (internal notes stay in `notes`). */
   messages: Message[];
+  /**
+   * Human Review Center queue items (review_center.v1.0.0) — artifact
+   * references + provenance identifiers/digests ONLY, never artifact bodies.
+   */
+  reviewItems: ReviewItem[];
+  /** Append-only structured review decisions (the feedback record). */
+  reviewDecisions: ReviewDecisionRecord[];
+  /** Playbook identities (versioned tenant IP); seeded empty — created via the store. */
+  playbooks: Playbook[];
+  /** Playbook version content; seeded empty — created via the store. */
+  playbookVersions: PlaybookVersion[];
+  /** Workflow-discovery queue (anti-invention); seeded empty — raised via the store. */
+  workflowDiscoveryItems: WorkflowDiscoveryItem[];
 }
 
 const ORG_ID = "org-golden-key";
@@ -152,6 +170,9 @@ const organization: Organization = {
   id: ORG_ID,
   name: "Golden Key Wealth",
   slug: "golden-key-wealth",
+  // Founder decision 2026-07-23 #2: the single-operator playbook owner
+  // override is OFF by default — Golden Key has multiple authorized operators.
+  allowSingleOperatorPlaybookOverride: false,
 };
 
 const staff: StaffMember[] = [
@@ -1060,6 +1081,263 @@ const messages: Message[] = [
   },
 ];
 
+/**
+ * Human Review Center seeds (Workstream A PR-5) — items across several states
+ * and queues so the future UI slice has data. Every digest below is the REAL
+ * sha256 of the canonical synthetic string
+ * `AFLO-SYNTHETIC-ARTIFACT::<artifactId>::v<artifactVersion>` — precomputed as
+ * literals so this module stays free of node:crypto (it is bundled
+ * client-side); the seed test recomputes and asserts each one. Digests and
+ * identifiers ONLY — never artifact bodies. No real PII (Architecture Rule 9).
+ */
+function reviewItem(
+  overrides: Partial<ReviewItem> &
+    Pick<ReviewItem, "id" | "clientId" | "artifactType" | "artifactId" | "artifactVersion" | "artifactDigest" | "state">,
+): ReviewItem {
+  return {
+    organizationId: ORG_ID,
+    workflowType: overrides.artifactType,
+    sourceFactSnapshots: [],
+    ruleVersionsUsed: [],
+    aiRunId: null,
+    aiModel: null,
+    aiPromptVersion: null,
+    confidence: null,
+    riskClassification: "high",
+    requiredReviewerRole: "staff",
+    assignedReviewerStaffId: null,
+    reviewedByStaffId: null,
+    reviewedAt: null,
+    latestDecision: null,
+    latestDecisionReasonCode: null,
+    modificationsDigest: [],
+    publishedResultRef: null,
+    publishedAt: null,
+    playbookId: null,
+    playbookVersion: null,
+    previousReviewItemId: null,
+    supersededByReviewItemId: null,
+    clientActionRef: null,
+    clientActionStatus: null,
+    outcome: null,
+    outcomeRecordedAt: null,
+    createdByStaffId: null,
+    submittedAt: null,
+    createdAt: daysAgo(7),
+    updatedAt: daysAgo(7),
+    ...overrides,
+  };
+}
+
+const reviewItems: ReviewItem[] = [
+  // Staff-authored roadmap revision still in draft (Devon Pryor's draft roadmap).
+  reviewItem({
+    id: "rvi-pryor-roadmap",
+    clientId: "c-pryor",
+    artifactType: "roadmap_draft",
+    artifactId: "r-c-pryor",
+    artifactVersion: "1",
+    artifactDigest: "b322dfcf277d9358fd7476ba6c745f99e86e81aa1845f5975d0cec96218f0752",
+    state: "draft",
+    sourceFactSnapshots: [{ factId: "credit_profiles.revolving_balance", asOf: daysAgo(9) }],
+    ruleVersionsUsed: ["roadmap.v1.0.0"],
+    createdByStaffId: "s-boyd",
+    createdAt: daysAgo(6),
+    updatedAt: daysAgo(6),
+  }),
+  // AI-drafted concierge recommendation gated straight into the queue (HIGH —
+  // founder decision 2026-07-23 #1: credit-related guidance).
+  reviewItem({
+    id: "rvi-bell-concierge",
+    clientId: "c-bell",
+    artifactType: "concierge_recommendation",
+    artifactId: "concierge-c-bell-2026-07",
+    artifactVersion: "1",
+    artifactDigest: "18d2089b98e11abb344f252f4486d22aeacd2b53f9637f1fe58601364e02666c",
+    state: "awaiting_review",
+    aiRunId: "airun-bell-concierge-1",
+    aiModel: "mock",
+    aiPromptVersion: "concierge.v1",
+    confidence: "0.840",
+    sourceFactSnapshots: [
+      { factId: "credit_profiles.past_due_accounts", asOf: daysAgo(5) },
+      { factId: "financial_profiles.monthly_income", asOf: daysAgo(12) },
+    ],
+    ruleVersionsUsed: ["review_center.v1.0.0"],
+    submittedAt: daysAgo(2),
+    createdAt: daysAgo(2),
+    updatedAt: daysAgo(2),
+  }),
+  // Financial summary ESCALATED to the admin floor (decision recorded; state
+  // stays awaiting_review with the reviewer floor raised — kernel semantics).
+  reviewItem({
+    id: "rvi-okafor-summary",
+    clientId: "c-okafor",
+    artifactType: "financial_summary",
+    artifactId: "fs-c-okafor-2026-07",
+    artifactVersion: "1",
+    artifactDigest: "9cbcefd47754cffdef8500ecba6a151ed1dcee32f63d6485e2e620deb9613520",
+    state: "awaiting_review",
+    requiredReviewerRole: "organization_admin",
+    createdByStaffId: "s-lin",
+    latestDecision: "escalated",
+    latestDecisionReasonCode: "RVD_NEEDS_SENIOR_REVIEW",
+    submittedAt: daysAgo(4),
+    createdAt: daysAgo(4),
+    updatedAt: daysAgo(3),
+  }),
+  // Quarterly report approved with edits — awaiting publication (v2 of the
+  // report artifact; v1's item was superseded by this one).
+  reviewItem({
+    id: "rvi-solomon-report",
+    clientId: "c-solomon",
+    artifactType: "quarterly_report",
+    artifactId: "qr-solomon-q2",
+    artifactVersion: "2",
+    artifactDigest: "fe9fc22dbf35bb9612605d2212bcb4d7c999974678b7803bb8df5ac9c36f1994",
+    state: "approved",
+    createdByStaffId: "s-boyd",
+    reviewedByStaffId: "s-mercer",
+    reviewedAt: daysAgo(1),
+    latestDecision: "approved_with_edits",
+    latestDecisionReasonCode: "RVD_EDITED_TONE",
+    modificationsDigest: [
+      {
+        field: "focusForNextQuarter",
+        beforeSha256: "9c2e5f8a8f6d5c0b7a4e3d2c1b0a99887766554433221100ffeeddccbbaa9988",
+        afterSha256: "1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f809",
+      },
+    ],
+    submittedAt: daysAgo(3),
+    createdAt: daysAgo(3),
+    updatedAt: daysAgo(1),
+  }),
+  // Published education assignment (medium risk) with a recorded outcome —
+  // the measurable-outcomes loop closed end to end.
+  reviewItem({
+    id: "rvi-solomon-education",
+    clientId: "c-solomon",
+    artifactType: "educational_assignment",
+    artifactId: "edu-solomon-1",
+    artifactVersion: "1",
+    artifactDigest: "9ff00111cdaf1f3c6615a7b66f912753a1de239caf8813d1432054449c720aa0",
+    state: "published",
+    riskClassification: "medium",
+    createdByStaffId: "s-lin",
+    reviewedByStaffId: "s-boyd",
+    reviewedAt: daysAgo(5),
+    latestDecision: "approved_unchanged",
+    latestDecisionReasonCode: "RVD_ACCURATE",
+    publishedResultRef: "education_assignments/edu-solomon-1",
+    publishedAt: daysAgo(5),
+    clientActionRef: "edu-solomon-1",
+    clientActionStatus: "completed",
+    outcome: "achieved",
+    outcomeRecordedAt: daysAgo(2),
+    submittedAt: daysAgo(6),
+    createdAt: daysAgo(6),
+    updatedAt: daysAgo(2),
+  }),
+  // Rejected document interpretation (terminal) — the slot is free for a new
+  // linked item once the document is corrected.
+  reviewItem({
+    id: "rvi-whitaker-docint",
+    clientId: "c-whitaker",
+    artifactType: "document_interpretation",
+    artifactId: "d-whitaker-3",
+    artifactVersion: "1",
+    artifactDigest: "8e67dc5b8077ae2a28d199d6202fdb371e93df16e08f34cb66ac8121200cdbcd",
+    state: "rejected",
+    aiRunId: "airun-whitaker-docint-1",
+    aiModel: "mock",
+    aiPromptVersion: "docint.v1",
+    confidence: "0.610",
+    reviewedByStaffId: "s-boyd",
+    reviewedAt: daysAgo(1),
+    latestDecision: "rejected",
+    latestDecisionReasonCode: "RVD_INACCURATE_FACTS",
+    submittedAt: daysAgo(2),
+    createdAt: daysAgo(2),
+    updatedAt: daysAgo(1),
+  }),
+];
+
+/** Decision log entries consistent with the decided seed items above. */
+const reviewDecisions: ReviewDecisionRecord[] = [
+  {
+    id: "rvd-okafor-summary-1",
+    organizationId: ORG_ID,
+    reviewItemId: "rvi-okafor-summary",
+    decision: "escalated",
+    reasonCode: "RVD_NEEDS_SENIOR_REVIEW",
+    ruleVersion: "review_center.v1.0.0",
+    decidedByStaffId: "s-lin",
+    clientStageAtDecision: "capital_readiness",
+    workflowType: "financial_summary",
+    aiRunId: null,
+    agentVersion: null,
+    editedFields: [],
+    finalOutputSha256: null,
+    escalatedToRole: "organization_admin",
+    detail: "Business-income presentation needs a senior call.",
+    decidedAt: daysAgo(3),
+  },
+  {
+    id: "rvd-solomon-report-1",
+    organizationId: ORG_ID,
+    reviewItemId: "rvi-solomon-report",
+    decision: "approved_with_edits",
+    reasonCode: "RVD_EDITED_TONE",
+    ruleVersion: "review_center.v1.0.0",
+    decidedByStaffId: "s-mercer",
+    clientStageAtDecision: "credit_readiness",
+    workflowType: "quarterly_report",
+    aiRunId: null,
+    agentVersion: null,
+    editedFields: ["focusForNextQuarter"],
+    finalOutputSha256: "fe9fc22dbf35bb9612605d2212bcb4d7c999974678b7803bb8df5ac9c36f1994",
+    escalatedToRole: null,
+    detail: null,
+    decidedAt: daysAgo(1),
+  },
+  {
+    id: "rvd-solomon-education-1",
+    organizationId: ORG_ID,
+    reviewItemId: "rvi-solomon-education",
+    decision: "approved_unchanged",
+    reasonCode: "RVD_ACCURATE",
+    ruleVersion: "review_center.v1.0.0",
+    decidedByStaffId: "s-boyd",
+    clientStageAtDecision: "credit_readiness",
+    workflowType: "educational_assignment",
+    aiRunId: null,
+    agentVersion: null,
+    editedFields: [],
+    finalOutputSha256: null,
+    escalatedToRole: null,
+    detail: null,
+    decidedAt: daysAgo(5),
+  },
+  {
+    id: "rvd-whitaker-docint-1",
+    organizationId: ORG_ID,
+    reviewItemId: "rvi-whitaker-docint",
+    decision: "rejected",
+    reasonCode: "RVD_INACCURATE_FACTS",
+    ruleVersion: "review_center.v1.0.0",
+    decidedByStaffId: "s-boyd",
+    clientStageAtDecision: "acquisition",
+    workflowType: "document_interpretation",
+    aiRunId: "airun-whitaker-docint-1",
+    agentVersion: "1.0.0",
+    editedFields: [],
+    finalOutputSha256: null,
+    escalatedToRole: null,
+    detail: "Statement dates misread; re-run after the corrected upload.",
+    decidedAt: daysAgo(1),
+  },
+];
+
 export const syntheticDatabase: SyntheticDatabase = {
   organization,
   pipeline: GOLDEN_KEY_PIPELINE,
@@ -1090,4 +1368,9 @@ export const syntheticDatabase: SyntheticDatabase = {
   handoffPackages: [],
   conversationThreads,
   messages,
+  reviewItems,
+  reviewDecisions,
+  playbooks: [],
+  playbookVersions: [],
+  workflowDiscoveryItems: [],
 };

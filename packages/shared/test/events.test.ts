@@ -28,9 +28,9 @@ function leadCreated() {
 }
 
 describe("event catalog", () => {
-  it("defines all 30 charter lifecycle events exactly once", () => {
-    expect(EVENT_TYPES).toHaveLength(30);
-    expect(new Set(EVENT_TYPES).size).toBe(30);
+  it("defines all 41 charter lifecycle events exactly once (30 + 11 Review Center/Playbook/Discovery)", () => {
+    expect(EVENT_TYPES).toHaveLength(41);
+    expect(new Set(EVENT_TYPES).size).toBe(41);
   });
 
   it("maps every event to a known aggregate type and version 1", () => {

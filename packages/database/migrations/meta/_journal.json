@@ -71,6 +71,13 @@
       "when": 1784525487956,
       "tag": "0009_review_center_persistence",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1784529087956,
+      "tag": "0010_review_scoping",
+      "breakpoints": true
     }
   ]
 }

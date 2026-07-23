@@ -37,6 +37,19 @@ export const EVENT_TYPES = [
   "ConsentRevoked",
   "MessagePosted",
   "MessageRead",
+  // Human Review Center + Playbooks + Workflow Discovery (Workstream A PR-5).
+  // Payloads carry ids/digests/reason codes ONLY — never artifact bodies.
+  "ReviewItemCreated",
+  "ReviewItemSubmitted",
+  "ReviewDecisionRecorded",
+  "ReviewItemPublished",
+  "ReviewItemSuperseded",
+  "ReviewItemWithdrawn",
+  "ReviewOutcomeRecorded",
+  "PlaybookVersionSaved",
+  "PlaybookVersionPublished",
+  "WorkflowDiscoveryRaised",
+  "WorkflowDiscoveryResolved",
 ] as const;
 
 export type EventType = (typeof EVENT_TYPES)[number];
@@ -59,6 +72,9 @@ export const AGGREGATE_TYPES = [
   "referral",
   "consent",
   "conversation",
+  "review_item",
+  "playbook",
+  "workflow_discovery_item",
 ] as const;
 
 export type AggregateType = (typeof AGGREGATE_TYPES)[number];
@@ -95,6 +111,17 @@ export const EVENT_AGGREGATE: Record<EventType, AggregateType> = {
   ConsentRevoked: "consent",
   MessagePosted: "conversation",
   MessageRead: "conversation",
+  ReviewItemCreated: "review_item",
+  ReviewItemSubmitted: "review_item",
+  ReviewDecisionRecorded: "review_item",
+  ReviewItemPublished: "review_item",
+  ReviewItemSuperseded: "review_item",
+  ReviewItemWithdrawn: "review_item",
+  ReviewOutcomeRecorded: "review_item",
+  PlaybookVersionSaved: "playbook",
+  PlaybookVersionPublished: "playbook",
+  WorkflowDiscoveryRaised: "workflow_discovery_item",
+  WorkflowDiscoveryResolved: "workflow_discovery_item",
 };
 
 /**
@@ -133,4 +160,15 @@ export const EVENT_VERSIONS: Record<EventType, number> = {
   ConsentRevoked: 1,
   MessagePosted: 1,
   MessageRead: 1,
+  ReviewItemCreated: 1,
+  ReviewItemSubmitted: 1,
+  ReviewDecisionRecorded: 1,
+  ReviewItemPublished: 1,
+  ReviewItemSuperseded: 1,
+  ReviewItemWithdrawn: 1,
+  ReviewOutcomeRecorded: 1,
+  PlaybookVersionSaved: 1,
+  PlaybookVersionPublished: 1,
+  WorkflowDiscoveryRaised: 1,
+  WorkflowDiscoveryResolved: 1,
 };

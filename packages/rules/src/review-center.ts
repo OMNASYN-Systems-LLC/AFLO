@@ -117,7 +117,20 @@ export type ReviewCenterReasonCode =
   | "RVC_REVIEWER_NOT_MEMBER"
   | "RVC_ROLE_NOT_REVIEWER"
   | "RVC_INSUFFICIENT_ROLE"
-  | "RVC_SELF_REVIEW_DENIED";
+  | "RVC_SELF_REVIEW_DENIED"
+  // Store-surface denial codes (Workstream A PR-5, founder decisions
+  // 2026-07-23). Catalogued here so every review denial speaks one reason-code
+  // vocabulary; they are emitted by the store/repository gates, not by the
+  // three pure machines above:
+  //  - RVC_BLOCKED_ENVELOPE: an AI envelope with non-empty
+  //    prohibited_actions_detected can NEVER become a ReviewItem (audited
+  //    denial; the item is never created and never enters any queue).
+  //  - RVC_STALE_ARTIFACT: the publication invariant — a ReviewItem references
+  //    its artifact version + sha256 digest; if the artifact changed since
+  //    approval, the prior approval cannot publish the changed content. The
+  //    correct path is supersession + a fresh ReviewItem for the new version.
+  | "RVC_BLOCKED_ENVELOPE"
+  | "RVC_STALE_ARTIFACT";
 
 /**
  * Structured decision reason codes (founder: "reason codes must be
@@ -393,11 +406,13 @@ export interface ReviewPolicy {
  *
  * `roadmap_draft`, `client_communication`, and `quarterly_report` sit in or
  * above their directive tier (raising is always allowed; lowering never is).
- * `concierge_recommendation` is not named by §9 but is the flagship guidance
- * surface and routinely credit/eligibility-adjacent, so it defaults into the
- * §9 catch-all as HIGH — flagged for explicit founder confirmation; an org
- * override can only raise it further, and any lowering is a founder/kernel
- * decision, not configuration.
+ * `concierge_recommendation` defaulting HIGH is FOUNDER-RESOLVED (continuous
+ * execution authorization 2026-07-23, decision 1 — no longer provisional):
+ * HIGH is the fail-safe whenever content flags are unknown; a deterministic
+ * LOW/MEDIUM classification exists ONLY for purely informational education,
+ * navigation, or administrative support via `conciergeRiskFor` (all seven
+ * content criteria false). An org override can only raise it further; any
+ * lowering is a founder/kernel decision, not configuration.
  */
 export const DEFAULT_REVIEW_POLICIES: Record<ReviewArtifactType, ReviewPolicy> = {
   readiness_assessment: { riskClassification: "high", requiredReviewerRole: "staff" },
@@ -484,4 +499,86 @@ export function canReview(input: CanReviewInput): CanReviewResult {
     return { ...base, allowed: false, reasonCode: "RVC_SELF_REVIEW_DENIED" };
   }
   return { ...base, allowed: true, reasonCode: "RVC_REVIEW_ALLOWED" };
+}
+
+// --- Publication policy (founder matrix; Workstream A PR-5) -----------------
+
+export interface CanPublishReviewItemInput {
+  /** The actor's ORG MEMBERSHIP role, or null when the actor has none. */
+  actorRole: string | null;
+  risk: ReviewRiskClass;
+  /** The item's (possibly escalated) required reviewer role. */
+  requiredRole: ReviewerRole;
+}
+
+/**
+ * May this actor publish an APPROVED review item? The founder matrix's
+ * publication floor: Staff Advisor CANNOT publish high-risk artifacts — a
+ * `high`-risk item requires `organization_admin`+ REGARDLESS of
+ * `requiredReviewerRole`; medium/low items require rank ≥ the item's required
+ * reviewer role. Deny-by-default: no membership or a non-reviewer role never
+ * publishes. Publication legality of the STATE MOVE stays with
+ * `reviewItemTransition` (approved → published only); this adds WHO on top.
+ */
+export function canPublishReviewItem(input: CanPublishReviewItemInput): CanReviewResult {
+  const base = { ruleVersion: REVIEW_CENTER_RULES_VERSION };
+  if (input.actorRole === null) {
+    return { ...base, allowed: false, reasonCode: "RVC_REVIEWER_NOT_MEMBER" };
+  }
+  if (!(REVIEWER_ROLES as readonly string[]).includes(input.actorRole)) {
+    return { ...base, allowed: false, reasonCode: "RVC_ROLE_NOT_REVIEWER" };
+  }
+  const rank = ROLE_RANK[input.actorRole as ReviewerRole];
+  const floor =
+    input.risk === "high"
+      ? Math.max(ROLE_RANK.organization_admin, ROLE_RANK[input.requiredRole])
+      : ROLE_RANK[input.requiredRole];
+  if (rank < floor) {
+    return { ...base, allowed: false, reasonCode: "RVC_INSUFFICIENT_ROLE" };
+  }
+  return { ...base, allowed: true, reasonCode: "RVC_REVIEW_ALLOWED" };
+}
+
+// --- Concierge recommendation risk (founder decision 2026-07-23, #1) --------
+
+/**
+ * The seven content criteria from the founder decision, verbatim:
+ * `concierge_recommendation` defaults to HIGH risk when it contains
+ * credit-related guidance; debt prioritization; readiness-stage implications;
+ * partner or product routing; financial action recommendations; housing or
+ * funding readiness implications; or any materially consequential
+ * recommendation.
+ */
+export interface ConciergeContentFlags {
+  containsCreditGuidance: boolean;
+  containsDebtPrioritization: boolean;
+  containsReadinessStageImplications: boolean;
+  containsPartnerOrProductRouting: boolean;
+  containsFinancialActionRecommendations: boolean;
+  containsHousingOrFundingReadinessImplications: boolean;
+  materiallyConsequential: boolean;
+}
+
+/**
+ * Deterministic concierge risk classification (founder decision 2026-07-23,
+ * #1): ANY flag true → `"high"` (explicit authorized human approval required
+ * before publication). Only when ALL seven are false — purely informational
+ * education, navigation, or administrative support — may deterministic policy
+ * classify the caller-chosen `"low"` or `"medium"`. When flags are UNKNOWN,
+ * callers must not call this at all: `DEFAULT_REVIEW_POLICIES` keeps
+ * `concierge_recommendation` at HIGH as the fail-safe.
+ */
+export function conciergeRiskFor(
+  flags: ConciergeContentFlags,
+  informationalClass: "low" | "medium",
+): ReviewRiskClass {
+  const anyFlag =
+    flags.containsCreditGuidance ||
+    flags.containsDebtPrioritization ||
+    flags.containsReadinessStageImplications ||
+    flags.containsPartnerOrProductRouting ||
+    flags.containsFinancialActionRecommendations ||
+    flags.containsHousingOrFundingReadinessImplications ||
+    flags.materiallyConsequential;
+  return anyFlag ? "high" : informationalClass;
 }

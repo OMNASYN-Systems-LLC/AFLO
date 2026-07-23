@@ -25,6 +25,31 @@ import {
   validateMessageDraft,
   transitionThread,
   MESSAGING_RULES_VERSION,
+  REVIEWER_ROLES,
+  REVIEW_CENTER_RULES_VERSION,
+  PLAYBOOK_RULES_VERSION,
+  applyReviewDecision,
+  canActOnPlaybookVersion,
+  canPublishReviewItem,
+  canReview,
+  contentBlocksApproval,
+  isHighImpactPlaybookContent,
+  playbookVersionTransition,
+  resolveReviewPolicy,
+  reviewItemTransition,
+  validatePlaybookContent,
+  workflowDiscoveryTransition,
+  type PlaybookAction,
+  type PlaybookContent,
+  type PlaybookContentFieldKey,
+  type PlaybookOwnerOverride,
+  type PlaybookVersionStatus,
+  type ReviewArtifactType,
+  type ReviewDecision,
+  type ReviewItemState,
+  type ReviewRiskClass,
+  type ReviewerRole,
+  type WorkflowDiscoveryStatus,
   type MessageSenderRole,
   type ThreadAction,
   type ActionStatusId,
@@ -100,19 +125,36 @@ import {
 import type {
   AdminNote,
   Appointment,
+  ClientActionStatus,
   ClientDocument,
   ClientRecord,
   EducationAssignment,
   Goal,
   IntakeRecord,
+  ModificationDigest,
   MonthlyAction,
   PartnerReferral,
+  Playbook,
+  PlaybookVersion,
+  PlaybookVersionReviewEvent,
   QuarterlyReport,
   ReadinessAssessmentRecord,
+  ReviewDecisionRecord,
+  ReviewItem,
+  ReviewOutcome,
   Roadmap,
   SimulationSettings,
+  SourceFactSnapshot,
   VirtualTransaction,
+  WorkflowDiscoveryItem,
 } from "../domain/types";
+import {
+  reviewMetricsFor,
+  type ActionOutcomeMetricInput,
+  type ReviewDecisionMetricInput,
+  type ReviewItemMetricInput,
+  type ReviewMetrics,
+} from "./review-metrics";
 
 /**
  * Mutable in-memory application store for the prototype phase (ADR-0002:
@@ -587,6 +629,276 @@ export interface RevokeHandoffInput {
 
 /** How long an issued handoff package stays valid (days) before it expires. */
 const HANDOFF_VALIDITY_DAYS = 30;
+
+// --- Human Review Center + Playbooks + Workflow Discovery (A PR-5) ----------
+
+/**
+ * The role bridge (design-brief §6 trap): map the store's MEMBER-ROLE
+ * vocabulary onto the Review Center's ordered `ReviewerRole`. The store's
+ * membership roles happen to share the reviewer-role strings
+ * (`staff`/`organization_admin`/`organization_owner`); every OTHER vocabulary
+ * — the auth layer's `staff_advisor`, `client`, `partner_viewer`, arbitrary
+ * garbage — maps to null and never qualifies. Platform Admin holds NO tenant
+ * membership at all, so it is structurally excluded before this function ever
+ * runs (findActor returns nothing — test-asserted).
+ */
+export function reviewerRoleForMemberRole(role: string): ReviewerRole | null {
+  return (REVIEWER_ROLES as readonly string[]).includes(role) ? (role as ReviewerRole) : null;
+}
+
+/** sha256 hex digest shape: exactly 64 lowercase hex characters. */
+const SHA256_HEX = /^[0-9a-f]{64}$/;
+
+const CLIENT_ACTION_STATUSES: readonly ClientActionStatus[] = ["pending", "completed", "not_completed"];
+const REVIEW_OUTCOMES: readonly ReviewOutcome[] = ["achieved", "not_achieved", "unknown"];
+
+export type ReviewCenterDenialCode =
+  | "CLIENT_NOT_FOUND"
+  | "REVIEW_ITEM_NOT_FOUND"
+  | "PLAYBOOK_NOT_FOUND"
+  | "ACTOR_NOT_IN_ORG"
+  | "NOT_AUTHORIZED"
+  | "INVALID_INPUT"
+  | "OPEN_REVIEW_EXISTS"
+  | "BLOCKED_ENVELOPE"
+  | "STALE_ARTIFACT";
+
+export interface ReviewItemActionResult {
+  ok: boolean;
+  denialCode?: ReviewCenterDenialCode;
+  /** Kernel reason code (RVC_* / RVD_*) when a deterministic rule decided. */
+  reasonCode?: string;
+  inputErrors?: string[];
+  item?: ReviewItem;
+  decision?: ReviewDecisionRecord;
+  /** For supersedeReviewItem: the item that was superseded (item = replacement). */
+  supersededItem?: ReviewItem;
+  emittedEventIds: string[];
+}
+
+export interface CreateReviewItemInput {
+  organizationId: string;
+  clientId?: string | null;
+  artifactType: ReviewArtifactType;
+  artifactId: string;
+  /** REQUIRED: the reviewed artifact version — a new version requires a new review. */
+  artifactVersion: string;
+  /** REQUIRED: sha256 hex digest (64 lowercase hex) of the reviewed content — never the body. */
+  artifactDigest: string;
+  /** Defaults to `artifactType` (the founder 5-tuple's workflow dimension). */
+  workflowType?: ReviewArtifactType;
+  sourceFactSnapshots?: SourceFactSnapshot[];
+  ruleVersionsUsed?: string[];
+  aiRunId?: string | null;
+  aiModel?: string | null;
+  aiPromptVersion?: string | null;
+  confidence?: string | null;
+  /**
+   * From the AI envelope. Non-empty → the item is NEVER created: audited
+   * denial `RVC_BLOCKED_ENVELOPE`, kept out of every review queue
+   * (CLAUDE.md envelope contract).
+   */
+  prohibitedActionsDetected?: string[];
+  /** May only RAISE the kernel policy floor (resolveReviewPolicy clamps). */
+  riskClassification?: ReviewRiskClass;
+  requiredReviewerRole?: ReviewerRole;
+  /** Birth state: draft (default) or awaiting_review for gated AI output. */
+  state?: "draft" | "awaiting_review";
+  playbookId?: string | null;
+  playbookVersion?: string | null;
+  previousReviewItemId?: string | null;
+  /** Server-verified staff actor, or null for orchestrator/system-created items. */
+  actorStaffId: string | null;
+}
+
+export interface SubmitReviewItemInput {
+  organizationId: string;
+  reviewItemId: string;
+  actorStaffId: string;
+}
+
+export interface AssignReviewerInput {
+  organizationId: string;
+  reviewItemId: string;
+  reviewerStaffId: string;
+  actorStaffId: string;
+}
+
+export interface RecordReviewDecisionInput {
+  organizationId: string;
+  reviewItemId: string;
+  actorStaffId: string;
+  /** One of the five structured decisions. */
+  decision: string;
+  /** Structured RVD_* reason code — must be valid for the decision. */
+  decisionReasonCode: string;
+  /** Edited field NAMES only — never values; count feeds the kernel pairing. */
+  editedFields?: string[];
+  /** sha256 before/after digests per edited field — never content. */
+  modificationsDigest?: ModificationDigest[];
+  finalOutputSha256?: string | null;
+  detail?: string | null;
+}
+
+export interface PublishReviewItemInput {
+  organizationId: string;
+  reviewItemId: string;
+  actorStaffId: string;
+  /** The artifact's CURRENT version — compared against the reviewed one (stale check). */
+  currentArtifactVersion: string;
+  /** The artifact's CURRENT sha256 digest — compared against the reviewed one. */
+  currentArtifactDigest: string;
+  publishedResultRef?: string;
+}
+
+export interface WithdrawReviewItemInput {
+  organizationId: string;
+  reviewItemId: string;
+  actorStaffId: string;
+  detail?: string;
+}
+
+export interface SupersedeReviewItemInput {
+  organizationId: string;
+  reviewItemId: string;
+  /** Null = system-invoked (orchestrator replacement). */
+  actorStaffId: string | null;
+  /** The replacement review for the CHANGED artifact (new version/digest). */
+  replacement: {
+    artifactVersion: string;
+    artifactDigest: string;
+    /** Defaults to awaiting_review — the replacement lands back in the queue. */
+    state?: "draft" | "awaiting_review";
+    sourceFactSnapshots?: SourceFactSnapshot[];
+    ruleVersionsUsed?: string[];
+    aiRunId?: string | null;
+    aiModel?: string | null;
+    aiPromptVersion?: string | null;
+    confidence?: string | null;
+    prohibitedActionsDetected?: string[];
+  };
+}
+
+export interface RecordReviewOutcomeInput {
+  organizationId: string;
+  reviewItemId: string;
+  actorStaffId: string;
+  clientActionRef?: string;
+  clientActionStatus: ClientActionStatus;
+  outcome: ReviewOutcome;
+}
+
+export interface StaffReviewQueueFilters {
+  state?: ReviewItemState;
+  artifactType?: ReviewArtifactType;
+  clientId?: string;
+}
+
+/**
+ * The CLIENT-SAFE projection of a published review (founder matrix, Client
+ * row). Contains ONLY published items and ONLY these fields — drafts,
+ * rejected items, internal notes, reason codes, reviewer identity/metadata,
+ * decision history, confidence, and risk class are structurally EXCLUDED (a
+ * fresh object literal, never a filtered spread — test-asserted via
+ * Object.keys).
+ */
+export interface ClientPublishedReviewView {
+  reviewItemId: string;
+  artifactType: ReviewArtifactType;
+  artifactId: string;
+  publishedResultRef: string | null;
+  publishedAt: string;
+  clientActionRef: string | null;
+  clientActionStatus: ClientActionStatus | null;
+  outcome: ReviewOutcome | null;
+  outcomeRecordedAt: string | null;
+}
+
+export type PlaybookDenialCode =
+  | "ACTOR_NOT_IN_ORG"
+  | "PLAYBOOK_NOT_FOUND"
+  | "PLAYBOOK_KEY_EXISTS"
+  | "VERSION_NOT_FOUND"
+  | "VERSION_NOT_DRAFT"
+  | "NOT_AUTHORIZED"
+  | "APPROVAL_BLOCKED"
+  | "INVALID_INPUT";
+
+export interface PlaybookStoreResult {
+  ok: boolean;
+  denialCode?: PlaybookDenialCode;
+  /** Kernel reason code (PB_*) when a deterministic rule decided. */
+  reasonCode?: string;
+  inputErrors?: string[];
+  /** The discovery_required fields blocking approval/publication. */
+  blockedFields?: PlaybookContentFieldKey[];
+  playbook?: Playbook;
+  version?: PlaybookVersion;
+  emittedEventIds: string[];
+}
+
+export interface CreatePlaybookDraftInput {
+  organizationId: string;
+  playbookKey: string;
+  name: string;
+  actorStaffId: string;
+}
+
+export interface SavePlaybookVersionInput {
+  organizationId: string;
+  playbookId: string;
+  /** Plain semver, e.g. "1.0.0". */
+  version: string;
+  content: PlaybookContent;
+  actorStaffId: string;
+}
+
+export interface TransitionPlaybookVersionInput {
+  organizationId: string;
+  versionId: string;
+  toStatus: PlaybookVersionStatus;
+  actorStaffId: string;
+  /** The documented single-operator owner override (founder decision #2). */
+  ownerOverride?: PlaybookOwnerOverride;
+}
+
+export type WorkflowDiscoveryDenialCode =
+  | "ACTOR_NOT_IN_ORG"
+  | "ITEM_NOT_FOUND"
+  | "PLAYBOOK_NOT_FOUND"
+  | "VERSION_NOT_FOUND"
+  | "INVALID_INPUT";
+
+export interface WorkflowDiscoveryResult {
+  ok: boolean;
+  denialCode?: WorkflowDiscoveryDenialCode;
+  /** Kernel reason code (WD_*) when the discovery machine decided. */
+  reasonCode?: string;
+  inputErrors?: string[];
+  item?: WorkflowDiscoveryItem;
+  emittedEventIds: string[];
+}
+
+export interface RaiseWorkflowDiscoveryInput {
+  organizationId: string;
+  playbookId?: string | null;
+  checkpointRef?: string | null;
+  question: string;
+  context?: string;
+  /** Null = system/seed-raised. */
+  actorStaffId: string | null;
+}
+
+export interface ResolveWorkflowDiscoveryInput {
+  organizationId: string;
+  itemId: string;
+  toStatus: WorkflowDiscoveryStatus;
+  actorStaffId: string;
+  /** Required when toStatus = "answered". */
+  answer?: string;
+  /** Required when toStatus = "converted". */
+  convertedPlaybookVersionId?: string;
+}
 
 export class AfloStore {
   private readonly db: SyntheticDatabase;
@@ -3124,6 +3436,1458 @@ export class AfloStore {
       occurredAt: now.toISOString(),
     });
     return { ok: true, package: pkg };
+  }
+
+  // --- Human Review Center (review_center.v1.0.0) ---------------------------
+
+  /** The item, org-verified (mirrors the RLS-invisible not-found semantics). */
+  private findReviewItem(organizationId: string, reviewItemId: string): ReviewItem | undefined {
+    return this.db.reviewItems.find((r) => r.id === reviewItemId && r.organizationId === organizationId);
+  }
+
+  private findPlaybook(organizationId: string, playbookId: string): Playbook | undefined {
+    return this.db.playbooks.find((p) => p.id === playbookId && p.organizationId === organizationId);
+  }
+
+  private findPlaybookVersion(organizationId: string, versionId: string): PlaybookVersion | undefined {
+    return this.db.playbookVersions.find((v) => v.id === versionId && v.organizationId === organizationId);
+  }
+
+  /** Latest recorded readiness stage for the item's client (decision provenance). */
+  private stageAtDecisionFor(clientId: string | null) {
+    if (clientId === null) return null;
+    return this.db.assessments.filter((a) => a.clientId === clientId).at(-1)?.stage ?? null;
+  }
+
+  /**
+   * Create a Review Center queue item. Two hard gates run BEFORE anything is
+   * written: (1) the blocked-envelope gate — a non-empty
+   * `prohibitedActionsDetected` forces an audited `RVC_BLOCKED_ENVELOPE`
+   * denial and the item is NEVER created (it enters no queue); (2) the
+   * founder's ORG-SCOPED open-review uniqueness — at most one active open
+   * review per (organization, artifact_type, artifact_id, artifact_version,
+   * workflow_type); terminal reviews free the slot; a new artifact version
+   * requires a new review. Risk/role floors come from the kernel policy table
+   * and can only be RAISED by the caller. Denials never mutate.
+   */
+  createReviewItem(input: CreateReviewItemInput): ReviewItemActionResult {
+    const now = this.clock();
+    if (this.db.organization.id !== input.organizationId) {
+      return { ok: false, denialCode: "ACTOR_NOT_IN_ORG", emittedEventIds: [] };
+    }
+    const actor = input.actorStaffId !== null ? this.findActor(input.organizationId, input.actorStaffId) : null;
+    if (input.actorStaffId !== null && !actor) {
+      return { ok: false, denialCode: "ACTOR_NOT_IN_ORG", emittedEventIds: [] };
+    }
+    if (input.clientId != null && !this.findRecord(input.organizationId, input.clientId)) {
+      return { ok: false, denialCode: "CLIENT_NOT_FOUND", emittedEventIds: [] };
+    }
+    if (input.playbookId != null && !this.findPlaybook(input.organizationId, input.playbookId)) {
+      return { ok: false, denialCode: "PLAYBOOK_NOT_FOUND", emittedEventIds: [] };
+    }
+    if (
+      input.previousReviewItemId != null &&
+      !this.findReviewItem(input.organizationId, input.previousReviewItemId)
+    ) {
+      return { ok: false, denialCode: "REVIEW_ITEM_NOT_FOUND", emittedEventIds: [] };
+    }
+
+    // Blocked-envelope gate (audited; the item NEVER exists, in no queue).
+    const prohibited = input.prohibitedActionsDetected ?? [];
+    if (prohibited.length > 0) {
+      this.audit({
+        organizationId: input.organizationId,
+        actorStaffId: actor?.id ?? null,
+        action: "review.creation_denied",
+        targetType: "review_item",
+        targetId: input.artifactId,
+        detail: `blocked envelope for ${input.artifactType}/${input.artifactId}: ${prohibited.length} prohibited action(s) detected`,
+        reasonCode: "RVC_BLOCKED_ENVELOPE",
+        ruleVersion: REVIEW_CENTER_RULES_VERSION,
+        occurredAt: now.toISOString(),
+      });
+      return { ok: false, denialCode: "BLOCKED_ENVELOPE", reasonCode: "RVC_BLOCKED_ENVELOPE", emittedEventIds: [] };
+    }
+
+    const artifactVersion = input.artifactVersion?.trim() ?? "";
+    const inputErrors: string[] = [];
+    if (artifactVersion.length === 0) inputErrors.push("artifactVersion must be non-empty");
+    if (typeof input.artifactDigest !== "string" || !SHA256_HEX.test(input.artifactDigest)) {
+      inputErrors.push("artifactDigest must be a 64-character lowercase sha256 hex digest");
+    }
+    if (inputErrors.length > 0) return { ok: false, denialCode: "INVALID_INPUT", inputErrors, emittedEventIds: [] };
+
+    const workflowType = input.workflowType ?? input.artifactType;
+    // The kernel policy floor; caller values may only RAISE it (clamped).
+    const policy = resolveReviewPolicy(input.artifactType, {
+      riskClassification: input.riskClassification,
+      requiredReviewerRole: input.requiredReviewerRole,
+    });
+
+    // Founder decision #3 (verbatim tuple): one active open review per
+    // org-scoped 5-tuple. Terminal reviews do not prevent a new review.
+    const openExists = this.db.reviewItems.some(
+      (r) =>
+        r.organizationId === input.organizationId &&
+        r.artifactType === input.artifactType &&
+        r.artifactId === input.artifactId &&
+        r.artifactVersion === artifactVersion &&
+        r.workflowType === workflowType &&
+        (r.state === "draft" || r.state === "awaiting_review"),
+    );
+    if (openExists) {
+      this.audit({
+        organizationId: input.organizationId,
+        actorStaffId: actor?.id ?? null,
+        action: "review.creation_denied",
+        targetType: "review_item",
+        targetId: input.artifactId,
+        detail: `open review already exists for ${input.artifactType}/${input.artifactId}@${artifactVersion} (${workflowType})`,
+        reasonCode: "OPEN_REVIEW_EXISTS",
+        ruleVersion: REVIEW_CENTER_RULES_VERSION,
+        occurredAt: now.toISOString(),
+      });
+      return { ok: false, denialCode: "OPEN_REVIEW_EXISTS", emittedEventIds: [] };
+    }
+
+    const state = input.state ?? "draft";
+    this.counter += 1;
+    const item: ReviewItem = {
+      id: `rvi-${this.counter}`,
+      organizationId: input.organizationId,
+      clientId: input.clientId ?? null,
+      artifactType: input.artifactType,
+      artifactId: input.artifactId,
+      artifactVersion,
+      artifactDigest: input.artifactDigest,
+      workflowType,
+      sourceFactSnapshots: input.sourceFactSnapshots ?? [],
+      ruleVersionsUsed: input.ruleVersionsUsed ?? [],
+      aiRunId: input.aiRunId ?? null,
+      aiModel: input.aiModel ?? null,
+      aiPromptVersion: input.aiPromptVersion ?? null,
+      confidence: input.confidence ?? null,
+      riskClassification: policy.riskClassification,
+      requiredReviewerRole: policy.requiredReviewerRole,
+      state,
+      assignedReviewerStaffId: null,
+      reviewedByStaffId: null,
+      reviewedAt: null,
+      latestDecision: null,
+      latestDecisionReasonCode: null,
+      modificationsDigest: [],
+      publishedResultRef: null,
+      publishedAt: null,
+      playbookId: input.playbookId ?? null,
+      playbookVersion: input.playbookVersion ?? null,
+      previousReviewItemId: input.previousReviewItemId ?? null,
+      supersededByReviewItemId: null,
+      clientActionRef: null,
+      clientActionStatus: null,
+      outcome: null,
+      outcomeRecordedAt: null,
+      createdByStaffId: actor?.id ?? null,
+      // Direct-to-queue creation IS the submission (fresh metric anchor).
+      submittedAt: state === "awaiting_review" ? now.toISOString() : null,
+      createdAt: now.toISOString(),
+      updatedAt: now.toISOString(),
+    };
+    this.db.reviewItems.push(item);
+
+    const event = createEvent({
+      eventType: "ReviewItemCreated",
+      organizationId: input.organizationId,
+      aggregateId: item.id,
+      actorId: actor?.id ?? null,
+      occurredAt: now.toISOString(),
+      payload: {
+        reviewItemId: item.id,
+        clientId: item.clientId,
+        artifactType: item.artifactType,
+        artifactId: item.artifactId,
+        artifactVersion: item.artifactVersion,
+        artifactDigest: item.artifactDigest,
+        workflowType: item.workflowType,
+        riskClassification: item.riskClassification,
+        requiredReviewerRole: item.requiredReviewerRole,
+        state: item.state,
+        previousReviewItemId: item.previousReviewItemId,
+      },
+    });
+    this.outbox.push(toOutboxRecord(event, { now }));
+
+    this.audit({
+      organizationId: input.organizationId,
+      actorStaffId: actor?.id ?? null,
+      action: "review.created",
+      targetType: "review_item",
+      targetId: item.id,
+      detail: `${item.artifactType}/${item.artifactId}@${item.artifactVersion} (${item.workflowType}) born ${state}; risk ${item.riskClassification}, floor ${item.requiredReviewerRole}`,
+      reasonCode: state === "awaiting_review" ? "RVC_SUBMITTED" : "RVC_REVIEW_ALLOWED",
+      ruleVersion: REVIEW_CENTER_RULES_VERSION,
+      occurredAt: now.toISOString(),
+    });
+
+    return { ok: true, item, emittedEventIds: [event.eventId] };
+  }
+
+  /**
+   * Submit a draft into the review queue (kernel-gated). `submittedAt` stamps
+   * ONLY on the FIRST entry into awaiting_review — the review-time metric
+   * anchor never moves after that.
+   */
+  submitReviewItem(input: SubmitReviewItemInput): ReviewItemActionResult {
+    const now = this.clock();
+    const item = this.findReviewItem(input.organizationId, input.reviewItemId);
+    if (!item) return { ok: false, denialCode: "REVIEW_ITEM_NOT_FOUND", emittedEventIds: [] };
+    const actor = this.findActor(input.organizationId, input.actorStaffId);
+    if (!actor) return { ok: false, denialCode: "ACTOR_NOT_IN_ORG", emittedEventIds: [] };
+
+    const transition = reviewItemTransition(item.state, "awaiting_review");
+    if (!transition.allowed) {
+      this.audit({
+        organizationId: input.organizationId,
+        actorStaffId: actor.id,
+        action: "review.transition_denied",
+        targetType: "review_item",
+        targetId: item.id,
+        detail: `${item.state} → awaiting_review denied`,
+        reasonCode: transition.reasonCode,
+        ruleVersion: transition.ruleVersion,
+        occurredAt: now.toISOString(),
+      });
+      return { ok: false, reasonCode: transition.reasonCode, emittedEventIds: [] };
+    }
+
+    const firstSubmission = item.submittedAt === null;
+    item.state = "awaiting_review";
+    if (firstSubmission) item.submittedAt = now.toISOString();
+    item.updatedAt = now.toISOString();
+
+    const event = createEvent({
+      eventType: "ReviewItemSubmitted",
+      organizationId: input.organizationId,
+      aggregateId: item.id,
+      actorId: actor.id,
+      occurredAt: now.toISOString(),
+      payload: { reviewItemId: item.id, artifactType: item.artifactType, firstSubmission },
+    });
+    this.outbox.push(toOutboxRecord(event, { now }));
+
+    this.audit({
+      organizationId: input.organizationId,
+      actorStaffId: actor.id,
+      action: "review.submitted",
+      targetType: "review_item",
+      targetId: item.id,
+      detail: `${item.artifactType}/${item.artifactId}@${item.artifactVersion} entered the queue`,
+      reasonCode: transition.reasonCode,
+      ruleVersion: transition.ruleVersion,
+      occurredAt: now.toISOString(),
+    });
+
+    return { ok: true, item, emittedEventIds: [event.eventId] };
+  }
+
+  /**
+   * Assign a reviewer to an open item — organization_admin+ only (founder
+   * matrix: "Organization Admin: assign reviewers"). The assignee must be an
+   * org member holding a reviewer role.
+   */
+  assignReviewer(input: AssignReviewerInput): ReviewItemActionResult {
+    const now = this.clock();
+    const item = this.findReviewItem(input.organizationId, input.reviewItemId);
+    if (!item) return { ok: false, denialCode: "REVIEW_ITEM_NOT_FOUND", emittedEventIds: [] };
+    const actor = this.findActor(input.organizationId, input.actorStaffId);
+    if (!actor) return { ok: false, denialCode: "ACTOR_NOT_IN_ORG", emittedEventIds: [] };
+
+    const actorRole = reviewerRoleForMemberRole(actor.role);
+    if (actorRole !== "organization_admin" && actorRole !== "organization_owner") {
+      this.audit({
+        organizationId: input.organizationId,
+        actorStaffId: actor.id,
+        action: "review.assign_denied",
+        targetType: "review_item",
+        targetId: item.id,
+        detail: `assignment requires organization_admin+ (actor role: ${actor.role})`,
+        reasonCode: "RVC_INSUFFICIENT_ROLE",
+        ruleVersion: REVIEW_CENTER_RULES_VERSION,
+        occurredAt: now.toISOString(),
+      });
+      return { ok: false, denialCode: "NOT_AUTHORIZED", reasonCode: "RVC_INSUFFICIENT_ROLE", emittedEventIds: [] };
+    }
+
+    const reviewer = this.findActor(input.organizationId, input.reviewerStaffId);
+    if (!reviewer) return { ok: false, denialCode: "ACTOR_NOT_IN_ORG", emittedEventIds: [] };
+    if (reviewerRoleForMemberRole(reviewer.role) === null) {
+      return { ok: false, denialCode: "NOT_AUTHORIZED", reasonCode: "RVC_ROLE_NOT_REVIEWER", emittedEventIds: [] };
+    }
+    if (item.state !== "draft" && item.state !== "awaiting_review") {
+      return {
+        ok: false,
+        denialCode: "INVALID_INPUT",
+        inputErrors: [`cannot assign a reviewer to a ${item.state} item`],
+        emittedEventIds: [],
+      };
+    }
+
+    item.assignedReviewerStaffId = reviewer.id;
+    item.updatedAt = now.toISOString();
+
+    this.audit({
+      organizationId: input.organizationId,
+      actorStaffId: actor.id,
+      action: "review.assigned",
+      targetType: "review_item",
+      targetId: item.id,
+      detail: `reviewer ${reviewer.id} assigned to ${item.artifactType}/${item.artifactId}`,
+      reasonCode: "RVC_REVIEW_ALLOWED",
+      ruleVersion: REVIEW_CENTER_RULES_VERSION,
+      occurredAt: now.toISOString(),
+    });
+
+    return { ok: true, item, emittedEventIds: [] };
+  }
+
+  /**
+   * THE single decision entry point (mirrors
+   * `DrizzleReviewItemRepository.recordDecisionAndTransition`): reviewer
+   * policy (`canReview` — role floor + high-risk no-self-review) → decision
+   * legality (`applyReviewDecision` — modification pairing, structured reason
+   * codes, escalation ceiling) → append the APPEND-ONLY decision record AND
+   * move the item head in one mutation, so the head can never disagree with
+   * the log. An allowed escalation stays `awaiting_review` with the reviewer
+   * floor raised one rank (owner ceiling); per the kernel, `deferred` is a
+   * terminal STATE (ADR-0034). Denials are audited and never mutate.
+   */
+  recordReviewDecision(input: RecordReviewDecisionInput): ReviewItemActionResult {
+    const now = this.clock();
+    const item = this.findReviewItem(input.organizationId, input.reviewItemId);
+    if (!item) return { ok: false, denialCode: "REVIEW_ITEM_NOT_FOUND", emittedEventIds: [] };
+    const actor = this.findActor(input.organizationId, input.actorStaffId);
+    if (!actor) return { ok: false, denialCode: "ACTOR_NOT_IN_ORG", emittedEventIds: [] };
+
+    const reviewPolicy = canReview({
+      riskClassification: item.riskClassification,
+      requiredReviewerRole: item.requiredReviewerRole,
+      reviewerRole: reviewerRoleForMemberRole(actor.role),
+      reviewerMemberId: actor.id,
+      authorMemberId: item.createdByStaffId,
+    });
+    if (!reviewPolicy.allowed) {
+      this.audit({
+        organizationId: input.organizationId,
+        actorStaffId: actor.id,
+        action: "review.decision_denied",
+        targetType: "review_item",
+        targetId: item.id,
+        detail: `${input.decision} on ${item.artifactType}/${item.artifactId} denied (reviewer policy)`,
+        reasonCode: reviewPolicy.reasonCode,
+        ruleVersion: reviewPolicy.ruleVersion,
+        occurredAt: now.toISOString(),
+      });
+      return { ok: false, denialCode: "NOT_AUTHORIZED", reasonCode: reviewPolicy.reasonCode, emittedEventIds: [] };
+    }
+
+    const editedFields = input.editedFields ?? [];
+    const outcome = applyReviewDecision({
+      decision: input.decision,
+      fromState: item.state,
+      modifiedFieldCount: editedFields.length,
+      decisionReasonCode: input.decisionReasonCode,
+      requiredReviewerRole: item.requiredReviewerRole,
+    });
+    if (!outcome.allowed) {
+      this.audit({
+        organizationId: input.organizationId,
+        actorStaffId: actor.id,
+        action: "review.decision_denied",
+        targetType: "review_item",
+        targetId: item.id,
+        detail: `${input.decision} (${input.decisionReasonCode}) denied from ${item.state}`,
+        reasonCode: outcome.reasonCode,
+        ruleVersion: outcome.ruleVersion,
+        occurredAt: now.toISOString(),
+      });
+      return { ok: false, reasonCode: outcome.reasonCode, emittedEventIds: [] };
+    }
+
+    // Append the decision record and move the head together (the F3 idiom).
+    this.counter += 1;
+    const decision: ReviewDecisionRecord = {
+      id: `rvd-${this.counter}`,
+      organizationId: input.organizationId,
+      reviewItemId: item.id,
+      decision: input.decision as ReviewDecision,
+      reasonCode: input.decisionReasonCode,
+      ruleVersion: outcome.ruleVersion,
+      decidedByStaffId: actor.id,
+      clientStageAtDecision: this.stageAtDecisionFor(item.clientId),
+      workflowType: item.workflowType,
+      aiRunId: item.aiRunId,
+      agentVersion: null,
+      editedFields,
+      finalOutputSha256: input.finalOutputSha256 ?? null,
+      escalatedToRole: outcome.escalatedToRole ?? null,
+      detail: input.detail ?? null,
+      decidedAt: now.toISOString(),
+    };
+    this.db.reviewDecisions.push(decision);
+
+    item.state = outcome.toState as ReviewItemState;
+    item.latestDecision = decision.decision;
+    item.latestDecisionReasonCode = decision.reasonCode;
+    if (outcome.toState === "approved" || outcome.toState === "rejected" || outcome.toState === "deferred") {
+      item.reviewedByStaffId = actor.id;
+      item.reviewedAt = now.toISOString();
+    }
+    if (outcome.escalatedToRole !== undefined) item.requiredReviewerRole = outcome.escalatedToRole;
+    if (input.modificationsDigest !== undefined) item.modificationsDigest = input.modificationsDigest;
+    item.updatedAt = now.toISOString();
+
+    const event = createEvent({
+      eventType: "ReviewDecisionRecorded",
+      organizationId: input.organizationId,
+      aggregateId: item.id,
+      actorId: actor.id,
+      occurredAt: now.toISOString(),
+      payload: {
+        reviewItemId: item.id,
+        decisionId: decision.id,
+        decision: decision.decision,
+        reasonCode: decision.reasonCode,
+        toState: item.state,
+        escalatedToRole: decision.escalatedToRole,
+        modifiedFieldCount: editedFields.length,
+      },
+    });
+    this.outbox.push(toOutboxRecord(event, { now }));
+
+    this.audit({
+      organizationId: input.organizationId,
+      actorStaffId: actor.id,
+      action: "review.decided",
+      targetType: "review_item",
+      targetId: item.id,
+      detail: `${decision.decision} (${decision.reasonCode}) on ${item.artifactType}/${item.artifactId} → ${item.state}${
+        decision.escalatedToRole ? `; floor raised to ${decision.escalatedToRole}` : ""
+      }`,
+      reasonCode: outcome.reasonCode,
+      ruleVersion: outcome.ruleVersion,
+      occurredAt: now.toISOString(),
+    });
+
+    return { ok: true, item, decision, emittedEventIds: [event.eventId] };
+  }
+
+  /**
+   * Publish an APPROVED item to the client surface. Three gates, in order:
+   * kernel legality (published is reachable ONLY through approved), the
+   * founder-matrix publication role floor (`canPublishReviewItem` — Staff can
+   * NEVER publish high-risk artifacts), and the STALE-ARTIFACT invariant: the
+   * caller states the artifact's CURRENT version + digest and BOTH must match
+   * the reviewed ones — a changed artifact denies with `RVC_STALE_ARTIFACT`
+   * (audited), the item stays `approved`, and the correct path is
+   * supersession + a fresh review of the new version.
+   */
+  publishReviewItem(input: PublishReviewItemInput): ReviewItemActionResult {
+    const now = this.clock();
+    const item = this.findReviewItem(input.organizationId, input.reviewItemId);
+    if (!item) return { ok: false, denialCode: "REVIEW_ITEM_NOT_FOUND", emittedEventIds: [] };
+    const actor = this.findActor(input.organizationId, input.actorStaffId);
+    if (!actor) return { ok: false, denialCode: "ACTOR_NOT_IN_ORG", emittedEventIds: [] };
+
+    const transition = reviewItemTransition(item.state, "published");
+    if (!transition.allowed) {
+      this.audit({
+        organizationId: input.organizationId,
+        actorStaffId: actor.id,
+        action: "review.transition_denied",
+        targetType: "review_item",
+        targetId: item.id,
+        detail: `${item.state} → published denied`,
+        reasonCode: transition.reasonCode,
+        ruleVersion: transition.ruleVersion,
+        occurredAt: now.toISOString(),
+      });
+      return { ok: false, reasonCode: transition.reasonCode, emittedEventIds: [] };
+    }
+
+    const publishPolicy = canPublishReviewItem({
+      actorRole: reviewerRoleForMemberRole(actor.role),
+      risk: item.riskClassification,
+      requiredRole: item.requiredReviewerRole,
+    });
+    if (!publishPolicy.allowed) {
+      this.audit({
+        organizationId: input.organizationId,
+        actorStaffId: actor.id,
+        action: "review.publish_denied",
+        targetType: "review_item",
+        targetId: item.id,
+        detail: `publication of ${item.riskClassification}-risk ${item.artifactType} denied for role ${actor.role}`,
+        reasonCode: publishPolicy.reasonCode,
+        ruleVersion: publishPolicy.ruleVersion,
+        occurredAt: now.toISOString(),
+      });
+      return { ok: false, denialCode: "NOT_AUTHORIZED", reasonCode: publishPolicy.reasonCode, emittedEventIds: [] };
+    }
+
+    if (
+      input.currentArtifactVersion !== item.artifactVersion ||
+      input.currentArtifactDigest !== item.artifactDigest
+    ) {
+      this.audit({
+        organizationId: input.organizationId,
+        actorStaffId: actor.id,
+        action: "review.publish_denied_stale",
+        targetType: "review_item",
+        targetId: item.id,
+        detail: `artifact changed since review: reviewed ${item.artifactVersion}/${item.artifactDigest.slice(0, 12)}…, current ${input.currentArtifactVersion}/${input.currentArtifactDigest.slice(0, 12)}… — supersede and re-review`,
+        reasonCode: "RVC_STALE_ARTIFACT",
+        ruleVersion: REVIEW_CENTER_RULES_VERSION,
+        occurredAt: now.toISOString(),
+      });
+      return { ok: false, denialCode: "STALE_ARTIFACT", reasonCode: "RVC_STALE_ARTIFACT", emittedEventIds: [] };
+    }
+
+    item.state = "published";
+    item.publishedAt = now.toISOString();
+    if (input.publishedResultRef !== undefined) item.publishedResultRef = input.publishedResultRef;
+    item.updatedAt = now.toISOString();
+
+    const event = createEvent({
+      eventType: "ReviewItemPublished",
+      organizationId: input.organizationId,
+      aggregateId: item.id,
+      actorId: actor.id,
+      occurredAt: now.toISOString(),
+      payload: {
+        reviewItemId: item.id,
+        artifactType: item.artifactType,
+        artifactId: item.artifactId,
+        artifactVersion: item.artifactVersion,
+        artifactDigest: item.artifactDigest,
+        publishedByStaffId: actor.id,
+      },
+    });
+    this.outbox.push(toOutboxRecord(event, { now }));
+
+    this.audit({
+      organizationId: input.organizationId,
+      actorStaffId: actor.id,
+      action: "review.published",
+      targetType: "review_item",
+      targetId: item.id,
+      detail: `${item.artifactType}/${item.artifactId}@${item.artifactVersion} published`,
+      reasonCode: transition.reasonCode,
+      ruleVersion: transition.ruleVersion,
+      occurredAt: now.toISOString(),
+    });
+
+    return { ok: true, item, emittedEventIds: [event.eventId] };
+  }
+
+  /**
+   * Withdraw an item (author or organization_admin+; from draft or
+   * awaiting_review only — the kernel has no approved→withdrawn edge). The
+   * revision path: withdraw, then submit a NEW linked item.
+   */
+  withdrawReviewItem(input: WithdrawReviewItemInput): ReviewItemActionResult {
+    const now = this.clock();
+    const item = this.findReviewItem(input.organizationId, input.reviewItemId);
+    if (!item) return { ok: false, denialCode: "REVIEW_ITEM_NOT_FOUND", emittedEventIds: [] };
+    const actor = this.findActor(input.organizationId, input.actorStaffId);
+    if (!actor) return { ok: false, denialCode: "ACTOR_NOT_IN_ORG", emittedEventIds: [] };
+
+    const actorRole = reviewerRoleForMemberRole(actor.role);
+    const isAuthor = item.createdByStaffId === actor.id;
+    const isAdminPlus = actorRole === "organization_admin" || actorRole === "organization_owner";
+    if (!isAuthor && !isAdminPlus) {
+      this.audit({
+        organizationId: input.organizationId,
+        actorStaffId: actor.id,
+        action: "review.withdraw_denied",
+        targetType: "review_item",
+        targetId: item.id,
+        detail: `withdrawal requires the author or organization_admin+ (actor role: ${actor.role})`,
+        reasonCode: "RVC_INSUFFICIENT_ROLE",
+        ruleVersion: REVIEW_CENTER_RULES_VERSION,
+        occurredAt: now.toISOString(),
+      });
+      return { ok: false, denialCode: "NOT_AUTHORIZED", reasonCode: "RVC_INSUFFICIENT_ROLE", emittedEventIds: [] };
+    }
+
+    const transition = reviewItemTransition(item.state, "withdrawn");
+    if (!transition.allowed) {
+      this.audit({
+        organizationId: input.organizationId,
+        actorStaffId: actor.id,
+        action: "review.transition_denied",
+        targetType: "review_item",
+        targetId: item.id,
+        detail: `${item.state} → withdrawn denied`,
+        reasonCode: transition.reasonCode,
+        ruleVersion: transition.ruleVersion,
+        occurredAt: now.toISOString(),
+      });
+      return { ok: false, reasonCode: transition.reasonCode, emittedEventIds: [] };
+    }
+
+    item.state = "withdrawn";
+    item.updatedAt = now.toISOString();
+
+    const event = createEvent({
+      eventType: "ReviewItemWithdrawn",
+      organizationId: input.organizationId,
+      aggregateId: item.id,
+      actorId: actor.id,
+      occurredAt: now.toISOString(),
+      payload: { reviewItemId: item.id, artifactType: item.artifactType, withdrawnByStaffId: actor.id },
+    });
+    this.outbox.push(toOutboxRecord(event, { now }));
+
+    this.audit({
+      organizationId: input.organizationId,
+      actorStaffId: actor.id,
+      action: "review.withdrawn",
+      targetType: "review_item",
+      targetId: item.id,
+      detail: `${item.artifactType}/${item.artifactId}@${item.artifactVersion} withdrawn${input.detail ? `: ${input.detail}` : ""}`,
+      reasonCode: transition.reasonCode,
+      ruleVersion: transition.ruleVersion,
+      occurredAt: now.toISOString(),
+    });
+
+    return { ok: true, item, emittedEventIds: [event.eventId] };
+  }
+
+  /**
+   * System-invoked on replacement creation (the stale-artifact recovery
+   * path): create a fresh ReviewItem for the CHANGED artifact version and
+   * mark the old item superseded by it, linked both ways. The kernel gate on
+   * the old item runs FIRST, and the replacement is created through
+   * `createReviewItem` (all its gates apply) — a denial anywhere leaves
+   * everything untouched.
+   */
+  supersedeReviewItem(input: SupersedeReviewItemInput): ReviewItemActionResult {
+    const now = this.clock();
+    const old = this.findReviewItem(input.organizationId, input.reviewItemId);
+    if (!old) return { ok: false, denialCode: "REVIEW_ITEM_NOT_FOUND", emittedEventIds: [] };
+    const actor = input.actorStaffId !== null ? this.findActor(input.organizationId, input.actorStaffId) : null;
+    if (input.actorStaffId !== null && !actor) {
+      return { ok: false, denialCode: "ACTOR_NOT_IN_ORG", emittedEventIds: [] };
+    }
+
+    const transition = reviewItemTransition(old.state, "superseded");
+    if (!transition.allowed) {
+      this.audit({
+        organizationId: input.organizationId,
+        actorStaffId: actor?.id ?? null,
+        action: "review.transition_denied",
+        targetType: "review_item",
+        targetId: old.id,
+        detail: `${old.state} → superseded denied`,
+        reasonCode: transition.reasonCode,
+        ruleVersion: transition.ruleVersion,
+        occurredAt: now.toISOString(),
+      });
+      return { ok: false, reasonCode: transition.reasonCode, emittedEventIds: [] };
+    }
+
+    // The replacement inherits the artifact identity and provenance floors of
+    // the item it replaces; only the version/digest (and optional provenance)
+    // change. All createReviewItem gates apply — a denial creates nothing.
+    const created = this.createReviewItem({
+      organizationId: input.organizationId,
+      clientId: old.clientId,
+      artifactType: old.artifactType,
+      artifactId: old.artifactId,
+      artifactVersion: input.replacement.artifactVersion,
+      artifactDigest: input.replacement.artifactDigest,
+      workflowType: old.workflowType,
+      sourceFactSnapshots: input.replacement.sourceFactSnapshots,
+      ruleVersionsUsed: input.replacement.ruleVersionsUsed,
+      aiRunId: input.replacement.aiRunId,
+      aiModel: input.replacement.aiModel,
+      aiPromptVersion: input.replacement.aiPromptVersion,
+      confidence: input.replacement.confidence,
+      prohibitedActionsDetected: input.replacement.prohibitedActionsDetected,
+      riskClassification: old.riskClassification,
+      requiredReviewerRole: old.requiredReviewerRole,
+      state: input.replacement.state ?? "awaiting_review",
+      playbookId: old.playbookId,
+      playbookVersion: old.playbookVersion,
+      previousReviewItemId: old.id,
+      actorStaffId: input.actorStaffId,
+    });
+    if (!created.ok || !created.item) return created;
+
+    old.state = "superseded";
+    old.supersededByReviewItemId = created.item.id;
+    old.updatedAt = now.toISOString();
+
+    const event = createEvent({
+      eventType: "ReviewItemSuperseded",
+      organizationId: input.organizationId,
+      aggregateId: old.id,
+      actorId: actor?.id ?? null,
+      occurredAt: now.toISOString(),
+      payload: { reviewItemId: old.id, supersededByReviewItemId: created.item.id },
+    });
+    this.outbox.push(toOutboxRecord(event, { now }));
+
+    this.audit({
+      organizationId: input.organizationId,
+      actorStaffId: actor?.id ?? null,
+      action: "review.superseded",
+      targetType: "review_item",
+      targetId: old.id,
+      detail: `superseded by ${created.item.id} (${old.artifactId}@${old.artifactVersion} → @${created.item.artifactVersion})`,
+      reasonCode: transition.reasonCode,
+      ruleVersion: transition.ruleVersion,
+      occurredAt: now.toISOString(),
+    });
+
+    return {
+      ok: true,
+      item: created.item,
+      supersededItem: old,
+      emittedEventIds: [...created.emittedEventIds, event.eventId],
+    };
+  }
+
+  /**
+   * Record the measurable outcome of a PUBLISHED item (founder: outcome
+   * tracking closes the loop). Vocabulary-validated; audited.
+   */
+  recordReviewOutcome(input: RecordReviewOutcomeInput): ReviewItemActionResult {
+    const now = this.clock();
+    const item = this.findReviewItem(input.organizationId, input.reviewItemId);
+    if (!item) return { ok: false, denialCode: "REVIEW_ITEM_NOT_FOUND", emittedEventIds: [] };
+    const actor = this.findActor(input.organizationId, input.actorStaffId);
+    if (!actor) return { ok: false, denialCode: "ACTOR_NOT_IN_ORG", emittedEventIds: [] };
+
+    const inputErrors: string[] = [];
+    if (!CLIENT_ACTION_STATUSES.includes(input.clientActionStatus)) {
+      inputErrors.push(`unknown clientActionStatus "${input.clientActionStatus}"`);
+    }
+    if (!REVIEW_OUTCOMES.includes(input.outcome)) inputErrors.push(`unknown outcome "${input.outcome}"`);
+    if (inputErrors.length > 0) return { ok: false, denialCode: "INVALID_INPUT", inputErrors, emittedEventIds: [] };
+
+    if (item.state !== "published") {
+      this.audit({
+        organizationId: input.organizationId,
+        actorStaffId: actor.id,
+        action: "review.outcome_denied",
+        targetType: "review_item",
+        targetId: item.id,
+        detail: `outcome recording requires a published item (state: ${item.state})`,
+        reasonCode: "RVC_NOT_AWAITING_REVIEW",
+        ruleVersion: REVIEW_CENTER_RULES_VERSION,
+        occurredAt: now.toISOString(),
+      });
+      return {
+        ok: false,
+        denialCode: "INVALID_INPUT",
+        inputErrors: ["outcome can only be recorded on a published item"],
+        emittedEventIds: [],
+      };
+    }
+
+    if (input.clientActionRef !== undefined) item.clientActionRef = input.clientActionRef;
+    item.clientActionStatus = input.clientActionStatus;
+    item.outcome = input.outcome;
+    item.outcomeRecordedAt = now.toISOString();
+    item.updatedAt = now.toISOString();
+
+    const event = createEvent({
+      eventType: "ReviewOutcomeRecorded",
+      organizationId: input.organizationId,
+      aggregateId: item.id,
+      actorId: actor.id,
+      occurredAt: now.toISOString(),
+      payload: { reviewItemId: item.id, clientActionStatus: input.clientActionStatus, outcome: input.outcome },
+    });
+    this.outbox.push(toOutboxRecord(event, { now }));
+
+    this.audit({
+      organizationId: input.organizationId,
+      actorStaffId: actor.id,
+      action: "review.outcome_recorded",
+      targetType: "review_item",
+      targetId: item.id,
+      detail: `client action ${input.clientActionStatus}; outcome ${input.outcome}`,
+      reasonCode: "RVC_PUBLISHED",
+      ruleVersion: REVIEW_CENTER_RULES_VERSION,
+      occurredAt: now.toISOString(),
+    });
+
+    return { ok: true, item, emittedEventIds: [event.eventId] };
+  }
+
+  /** Staff queue projection — FULL metadata, org-verified, newest first. */
+  staffReviewQueue(organizationId: string, filters?: StaffReviewQueueFilters): ReviewItem[] {
+    if (this.db.organization.id !== organizationId) return [];
+    return this.db.reviewItems
+      .filter(
+        (r) =>
+          r.organizationId === organizationId &&
+          (filters?.state === undefined || r.state === filters.state) &&
+          (filters?.artifactType === undefined || r.artifactType === filters.artifactType) &&
+          (filters?.clientId === undefined || r.clientId === filters.clientId),
+      )
+      .slice()
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  }
+
+  /**
+   * The CLIENT-SAFE projection (founder matrix, Client row): ONLY published
+   * items, ONLY client-safe fields. Built as a fresh object literal so
+   * drafts, rejected items, internal notes, reason codes, reviewer
+   * identity/metadata, decision history, confidence, and risk class are
+   * STRUCTURALLY excluded — no spread, nothing to leak.
+   */
+  clientPublishedReviews(organizationId: string, clientId: string): ClientPublishedReviewView[] {
+    const record = this.findRecord(organizationId, clientId);
+    if (!record) return [];
+    return this.db.reviewItems
+      .filter((r) => r.organizationId === organizationId && r.clientId === clientId && r.state === "published")
+      .map((r) => ({
+        reviewItemId: r.id,
+        artifactType: r.artifactType,
+        artifactId: r.artifactId,
+        publishedResultRef: r.publishedResultRef,
+        publishedAt: r.publishedAt ?? r.updatedAt,
+        clientActionRef: r.clientActionRef,
+        clientActionStatus: r.clientActionStatus,
+        outcome: r.outcome,
+        outcomeRecordedAt: r.outcomeRecordedAt,
+      }));
+  }
+
+  /**
+   * The review analytics read-model, derived on every call from the raw
+   * records via the PURE `reviewMetricsFor` (ADR-0040: no stored aggregate
+   * can disagree with the records). Outcome-tracked items feed the action
+   * metrics; stage-advancement attribution lands with the domain bridges.
+   */
+  reviewMetrics(organizationId: string): ReviewMetrics {
+    const items = this.db.reviewItems.filter((r) => r.organizationId === organizationId);
+    const itemsById = new Map(items.map((i) => [i.id, i]));
+    const metricItems: ReviewItemMetricInput[] = items.map((i) => ({
+      id: i.id,
+      artifactType: i.artifactType,
+      state: i.state,
+      playbookId: i.playbookId,
+      playbookVersion: i.playbookVersion,
+      submittedAtIso: i.submittedAt,
+      publishedAtIso: i.publishedAt,
+    }));
+    const metricDecisions: ReviewDecisionMetricInput[] = this.db.reviewDecisions
+      .filter((d) => d.organizationId === organizationId)
+      .map((d) => ({
+        reviewItemId: d.reviewItemId,
+        decision: d.decision,
+        reviewerMemberId: d.decidedByStaffId,
+        submittedAtIso: itemsById.get(d.reviewItemId)?.submittedAt ?? d.decidedAt,
+        decidedAtIso: d.decidedAt,
+        modifiedFieldCount: d.editedFields.length,
+      }));
+    const metricActions: ActionOutcomeMetricInput[] = items
+      .filter((i) => i.clientActionRef !== null)
+      .map((i) => ({
+        reviewItemId: i.id,
+        playbookId: i.playbookId,
+        playbookVersion: i.playbookVersion,
+        completed: i.clientActionStatus === "completed",
+        clientResponded: i.clientActionStatus === "completed",
+        advancedToStage: null,
+      }));
+    return reviewMetricsFor(metricItems, metricDecisions, metricActions);
+  }
+
+  /** Review decisions for one item, org-verified, oldest first (append-only log). */
+  reviewDecisionsFor(organizationId: string, reviewItemId: string): ReviewDecisionRecord[] {
+    if (!this.findReviewItem(organizationId, reviewItemId)) return [];
+    return this.db.reviewDecisions.filter(
+      (d) => d.organizationId === organizationId && d.reviewItemId === reviewItemId,
+    );
+  }
+
+  // --- Professional Playbooks (playbook.v1.0.0) -----------------------------
+
+  /**
+   * Create a playbook identity (staff+; versioned content follows via
+   * `savePlaybookVersion`). Keys are org-unique.
+   */
+  createPlaybookDraft(input: CreatePlaybookDraftInput): PlaybookStoreResult {
+    const now = this.clock();
+    if (this.db.organization.id !== input.organizationId) {
+      return { ok: false, denialCode: "ACTOR_NOT_IN_ORG", emittedEventIds: [] };
+    }
+    const actor = this.findActor(input.organizationId, input.actorStaffId);
+    if (!actor) return { ok: false, denialCode: "ACTOR_NOT_IN_ORG", emittedEventIds: [] };
+
+    const policy = canActOnPlaybookVersion({
+      action: "draft",
+      actorRole: reviewerRoleForMemberRole(actor.role),
+      actorIsAuthor: true,
+      highImpact: false,
+      ownerOverride: null,
+      orgPolicyPermitsOverride: this.db.organization.allowSingleOperatorPlaybookOverride,
+    });
+    if (!policy.allowed) {
+      this.audit({
+        organizationId: input.organizationId,
+        actorStaffId: actor.id,
+        action: "playbook.transition_denied",
+        targetType: "playbook",
+        targetId: input.playbookKey,
+        detail: `create-draft denied for role ${actor.role}`,
+        reasonCode: policy.reasonCode,
+        ruleVersion: policy.ruleVersion,
+        occurredAt: now.toISOString(),
+      });
+      return { ok: false, denialCode: "NOT_AUTHORIZED", reasonCode: policy.reasonCode, emittedEventIds: [] };
+    }
+
+    const inputErrors: string[] = [];
+    if (input.playbookKey.trim().length === 0) inputErrors.push("playbookKey must be non-empty");
+    if (input.name.trim().length === 0) inputErrors.push("name must be non-empty");
+    if (inputErrors.length > 0) return { ok: false, denialCode: "INVALID_INPUT", inputErrors, emittedEventIds: [] };
+    if (
+      this.db.playbooks.some(
+        (p) => p.organizationId === input.organizationId && p.playbookKey === input.playbookKey,
+      )
+    ) {
+      return { ok: false, denialCode: "PLAYBOOK_KEY_EXISTS", emittedEventIds: [] };
+    }
+
+    this.counter += 1;
+    const playbook: Playbook = {
+      id: `pb-${this.counter}`,
+      organizationId: input.organizationId,
+      playbookKey: input.playbookKey,
+      name: input.name,
+      currentVersionId: null,
+      createdAt: now.toISOString(),
+      updatedAt: now.toISOString(),
+    };
+    this.db.playbooks.push(playbook);
+
+    this.audit({
+      organizationId: input.organizationId,
+      actorStaffId: actor.id,
+      action: "playbook.created",
+      targetType: "playbook",
+      targetId: playbook.id,
+      detail: `playbook "${input.playbookKey}" created`,
+      reasonCode: policy.reasonCode,
+      ruleVersion: PLAYBOOK_RULES_VERSION,
+      occurredAt: now.toISOString(),
+    });
+
+    return { ok: true, playbook, emittedEventIds: [] };
+  }
+
+  /**
+   * Save playbook version content — DRAFT-ONLY mutation behind the
+   * `validatePlaybookContent` gate. A new (playbook, version) creates a
+   * draft; an existing DRAFT version is revised in place (append-only once it
+   * leaves draft — `VERSION_NOT_DRAFT`). Drafts may freely carry
+   * `discovery_required` fields; those block approval, not drafting.
+   */
+  savePlaybookVersion(input: SavePlaybookVersionInput): PlaybookStoreResult {
+    const now = this.clock();
+    const playbook = this.findPlaybook(input.organizationId, input.playbookId);
+    if (!playbook) return { ok: false, denialCode: "PLAYBOOK_NOT_FOUND", emittedEventIds: [] };
+    const actor = this.findActor(input.organizationId, input.actorStaffId);
+    if (!actor) return { ok: false, denialCode: "ACTOR_NOT_IN_ORG", emittedEventIds: [] };
+
+    const existing = this.db.playbookVersions.find(
+      (v) => v.playbookId === input.playbookId && v.version === input.version,
+    );
+    if (existing && existing.status !== "draft") {
+      return { ok: false, denialCode: "VERSION_NOT_DRAFT", emittedEventIds: [] };
+    }
+
+    const policy = canActOnPlaybookVersion({
+      action: (existing ? "revise" : "draft") satisfies PlaybookAction,
+      actorRole: reviewerRoleForMemberRole(actor.role),
+      actorIsAuthor: existing ? existing.authorStaffId === actor.id : true,
+      highImpact: isHighImpactPlaybookContent(input.content),
+      ownerOverride: null,
+      orgPolicyPermitsOverride: this.db.organization.allowSingleOperatorPlaybookOverride,
+    });
+    if (!policy.allowed) {
+      this.audit({
+        organizationId: input.organizationId,
+        actorStaffId: actor.id,
+        action: "playbook.transition_denied",
+        targetType: "playbook_version",
+        targetId: existing?.id ?? `${input.playbookId}@${input.version}`,
+        detail: `${existing ? "revise" : "draft"} denied for role ${actor.role}`,
+        reasonCode: policy.reasonCode,
+        ruleVersion: policy.ruleVersion,
+        occurredAt: now.toISOString(),
+      });
+      return { ok: false, denialCode: "NOT_AUTHORIZED", reasonCode: policy.reasonCode, emittedEventIds: [] };
+    }
+
+    const inputErrors = input.version.trim().length === 0 ? ["version must be non-empty"] : [];
+    inputErrors.push(...validatePlaybookContent(input.content));
+    if (inputErrors.length > 0) return { ok: false, denialCode: "INVALID_INPUT", inputErrors, emittedEventIds: [] };
+
+    const historyEntry: PlaybookVersionReviewEvent = {
+      action: "saved",
+      actorStaffId: actor.id,
+      reasonCode: policy.reasonCode,
+      occurredAt: now.toISOString(),
+      ownerOverride: null,
+    };
+    let version: PlaybookVersion;
+    if (existing) {
+      existing.content = structuredClone(input.content);
+      existing.reviewHistory.push(historyEntry);
+      existing.updatedAt = now.toISOString();
+      version = existing;
+    } else {
+      this.counter += 1;
+      version = {
+        id: `pbv-${this.counter}`,
+        organizationId: input.organizationId,
+        playbookId: input.playbookId,
+        version: input.version,
+        status: "draft",
+        effectiveDate: null,
+        authorStaffId: actor.id,
+        approverStaffId: null,
+        approvedAt: null,
+        content: structuredClone(input.content),
+        reviewHistory: [historyEntry],
+        createdAt: now.toISOString(),
+        updatedAt: now.toISOString(),
+      };
+      this.db.playbookVersions.push(version);
+    }
+    playbook.updatedAt = now.toISOString();
+
+    const event = createEvent({
+      eventType: "PlaybookVersionSaved",
+      organizationId: input.organizationId,
+      aggregateId: playbook.id,
+      actorId: actor.id,
+      occurredAt: now.toISOString(),
+      payload: {
+        playbookId: playbook.id,
+        playbookVersionId: version.id,
+        version: version.version,
+        authorStaffId: version.authorStaffId,
+      },
+    });
+    this.outbox.push(toOutboxRecord(event, { now }));
+
+    this.audit({
+      organizationId: input.organizationId,
+      actorStaffId: actor.id,
+      action: "playbook.version_saved",
+      targetType: "playbook_version",
+      targetId: version.id,
+      detail: `${playbook.playbookKey}@${version.version} ${existing ? "revised" : "drafted"}`,
+      reasonCode: policy.reasonCode,
+      ruleVersion: PLAYBOOK_RULES_VERSION,
+      occurredAt: now.toISOString(),
+    });
+
+    return { ok: true, playbook, version, emittedEventIds: [event.eventId] };
+  }
+
+  /**
+   * Move a playbook version through the playbook.v1.0.0 machine under the
+   * founder's actor policy (decision 2026-07-23 #2): submit = staff+,
+   * approve = organization_admin+ (high-impact requires approver ≠ author),
+   * publish = organization_owner (never the author) — the documented
+   * single-operator owner override relaxes ONLY the separation rules and is
+   * recorded in the version's review history AND audited. `approved`/
+   * `published` stay DENIED while `contentBlocksApproval` is non-empty
+   * (ADR-0038/0041 — never weakened). Publishing supersedes the prior
+   * published version and moves `currentVersionId` in the same operation.
+   */
+  transitionPlaybookVersion(input: TransitionPlaybookVersionInput): PlaybookStoreResult {
+    const now = this.clock();
+    const version = this.findPlaybookVersion(input.organizationId, input.versionId);
+    if (!version) return { ok: false, denialCode: "VERSION_NOT_FOUND", emittedEventIds: [] };
+    const playbook = this.findPlaybook(input.organizationId, version.playbookId);
+    if (!playbook) return { ok: false, denialCode: "PLAYBOOK_NOT_FOUND", emittedEventIds: [] };
+    const actor = this.findActor(input.organizationId, input.actorStaffId);
+    if (!actor) return { ok: false, denialCode: "ACTOR_NOT_IN_ORG", emittedEventIds: [] };
+    if (input.toStatus === "superseded") {
+      return {
+        ok: false,
+        denialCode: "INVALID_INPUT",
+        inputErrors: ["supersession happens only through publishing a newer version"],
+        emittedEventIds: [],
+      };
+    }
+
+    const transition = playbookVersionTransition(version.status, input.toStatus);
+    if (!transition.allowed) {
+      this.audit({
+        organizationId: input.organizationId,
+        actorStaffId: actor.id,
+        action: "playbook.transition_denied",
+        targetType: "playbook_version",
+        targetId: version.id,
+        detail: `${version.status} → ${input.toStatus} denied`,
+        reasonCode: transition.reasonCode,
+        ruleVersion: transition.ruleVersion,
+        occurredAt: now.toISOString(),
+      });
+      return { ok: false, reasonCode: transition.reasonCode, emittedEventIds: [] };
+    }
+
+    // Founder actor policy. submit/approve/publish run the full separation
+    // kernel; reject/defer are reviewer decisions (organization_admin+ per
+    // "Organization Admin may review and approve"); withdraw = author or
+    // organization_admin+.
+    const actorRole = reviewerRoleForMemberRole(actor.role);
+    const isAuthor = version.authorStaffId === actor.id;
+    const kernelAction: PlaybookAction | null =
+      input.toStatus === "awaiting_review"
+        ? "submit"
+        : input.toStatus === "approved"
+          ? "approve"
+          : input.toStatus === "published"
+            ? "publish"
+            : null;
+    let usedOwnerOverride = false;
+    let policyReason = transition.reasonCode as string;
+    if (kernelAction !== null) {
+      const policy = canActOnPlaybookVersion({
+        action: kernelAction,
+        actorRole,
+        actorIsAuthor: isAuthor,
+        highImpact: isHighImpactPlaybookContent(version.content),
+        ownerOverride: input.ownerOverride ?? null,
+        orgPolicyPermitsOverride: this.db.organization.allowSingleOperatorPlaybookOverride,
+      });
+      if (!policy.allowed) {
+        this.audit({
+          organizationId: input.organizationId,
+          actorStaffId: actor.id,
+          action: "playbook.transition_denied",
+          targetType: "playbook_version",
+          targetId: version.id,
+          detail: `${kernelAction} denied for role ${actor.role}${isAuthor ? " (author)" : ""}`,
+          reasonCode: policy.reasonCode,
+          ruleVersion: policy.ruleVersion,
+          occurredAt: now.toISOString(),
+        });
+        return { ok: false, denialCode: "NOT_AUTHORIZED", reasonCode: policy.reasonCode, emittedEventIds: [] };
+      }
+      usedOwnerOverride = policy.usedOwnerOverride;
+      if (usedOwnerOverride) policyReason = "PB_OWNER_OVERRIDE";
+    } else {
+      const isAdminPlus = actorRole === "organization_admin" || actorRole === "organization_owner";
+      const allowed = input.toStatus === "withdrawn" ? isAuthor || isAdminPlus : isAdminPlus;
+      if (!allowed) {
+        this.audit({
+          organizationId: input.organizationId,
+          actorStaffId: actor.id,
+          action: "playbook.transition_denied",
+          targetType: "playbook_version",
+          targetId: version.id,
+          detail: `${version.status} → ${input.toStatus} denied for role ${actor.role}`,
+          reasonCode: "PB_ROLE_INSUFFICIENT",
+          ruleVersion: PLAYBOOK_RULES_VERSION,
+          occurredAt: now.toISOString(),
+        });
+        return { ok: false, denialCode: "NOT_AUTHORIZED", reasonCode: "PB_ROLE_INSUFFICIENT", emittedEventIds: [] };
+      }
+    }
+
+    // ADR-0038/0041 enforcement boundary (never weakened): a version carrying
+    // any discovery_required field can NEVER be approved or published.
+    if (input.toStatus === "approved" || input.toStatus === "published") {
+      const blocked = contentBlocksApproval(version.content);
+      if (blocked.length > 0) {
+        this.audit({
+          organizationId: input.organizationId,
+          actorStaffId: actor.id,
+          action: "playbook.transition_denied",
+          targetType: "playbook_version",
+          targetId: version.id,
+          detail: `${input.toStatus} blocked by discovery_required fields: ${blocked.join(", ")}`,
+          reasonCode: "APPROVAL_BLOCKED",
+          ruleVersion: PLAYBOOK_RULES_VERSION,
+          occurredAt: now.toISOString(),
+        });
+        return { ok: false, denialCode: "APPROVAL_BLOCKED", blockedFields: blocked, emittedEventIds: [] };
+      }
+    }
+
+    const emitted: DomainEvent[] = [];
+    let supersededVersionId: string | null = null;
+    version.status = input.toStatus;
+    version.updatedAt = now.toISOString();
+    if (input.toStatus === "approved") {
+      version.approvedAt = now.toISOString();
+      version.approverStaffId = actor.id;
+    }
+    if (input.toStatus === "published") {
+      if (version.effectiveDate === null) version.effectiveDate = now.toISOString();
+      const prior = this.db.playbookVersions.find(
+        (v) => v.playbookId === version.playbookId && v.status === "published" && v.id !== version.id,
+      );
+      if (prior) {
+        prior.status = "superseded";
+        prior.updatedAt = now.toISOString();
+        prior.reviewHistory.push({
+          action: "superseded",
+          actorStaffId: actor.id,
+          reasonCode: "PB_SUPERSEDED",
+          occurredAt: now.toISOString(),
+          ownerOverride: null,
+        });
+        supersededVersionId = prior.id;
+      }
+      playbook.currentVersionId = version.id;
+      playbook.updatedAt = now.toISOString();
+      emitted.push(
+        createEvent({
+          eventType: "PlaybookVersionPublished",
+          organizationId: input.organizationId,
+          aggregateId: playbook.id,
+          actorId: actor.id,
+          occurredAt: now.toISOString(),
+          payload: {
+            playbookId: playbook.id,
+            playbookVersionId: version.id,
+            version: version.version,
+            publishedByStaffId: actor.id,
+            supersededVersionId,
+            usedOwnerOverride,
+          },
+        }),
+      );
+    }
+
+    // Review history — the owner override is VISIBLE here (founder decision).
+    const historyAction: PlaybookVersionReviewEvent["action"] =
+      input.toStatus === "awaiting_review"
+        ? "submitted"
+        : (input.toStatus as PlaybookVersionReviewEvent["action"]);
+    version.reviewHistory.push({
+      action: historyAction,
+      actorStaffId: actor.id,
+      reasonCode: policyReason,
+      occurredAt: now.toISOString(),
+      ownerOverride: usedOwnerOverride && input.ownerOverride ? { reason: input.ownerOverride.reason } : null,
+    });
+
+    for (const event of emitted) this.outbox.push(toOutboxRecord(event, { now }));
+
+    if (usedOwnerOverride && input.ownerOverride) {
+      this.audit({
+        organizationId: input.organizationId,
+        actorStaffId: actor.id,
+        action: "playbook.owner_override",
+        targetType: "playbook_version",
+        targetId: version.id,
+        detail: `single-operator owner override on ${kernelAction}: ${input.ownerOverride.reason} (attested not regulated professional advice)`,
+        reasonCode: "PB_OWNER_OVERRIDE",
+        ruleVersion: PLAYBOOK_RULES_VERSION,
+        occurredAt: now.toISOString(),
+      });
+    }
+
+    this.audit({
+      organizationId: input.organizationId,
+      actorStaffId: actor.id,
+      action: input.toStatus === "published" ? "playbook.version_published" : "playbook.version_transitioned",
+      targetType: "playbook_version",
+      targetId: version.id,
+      detail: `${playbook.playbookKey}@${version.version}: → ${input.toStatus}${
+        supersededVersionId ? ` (supersedes ${supersededVersionId})` : ""
+      }`,
+      reasonCode: transition.reasonCode,
+      ruleVersion: transition.ruleVersion,
+      occurredAt: now.toISOString(),
+    });
+
+    return { ok: true, playbook, version, emittedEventIds: emitted.map((e) => e.eventId) };
+  }
+
+  /** Playbooks for one organization (identity + head pointer). */
+  playbooksFor(organizationId: string): Playbook[] {
+    return this.db.playbooks.filter((p) => p.organizationId === organizationId);
+  }
+
+  /** Versions of one playbook, org-verified, oldest first. */
+  playbookVersionsFor(organizationId: string, playbookId: string): PlaybookVersion[] {
+    if (!this.findPlaybook(organizationId, playbookId)) return [];
+    return this.db.playbookVersions.filter(
+      (v) => v.organizationId === organizationId && v.playbookId === playbookId,
+    );
+  }
+
+  // --- Workflow discovery (anti-invention queue) ----------------------------
+
+  /**
+   * Raise a concrete question for the founder about the real process
+   * (system/seed-raised when `actorStaffId` is null).
+   */
+  raiseWorkflowDiscoveryItem(input: RaiseWorkflowDiscoveryInput): WorkflowDiscoveryResult {
+    const now = this.clock();
+    if (this.db.organization.id !== input.organizationId) {
+      return { ok: false, denialCode: "ACTOR_NOT_IN_ORG", emittedEventIds: [] };
+    }
+    const actor = input.actorStaffId !== null ? this.findActor(input.organizationId, input.actorStaffId) : null;
+    if (input.actorStaffId !== null && !actor) {
+      return { ok: false, denialCode: "ACTOR_NOT_IN_ORG", emittedEventIds: [] };
+    }
+    if (input.playbookId != null && !this.findPlaybook(input.organizationId, input.playbookId)) {
+      return { ok: false, denialCode: "PLAYBOOK_NOT_FOUND", emittedEventIds: [] };
+    }
+    if (input.question.trim().length === 0) {
+      return { ok: false, denialCode: "INVALID_INPUT", inputErrors: ["question must be non-empty"], emittedEventIds: [] };
+    }
+
+    this.counter += 1;
+    const item: WorkflowDiscoveryItem = {
+      id: `wdi-${this.counter}`,
+      organizationId: input.organizationId,
+      playbookId: input.playbookId ?? null,
+      checkpointRef: input.checkpointRef ?? null,
+      question: input.question,
+      context: input.context ?? "",
+      status: "open",
+      raisedByStaffId: actor?.id ?? null,
+      answer: null,
+      answeredByStaffId: null,
+      answeredAt: null,
+      convertedPlaybookVersionId: null,
+      createdAt: now.toISOString(),
+      updatedAt: now.toISOString(),
+    };
+    this.db.workflowDiscoveryItems.push(item);
+
+    const event = createEvent({
+      eventType: "WorkflowDiscoveryRaised",
+      organizationId: input.organizationId,
+      aggregateId: item.id,
+      actorId: actor?.id ?? null,
+      occurredAt: now.toISOString(),
+      payload: { discoveryItemId: item.id, playbookId: item.playbookId, checkpointRef: item.checkpointRef },
+    });
+    this.outbox.push(toOutboxRecord(event, { now }));
+
+    this.audit({
+      organizationId: input.organizationId,
+      actorStaffId: actor?.id ?? null,
+      action: "discovery.raised",
+      targetType: "workflow_discovery_item",
+      targetId: item.id,
+      detail: `question raised${item.checkpointRef ? ` on ${item.checkpointRef}` : ""}`,
+      reasonCode: "WD_RAISED",
+      ruleVersion: PLAYBOOK_RULES_VERSION,
+      occurredAt: now.toISOString(),
+    });
+
+    return { ok: true, item, emittedEventIds: [event.eventId] };
+  }
+
+  /**
+   * Resolve a discovery item through the playbook.v1.0.0 discovery machine
+   * (`answered` requires the answer; `converted` requires the org-visible
+   * playbook version that absorbed it; reopening keeps the prior answer for
+   * revision). Denials are audited and never mutate.
+   */
+  resolveWorkflowDiscoveryItem(input: ResolveWorkflowDiscoveryInput): WorkflowDiscoveryResult {
+    const now = this.clock();
+    const item = this.db.workflowDiscoveryItems.find(
+      (d) => d.id === input.itemId && d.organizationId === input.organizationId,
+    );
+    if (!item) return { ok: false, denialCode: "ITEM_NOT_FOUND", emittedEventIds: [] };
+    const actor = this.findActor(input.organizationId, input.actorStaffId);
+    if (!actor) return { ok: false, denialCode: "ACTOR_NOT_IN_ORG", emittedEventIds: [] };
+
+    const transition = workflowDiscoveryTransition(item.status, input.toStatus);
+    if (!transition.allowed) {
+      this.audit({
+        organizationId: input.organizationId,
+        actorStaffId: actor.id,
+        action: "discovery.transition_denied",
+        targetType: "workflow_discovery_item",
+        targetId: item.id,
+        detail: `${item.status} → ${input.toStatus} denied`,
+        reasonCode: transition.reasonCode,
+        ruleVersion: transition.ruleVersion,
+        occurredAt: now.toISOString(),
+      });
+      return { ok: false, reasonCode: transition.reasonCode, emittedEventIds: [] };
+    }
+
+    if (input.toStatus === "answered") {
+      if (input.answer === undefined || input.answer.trim().length === 0) {
+        return { ok: false, denialCode: "INVALID_INPUT", inputErrors: ["answer is required"], emittedEventIds: [] };
+      }
+      item.answer = input.answer;
+      item.answeredByStaffId = actor.id;
+      item.answeredAt = now.toISOString();
+    }
+    if (input.toStatus === "converted") {
+      if (input.convertedPlaybookVersionId === undefined) {
+        return {
+          ok: false,
+          denialCode: "INVALID_INPUT",
+          inputErrors: ["convertedPlaybookVersionId is required"],
+          emittedEventIds: [],
+        };
+      }
+      if (!this.findPlaybookVersion(input.organizationId, input.convertedPlaybookVersionId)) {
+        return { ok: false, denialCode: "VERSION_NOT_FOUND", emittedEventIds: [] };
+      }
+      item.convertedPlaybookVersionId = input.convertedPlaybookVersionId;
+    }
+    item.status = input.toStatus;
+    item.updatedAt = now.toISOString();
+
+    const event = createEvent({
+      eventType: "WorkflowDiscoveryResolved",
+      organizationId: input.organizationId,
+      aggregateId: item.id,
+      actorId: actor.id,
+      occurredAt: now.toISOString(),
+      payload: {
+        discoveryItemId: item.id,
+        toStatus: input.toStatus,
+        convertedPlaybookVersionId: item.convertedPlaybookVersionId,
+      },
+    });
+    this.outbox.push(toOutboxRecord(event, { now }));
+
+    this.audit({
+      organizationId: input.organizationId,
+      actorStaffId: actor.id,
+      action: "discovery.resolved",
+      targetType: "workflow_discovery_item",
+      targetId: item.id,
+      detail: `→ ${input.toStatus}${item.convertedPlaybookVersionId ? ` (absorbed by ${item.convertedPlaybookVersionId})` : ""}`,
+      reasonCode: transition.reasonCode,
+      ruleVersion: transition.ruleVersion,
+      occurredAt: now.toISOString(),
+    });
+
+    return { ok: true, item, emittedEventIds: [event.eventId] };
+  }
+
+  /** Discovery queue for one organization, optionally filtered by status. */
+  workflowDiscoveryFor(organizationId: string, status?: WorkflowDiscoveryStatus): WorkflowDiscoveryItem[] {
+    return this.db.workflowDiscoveryItems.filter(
+      (d) => d.organizationId === organizationId && (status === undefined || d.status === status),
+    );
   }
 
   private findRecord(organizationId: string, id: string): ClientRecord | undefined {

@@ -7,13 +7,16 @@ import {
   REVIEW_DECISION_REASON_CODES,
   REVIEW_ITEM_STATES,
   applyReviewDecision,
+  canPublishReviewItem,
   canReview,
+  conciergeRiskFor,
   escalateReviewerRole,
   isDecisionReasonValid,
   isTerminalReviewState,
   resolveReviewPolicy,
   reviewItemTransition,
   reviewTransitionsFrom,
+  type ConciergeContentFlags,
   type ReviewItemState,
 } from "../src/review-center";
 import { getRule } from "../src/registry";
@@ -290,13 +293,15 @@ describe("reviewer policy — deny-by-default + separation of duties", () => {
 });
 
 describe("policy table + overrides", () => {
-  it("matches the founder's risk-tier directive EXACTLY (2026-07-22 §9)", () => {
+  it("matches the founder's risk-tier directive EXACTLY (2026-07-22 §9 + resolution 2026-07-23)", () => {
     // Exact-table assertion — a loop over a subset silently passes when a type
     // is misclassified, so we pin the WHOLE table. The directive lists
     // financial-summary publication and stage advancement as HIGH; concierge
-    // recommendations default HIGH under the eligibility-adjacent catch-all
-    // (flagged for explicit founder confirmation); only routine educational
-    // assignment sits at MEDIUM pending playbook discovery.
+    // recommendations default HIGH — FOUNDER-RESOLVED (continuous execution
+    // authorization 2026-07-23, decision 1): HIGH is the fail-safe when
+    // content flags are unknown, and only `conciergeRiskFor` (all seven
+    // criteria false) may deterministically classify low/medium. Only routine
+    // educational assignment sits at MEDIUM pending playbook discovery.
     expect(DEFAULT_REVIEW_POLICIES).toEqual({
       readiness_assessment: { riskClassification: "high", requiredReviewerRole: "staff" },
       roadmap_draft: { riskClassification: "high", requiredReviewerRole: "staff" },
@@ -332,9 +337,85 @@ describe("policy table + overrides", () => {
   });
 });
 
+describe("conciergeRiskFor — the founder's seven criteria (decision 2026-07-23 #1)", () => {
+  const noFlags: ConciergeContentFlags = {
+    containsCreditGuidance: false,
+    containsDebtPrioritization: false,
+    containsReadinessStageImplications: false,
+    containsPartnerOrProductRouting: false,
+    containsFinancialActionRecommendations: false,
+    containsHousingOrFundingReadinessImplications: false,
+    materiallyConsequential: false,
+  };
+
+  it("ANY single flag true → high, for each of the seven criteria", () => {
+    for (const key of Object.keys(noFlags) as (keyof ConciergeContentFlags)[]) {
+      expect(conciergeRiskFor({ ...noFlags, [key]: true }, "low"), key).toBe("high");
+      expect(conciergeRiskFor({ ...noFlags, [key]: true }, "medium"), key).toBe("high");
+    }
+  });
+
+  it("all flags false → the caller-chosen informational class (low or medium, never below)", () => {
+    expect(conciergeRiskFor(noFlags, "low")).toBe("low");
+    expect(conciergeRiskFor(noFlags, "medium")).toBe("medium");
+  });
+
+  it("multiple flags stay high; the DEFAULT_REVIEW_POLICIES fail-safe stays high", () => {
+    expect(
+      conciergeRiskFor({ ...noFlags, containsCreditGuidance: true, materiallyConsequential: true }, "low"),
+    ).toBe("high");
+    // The fail-safe when flags are unknown — the table default is HIGH.
+    expect(DEFAULT_REVIEW_POLICIES.concierge_recommendation.riskClassification).toBe("high");
+  });
+});
+
+describe("canPublishReviewItem — the founder-matrix publication floor", () => {
+  it("staff can NEVER publish a high-risk item, even when the required reviewer role is staff", () => {
+    const denied = canPublishReviewItem({ actorRole: "staff", risk: "high", requiredRole: "staff" });
+    expect(denied).toMatchObject({ allowed: false, reasonCode: "RVC_INSUFFICIENT_ROLE" });
+    expect(canPublishReviewItem({ actorRole: "organization_admin", risk: "high", requiredRole: "staff" }).allowed).toBe(true);
+    expect(canPublishReviewItem({ actorRole: "organization_owner", risk: "high", requiredRole: "staff" }).allowed).toBe(true);
+  });
+
+  it("a high-risk item escalated to the owner floor requires the owner even for admins", () => {
+    expect(
+      canPublishReviewItem({ actorRole: "organization_admin", risk: "high", requiredRole: "organization_owner" }),
+    ).toMatchObject({ allowed: false, reasonCode: "RVC_INSUFFICIENT_ROLE" });
+    expect(
+      canPublishReviewItem({ actorRole: "organization_owner", risk: "high", requiredRole: "organization_owner" }).allowed,
+    ).toBe(true);
+  });
+
+  it("medium/low items require rank ≥ the item's required reviewer role", () => {
+    expect(canPublishReviewItem({ actorRole: "staff", risk: "medium", requiredRole: "staff" }).allowed).toBe(true);
+    expect(canPublishReviewItem({ actorRole: "staff", risk: "low", requiredRole: "staff" }).allowed).toBe(true);
+    expect(
+      canPublishReviewItem({ actorRole: "staff", risk: "medium", requiredRole: "organization_admin" }),
+    ).toMatchObject({ allowed: false, reasonCode: "RVC_INSUFFICIENT_ROLE" });
+  });
+
+  it("denies a null role (Worker, Platform Admin) and non-reviewer roles, deny-by-default", () => {
+    expect(canPublishReviewItem({ actorRole: null, risk: "low", requiredRole: "staff" })).toMatchObject({
+      allowed: false,
+      reasonCode: "RVC_REVIEWER_NOT_MEMBER",
+    });
+    for (const role of ["client", "partner_viewer", "staff_advisor", ""]) {
+      expect(canPublishReviewItem({ actorRole: role, risk: "low", requiredRole: "staff" }).reasonCode, role).toBe(
+        "RVC_ROLE_NOT_REVIEWER",
+      );
+    }
+  });
+});
+
 describe("registry lockstep", () => {
-  it("registers all three review_center rules at the implementation version", () => {
-    for (const id of ["review_center.item_lifecycle", "review_center.decision", "review_center.reviewer_policy"]) {
+  it("registers all review_center rules at the implementation version", () => {
+    for (const id of [
+      "review_center.item_lifecycle",
+      "review_center.decision",
+      "review_center.reviewer_policy",
+      "review_center.publication_policy",
+      "review_center.concierge_risk",
+    ]) {
       const rule = getRule(id);
       expect(rule, id).toBeDefined();
       expect(rule!.version).toBe(REVIEW_CENTER_RULES_VERSION);

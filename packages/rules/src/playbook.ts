@@ -63,7 +63,17 @@ export type PlaybookReasonCode =
   | "PB_SUPERSEDED"
   | "PB_SAME_STATUS"
   | "PB_UNKNOWN_STATUS"
-  | "PB_ILLEGAL_TRANSITION";
+  | "PB_ILLEGAL_TRANSITION"
+  // Actor policy (founder decision 2026-07-23, #2 — author/approver
+  // separation), emitted by `canActOnPlaybookVersion`:
+  | "PB_ACTION_ALLOWED"
+  | "PB_OWNER_OVERRIDE"
+  | "PB_NO_MEMBERSHIP"
+  | "PB_ROLE_INSUFFICIENT"
+  | "PB_AUTHOR_PUBLISHER_SEPARATION"
+  | "PB_AUTHOR_APPROVER_SEPARATION"
+  | "PB_OVERRIDE_NOT_PERMITTED"
+  | "PB_OVERRIDE_REASON_REQUIRED";
 
 const ALLOWED: Record<PlaybookVersionStatus, Partial<Record<PlaybookVersionStatus, PlaybookReasonCode>>> = {
   draft: { awaiting_review: "PB_SUBMITTED", withdrawn: "PB_WITHDRAWN", superseded: "PB_SUPERSEDED" },
@@ -105,6 +115,139 @@ export function playbookVersionTransition(fromStatus: string, toStatus: string):
 
 export function playbookVersionTransitionsFrom(status: PlaybookVersionStatus): PlaybookVersionStatus[] {
   return Object.keys(ALLOWED[status]) as PlaybookVersionStatus[];
+}
+
+// --- 1b. Actor policy (founder decision 2026-07-23, #2 — verbatim) ----------
+//
+// "Staff Advisor may draft and revise. Organization Admin may review and
+// approve. Organization Owner may publish organization-wide playbooks. The
+// same person may not both author and publish a playbook version. High-impact
+// playbooks require separate author and approver identities. Platform Admin
+// may not approve or publish tenant content. Clients have no access to drafts
+// or internal review state. Where a tenant has only one authorized operator,
+// the system may allow a documented owner override only if: an explicit
+// reason is recorded; the override is audited; the content is not regulated
+// professional advice; the override is visible in review history; the
+// organization policy permits it."
+
+export const PLAYBOOK_ACTIONS = ["draft", "revise", "submit", "approve", "publish"] as const;
+export type PlaybookAction = (typeof PLAYBOOK_ACTIONS)[number];
+
+const PLAYBOOK_ROLE_RANK: Record<ReviewerRole, number> = {
+  staff: 0,
+  organization_admin: 1,
+  organization_owner: 2,
+};
+
+/** Minimum membership rank per action: draft/revise/submit = staff+, approve = OA+, publish = OO. */
+const PLAYBOOK_ACTION_FLOOR: Record<PlaybookAction, number> = {
+  draft: PLAYBOOK_ROLE_RANK.staff,
+  revise: PLAYBOOK_ROLE_RANK.staff,
+  submit: PLAYBOOK_ROLE_RANK.staff,
+  approve: PLAYBOOK_ROLE_RANK.organization_admin,
+  publish: PLAYBOOK_ROLE_RANK.organization_owner,
+};
+
+/**
+ * The documented single-operator owner override. `attestsNotRegulatedAdvice`
+ * is the literal `true` — the type cannot even represent an override that
+ * fails to attest the content is not regulated professional advice (the
+ * runtime check still enforces it for untyped callers).
+ */
+export interface PlaybookOwnerOverride {
+  reason: string;
+  attestsNotRegulatedAdvice: true;
+}
+
+export interface CanActOnPlaybookVersionInput {
+  action: PlaybookAction;
+  /**
+   * The actor's ORG MEMBERSHIP reviewer role, or null when the actor has no
+   * qualifying membership — Worker service, Platform Admin (structurally no
+   * tenant membership; may never approve or publish tenant content), clients,
+   * and partner viewers all land here and are ALWAYS denied.
+   */
+  actorRole: ReviewerRole | null;
+  /** Is the actor the version's author? */
+  actorIsAuthor: boolean;
+  /** High-impact iff the content carries any `high`-risk review checkpoint (see isHighImpactPlaybookContent). */
+  highImpact: boolean;
+  /** Non-null = the actor invokes the documented single-operator owner override. */
+  ownerOverride: PlaybookOwnerOverride | null;
+  /** The organization's `allowSingleOperatorPlaybookOverride` policy flag (default false). */
+  orgPolicyPermitsOverride: boolean;
+}
+
+export interface CanActOnPlaybookVersionResult {
+  allowed: boolean;
+  reasonCode: PlaybookReasonCode;
+  /**
+   * True only when the allow came THROUGH the owner override
+   * (reasonCode `PB_OWNER_OVERRIDE`) — the store MUST record the override
+   * (reason + audit + review history) whenever this is set.
+   */
+  usedOwnerOverride: boolean;
+  ruleVersion: string;
+}
+
+/**
+ * Deterministic actor policy for playbook version actions, deny-by-default.
+ * Order: membership required → role floor per action (never relaxed by the
+ * override) → separation of duties: the author may NEVER publish their own
+ * version (`PB_AUTHOR_PUBLISHER_SEPARATION`), and a HIGH-IMPACT version
+ * requires an approver who is not its author (`PB_AUTHOR_APPROVER_SEPARATION`).
+ * The owner override relaxes ONLY the separation rules, ONLY for an
+ * `organization_owner`, and ONLY when the org policy permits it AND the
+ * override carries a non-empty reason AND attests the content is not
+ * regulated professional advice — allowed then as `PB_OWNER_OVERRIDE` with
+ * `usedOwnerOverride: true` so the store records + audits it and it stays
+ * visible in review history.
+ */
+export function canActOnPlaybookVersion(input: CanActOnPlaybookVersionInput): CanActOnPlaybookVersionResult {
+  const base = { usedOwnerOverride: false, ruleVersion: PLAYBOOK_RULES_VERSION };
+  if (input.actorRole === null || !(REVIEWER_ROLES as readonly string[]).includes(input.actorRole)) {
+    return { ...base, allowed: false, reasonCode: "PB_NO_MEMBERSHIP" };
+  }
+  if (PLAYBOOK_ROLE_RANK[input.actorRole] < PLAYBOOK_ACTION_FLOOR[input.action]) {
+    return { ...base, allowed: false, reasonCode: "PB_ROLE_INSUFFICIENT" };
+  }
+
+  const separationViolation: PlaybookReasonCode | null =
+    input.action === "publish" && input.actorIsAuthor
+      ? "PB_AUTHOR_PUBLISHER_SEPARATION"
+      : input.action === "approve" && input.highImpact && input.actorIsAuthor
+        ? "PB_AUTHOR_APPROVER_SEPARATION"
+        : null;
+
+  if (separationViolation === null) {
+    return { ...base, allowed: true, reasonCode: "PB_ACTION_ALLOWED" };
+  }
+
+  // Only the documented owner override can relax a separation rule, and only
+  // for an organization_owner (the single-operator case the founder named).
+  if (input.ownerOverride === null || input.actorRole !== "organization_owner") {
+    return { ...base, allowed: false, reasonCode: separationViolation };
+  }
+  if (!input.orgPolicyPermitsOverride) {
+    return { ...base, allowed: false, reasonCode: "PB_OVERRIDE_NOT_PERMITTED" };
+  }
+  if (
+    input.ownerOverride.reason.trim().length === 0 ||
+    input.ownerOverride.attestsNotRegulatedAdvice !== true
+  ) {
+    return { ...base, allowed: false, reasonCode: "PB_OVERRIDE_REASON_REQUIRED" };
+  }
+  return { allowed: true, reasonCode: "PB_OWNER_OVERRIDE", usedOwnerOverride: true, ruleVersion: PLAYBOOK_RULES_VERSION };
+}
+
+/**
+ * Deterministic high-impact definition (founder decision 2026-07-23, #2 —
+ * resolved default): a playbook version is high-impact iff its content's
+ * `humanReviewCheckpoints` contains any checkpoint with
+ * `riskClassification: "high"`.
+ */
+export function isHighImpactPlaybookContent(content: PlaybookContent): boolean {
+  return content.humanReviewCheckpoints.some((cp) => cp.riskClassification === "high");
 }
 
 // --- 2. Content + field provenance ------------------------------------------
