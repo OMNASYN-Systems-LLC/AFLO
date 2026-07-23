@@ -15,8 +15,10 @@ import {
   handleIssueInvitation,
   type AcceptInvitationRouteDeps,
   type InvitationAuditEvent,
+  type InvitationAuditSink,
   type IssueInvitationRouteDeps,
 } from "../src/services/invitation-routes";
+import type { SensitiveDenialAuditEvent } from "../src/services/authorized-messaging";
 import { DrizzleAuditEventRepository } from "../src/repositories/audit-events";
 import { DrizzleInvitationRepository } from "../src/repositories/invitation";
 
@@ -90,6 +92,24 @@ function accepterCtx(afloUserId: string): SessionContext {
   return ctxFor({ afloUserId, role: "client", organizationId: ORG_A, linkedClientId: null });
 }
 
+/** No-op audit sink for tests where audit content is not under test (LOW-2). */
+const NOOP_AUDIT: InvitationAuditSink = {
+  record: async () => {},
+  recordSensitiveDenial: async () => {},
+};
+
+/** Recording sink separating CREATION events from sensitive DENIALS. */
+class RecordingInvitationSink implements InvitationAuditSink {
+  created: InvitationAuditEvent[] = [];
+  denials: SensitiveDenialAuditEvent[] = [];
+  async record(event: InvitationAuditEvent): Promise<void> {
+    this.created.push(event);
+  }
+  async recordSensitiveDenial(event: SensitiveDenialAuditEvent): Promise<void> {
+    this.denials.push(event);
+  }
+}
+
 function issueDeps(ctx: SessionContext | null, pair = PAIR): IssueInvitationRouteDeps {
   return {
     sessionProvider: providerOf(ctx),
@@ -97,6 +117,7 @@ function issueDeps(ctx: SessionContext | null, pair = PAIR): IssueInvitationRout
     now: () => NOW,
     newId: randomUUID,
     generateToken: () => pair,
+    auditSink: NOOP_AUDIT,
   };
 }
 
@@ -107,6 +128,7 @@ function acceptDeps(ctx: SessionContext | null, verifiedEmail: string | null): A
     verifiedEmail: async () => verifiedEmail,
     now: () => NOW,
     newMembershipId: randomUUID,
+    auditSink: NOOP_AUDIT,
   };
 }
 
@@ -487,12 +509,13 @@ describe("matrix §7 audit emission — the ADR-0042 deferral, closed early by A
     expect(JSON.stringify(row)).not.toContain("audit-accept"); // never the email
   });
 
-  it("an audit-write failure never fails the COMMITTED request; denials emit nothing", async () => {
+  it("an audit-write failure never fails the COMMITTED request; a throwing failure handler changes nothing", async () => {
     const failures: unknown[] = [];
     const result = await handleIssueInvitation(
       {
         ...issueDeps(ownerCtx(), generateInvitationToken()),
         auditSink: {
+          ...NOOP_AUDIT,
           record: async () => {
             throw new Error("audit store down");
           },
@@ -504,23 +527,179 @@ describe("matrix §7 audit emission — the ADR-0042 deferral, closed early by A
     expect(result.status).toBe(201); // the issuance already committed — never unwound
     expect(failures).toHaveLength(1);
 
-    const recorded: InvitationAuditEvent[] = [];
-    const denied = await handleIssueInvitation(
+    // LOW-1: even a THROWING failure handler cannot change the response.
+    const doubleFault = await handleIssueInvitation(
       {
-        ...issueDeps(
-          ctxFor({ afloUserId: users.clientUser!, role: "client", organizationId: ORG_A, linkedClientId: clientA1 }),
-          generateInvitationToken(),
-        ),
+        ...issueDeps(ownerCtx(), generateInvitationToken()),
         auditSink: {
-          record: async (e) => {
-            recorded.push(e);
+          ...NOOP_AUDIT,
+          record: async () => {
+            throw new Error("audit store down");
           },
         },
+        onAuditFailure: () => {
+          throw new Error("failure handler exploded");
+        },
       },
-      { email: "denied-audit@x.co", intendedRole: "staff_advisor" },
+      { email: "audit-double-fault@x.co", intendedRole: "staff_advisor" },
     );
-    expect(denied.status).toBe(403);
-    expect(recorded).toEqual([]); // this sink is the §7 row-1 CREATION audit, not the denial surface
+    expect(doubleFault.status).toBe(201);
+  });
+});
+
+describe("sensitive-denial audit emission on the invitation routes (founder decision 4, ADR-0044)", () => {
+  it("issuance by an UNRESOLVED caller → 401 unchanged; one ambiguous_identity denial (null-org path)", async () => {
+    const sink = new RecordingInvitationSink();
+    const result = await handleIssueInvitation({ ...issueDeps(null), auditSink: sink }, {
+      email: "unauth-denial@x.co",
+      intendedRole: "staff_advisor",
+    });
+    expect(result).toEqual({ status: 401, body: { ok: false, error: "unauthenticated" } });
+    expect(sink.created).toEqual([]);
+    expect(sink.denials).toHaveLength(1);
+    expect(sink.denials[0]).toMatchObject({
+      organizationId: null,
+      afloUserId: null,
+      actorRole: null,
+      reason: "ambiguous_identity",
+      engineReason: "unauthenticated",
+      permission: "organization.manage_members",
+      target: { type: "invitation", id: null },
+      occurredAt: NOW,
+    });
+  });
+
+  it("issuance denied by the engine (client role) → 403 unchanged; publication_without_authority, org-scoped", async () => {
+    const sink = new RecordingInvitationSink();
+    const ctx = ctxFor({ afloUserId: users.clientUser!, role: "client", organizationId: ORG_A, linkedClientId: clientA1 });
+    const result = await handleIssueInvitation(
+      { ...issueDeps(ctx, generateInvitationToken()), auditSink: sink },
+      { email: "client-denial@x.co", intendedRole: "staff_advisor" },
+    );
+    expect(result).toEqual({ status: 403, body: { ok: false, error: "permission_denied" } });
+    expect(sink.denials).toHaveLength(1);
+    expect(sink.denials[0]).toMatchObject({
+      organizationId: ORG_A,
+      afloUserId: users.clientUser,
+      actorRole: "client",
+      actorClientId: clientA1,
+      reason: "publication_without_authority",
+      engineReason: "permission_denied",
+    });
+  });
+
+  it("issuance by a platform admin (no tenant) → 403 unchanged; platform_admin_cross_tenant_access (null-org)", async () => {
+    const sink = new RecordingInvitationSink();
+    const ctx = ctxFor({ afloUserId: users.owner!, role: "platform_admin", organizationId: null });
+    const result = await handleIssueInvitation({ ...issueDeps(ctx), auditSink: sink }, {
+      email: "pa-denial@x.co",
+      intendedRole: "staff_advisor",
+    });
+    expect(result).toEqual({ status: 403, body: { ok: false, error: "no_active_membership" } });
+    expect(sink.denials).toHaveLength(1);
+    expect(sink.denials[0]).toMatchObject({
+      organizationId: null,
+      reason: "platform_admin_cross_tenant_access",
+      engineReason: "no_active_membership",
+    });
+  });
+
+  it("kernel/validation 400s are NOT sensitive denials — no emission", async () => {
+    const sink = new RecordingInvitationSink();
+    const result = await handleIssueInvitation({ ...issueDeps(ownerCtx()), auditSink: sink }, {
+      email: "not-an-email",
+      intendedRole: "client",
+    });
+    expect(result.status).toBe(400);
+    expect(sink.denials).toEqual([]);
+    expect(sink.created).toEqual([]);
+  });
+
+  it("accept: invalid_token vs email_mismatch stay BYTE-IDENTICAL 404s while the INTERNAL reasons differ", async () => {
+    const sinkInvalid = new RecordingInvitationSink();
+    const invalid = await handleAcceptInvitation(
+      { ...acceptDeps(accepterCtx(users.wrong!), "wrong@u.co"), auditSink: sinkInvalid },
+      { token: generateInvitationToken().token }, // never seeded
+    );
+    const sinkMismatch = new RecordingInvitationSink();
+    const mismatch = await handleAcceptInvitation(
+      { ...acceptDeps(accepterCtx(users.wrong!), "wrong@u.co"), auditSink: sinkMismatch },
+      { token: tokens.mismatch }, // live token, wrong verified identity
+    );
+
+    // Externally indistinguishable (the ADR-0042 anti-oracle rule holds)…
+    expect(invalid).toEqual({ status: 404, body: { ok: false, error: "invitation_not_found" } });
+    expect(mismatch).toEqual(invalid);
+
+    // …while the internal audit preserves DISTINCT reasons (founder decision 4).
+    expect(sinkInvalid.denials).toHaveLength(1);
+    expect(sinkInvalid.denials[0]).toMatchObject({
+      organizationId: null, // no invitation resolved — nothing to scope under
+      reason: "ambiguous_identity",
+      engineReason: "invalid_token",
+      target: { type: "invitation", id: null },
+    });
+    expect(sinkMismatch.denials).toHaveLength(1);
+    expect(sinkMismatch.denials[0]).toMatchObject({
+      organizationId: ORG_A, // the INVITATION's org, known internally only
+      afloUserId: users.wrong,
+      reason: "ownership_mismatch",
+      engineReason: "email_mismatch",
+    });
+    expect(sinkMismatch.denials[0]!.target.type).toBe("invitation");
+    expect(sinkMismatch.denials[0]!.target.id).not.toBeNull(); // the resolved invitation id
+  });
+
+  it("accept: unresolved caller and no_verified_email → ambiguous_identity; response bytes unchanged", async () => {
+    const sinkUnauth = new RecordingInvitationSink();
+    const unauth = await handleAcceptInvitation(
+      { ...acceptDeps(null, "staff-a@x.co"), auditSink: sinkUnauth },
+      { token: generateInvitationToken().token },
+    );
+    expect(unauth).toEqual({ status: 401, body: { ok: false, error: "unauthenticated" } });
+    expect(sinkUnauth.denials).toHaveLength(1);
+    expect(sinkUnauth.denials[0]).toMatchObject({
+      organizationId: null,
+      afloUserId: null,
+      reason: "ambiguous_identity",
+      engineReason: "unauthenticated",
+      permission: null,
+    });
+
+    const sinkNoEmail = new RecordingInvitationSink();
+    const noEmail = await handleAcceptInvitation(
+      { ...acceptDeps(accepterCtx(users.wrong!), null), auditSink: sinkNoEmail },
+      { token: generateInvitationToken().token },
+    );
+    expect(noEmail).toEqual({ status: 401, body: { ok: false, error: "no_verified_email" } });
+    expect(sinkNoEmail.denials).toHaveLength(1);
+    expect(sinkNoEmail.denials[0]).toMatchObject({
+      organizationId: ORG_A, // the caller's own org context (accepterCtx)
+      afloUserId: users.wrong,
+      reason: "ambiguous_identity",
+      engineReason: "no_verified_email",
+    });
+  });
+
+  it("terminal states are NOT sensitive denials — a double-accept 409 emits nothing", async () => {
+    const sink = new RecordingInvitationSink();
+    const second = await handleAcceptInvitation(
+      { ...acceptDeps(accepterCtx(users.double!), "double@x.co"), auditSink: sink },
+      { token: tokens.double }, // already accepted earlier in this suite
+    );
+    expect(second).toEqual({ status: 409, body: { ok: false, error: "already_accepted" } });
+    expect(sink.denials).toEqual([]);
+    expect(sink.created).toEqual([]);
+  });
+
+  it("a 400 missing_token is a request-shape error — no emission", async () => {
+    const sink = new RecordingInvitationSink();
+    const result = await handleAcceptInvitation(
+      { ...acceptDeps(accepterCtx(users.wrong!), "wrong@u.co"), auditSink: sink },
+      {},
+    );
+    expect(result).toEqual({ status: 400, body: { ok: false, error: "missing_token" } });
+    expect(sink.denials).toEqual([]);
   });
 });
 

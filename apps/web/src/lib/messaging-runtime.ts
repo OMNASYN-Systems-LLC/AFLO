@@ -35,13 +35,16 @@ export function composeMessagingDeps(env: NodeJS.ProcessEnv): MessagingRouteDeps
   if (!cipher) return null; // malformed key — fail closed, never a partial runtime
   const tenant = tenantHandle(env.DATABASE_URL ?? "");
   const resolver = resolverHandle(env.AUTH_RESOLVER_DATABASE_URL ?? "");
+  const now = () => new Date();
   return {
     sessionProvider: createSessionProvider(resolver.db),
     messaging: new AuthorizedMessagingService(
       new DrizzleMessagingRepository(tenant.db, cipher),
       new DrizzleAuditEventRepository(tenant.db),
+      undefined, // default secondary-error logger
+      now, // ONE clock for the route: responses and audit occurredAt agree
     ),
-    now: () => new Date(),
+    now,
   };
 }
 

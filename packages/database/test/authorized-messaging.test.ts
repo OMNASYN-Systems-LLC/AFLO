@@ -155,7 +155,7 @@ function setup(threads: ConversationThread[] = [thread("t1", "client-1"), thread
     repo,
     sink,
     auditFailures,
-    svc: new AuthorizedMessagingService(repo, sink, (err) => auditFailures.push(err)),
+    svc: new AuthorizedMessagingService(repo, sink, (err) => auditFailures.push(err), () => NOW),
   };
 }
 
@@ -313,6 +313,7 @@ describe("AuthorizedMessagingService — sensitive-denial audit emission (founde
       engineReason: "not_owner",
       permission: "message.read",
       target: { type: "conversation_thread", id: "t2" },
+      occurredAt: NOW, // the INJECTED clock, never wall time
     });
   });
 
@@ -456,6 +457,22 @@ describe("AuthorizedMessagingService — sensitive-denial audit emission (founde
       reason: "not_owner",
     });
     expect(auditFailures).toEqual([sink.failWith]);
+  });
+
+  it("a THROWING failure handler never replaces the denial either (double-fault safe)", async () => {
+    const repo = new RecordingRepo();
+    repo.threads.set("t2", thread("t2", "client-2"));
+    const sink = new RecordingAuditSink();
+    sink.failWith = new Error("audit store down");
+    const svc = new AuthorizedMessagingService(
+      repo,
+      sink,
+      () => {
+        throw new Error("failure handler exploded");
+      },
+      () => NOW,
+    );
+    await expect(svc.getThread(clientCtx("client-1"), "t2")).rejects.toThrow(MessagingAccessDeniedError);
   });
 
   it("happy paths and plain not-found emit NOTHING (denials only, no noise)", async () => {

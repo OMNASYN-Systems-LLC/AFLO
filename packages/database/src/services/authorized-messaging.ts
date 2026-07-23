@@ -101,54 +101,78 @@ export type SensitiveDenialReason =
   | "platform_admin_cross_tenant_access"
   | "publication_without_authority";
 
-/** What a sensitive denial targeted — an id + coarse type, never content. */
-export interface MessagingDenialTarget {
-  type: "conversation_thread" | "client";
-  id: string;
+/**
+ * What a sensitive denial targeted — an id + coarse type, never content.
+ * `id` is null when the denial precedes any resource (e.g. an invitation
+ * issuance denied before an invitation exists).
+ */
+export interface SensitiveDenialTarget {
+  type: "conversation_thread" | "client" | "invitation";
+  id: string | null;
 }
 
+/** @see SensitiveDenialTarget — historical name from the B9 messaging slice. */
+export type MessagingDenialTarget = SensitiveDenialTarget;
+
 /**
- * One sensitive-denial audit event. Ids, roles, and reason codes ONLY — never
- * message content, tokens, or PII. `organizationId` is null exactly when the
- * denial IS the missing org context (no tenant existed to scope under).
+ * One sensitive-denial audit event (shared by every route-enforcement
+ * surface — messaging AND invitations). Ids, roles, and reason codes ONLY —
+ * never message content, tokens, emails, or PII. `organizationId` is null
+ * exactly when no tenant context exists to scope under (the denial IS the
+ * missing/unknown org). `afloUserId`/`actorRole` are null when the denial
+ * precedes any resolved identity (an unauthenticated caller).
  */
-export interface MessagingDenialAuditEvent {
+export interface SensitiveDenialAuditEvent {
   organizationId: string | null;
-  afloUserId: string;
-  actorRole: Role;
+  afloUserId: string | null;
+  actorRole: Role | null;
   actorMembershipId: string | null;
   actorClientId: string | null;
   /** The DISTINCT internal category (founder decision 4). */
   reason: SensitiveDenialReason;
-  /** The engine's stable code — what the thrown error carries. */
-  engineReason: DenialReason;
-  permission: Permission;
-  target: MessagingDenialTarget;
+  /**
+   * The stable internal denial code — the engine `DenialReason` where the
+   * engine decided, or the route-level code (e.g. `email_mismatch`) where the
+   * denial precedes/bypasses the engine. What the external surface carries
+   * (or deliberately does not).
+   */
+  engineReason: string;
+  /** Null when no engine permission governs the denied action (e.g. accept-by-token). */
+  permission: Permission | null;
+  target: SensitiveDenialTarget;
   occurredAt: Date;
 }
+
+/** @see SensitiveDenialAuditEvent — historical name from the B9 messaging slice. */
+export type MessagingDenialAuditEvent = SensitiveDenialAuditEvent;
 
 /**
  * REQUIRED audit port (production: `DrizzleAuditEventRepository`). A rejected
  * promise must not — and does not — suppress the denial (see `deny`).
  */
-export interface MessagingDenialAuditSink {
-  recordSensitiveDenial(event: MessagingDenialAuditEvent): Promise<void>;
+export interface SensitiveDenialAuditSink {
+  recordSensitiveDenial(event: SensitiveDenialAuditEvent): Promise<void>;
 }
+
+/** @see SensitiveDenialAuditSink — historical name from the B9 messaging slice. */
+export type MessagingDenialAuditSink = SensitiveDenialAuditSink;
 
 /**
  * Map an engine denial to the closest founder category (ADR-0044 §mapping).
  * `not_owner` splits by target: a thread target is an attempt on another
- * client's CONVERSATION (`wrong_client_access`); a client target is an attempt
- * to act AS/FOR another client (`ownership_mismatch`). `permission_denied` on
- * the messaging surface is an attempt to publish into a client channel without
- * the authority to do so. `consent_required`/`invalid_record_state` are
- * structurally unreachable here (the service never sets those resource gates)
- * but map fail-safe rather than throwing on an unknown code.
+ * client's CONVERSATION (`wrong_client_access`); any other target is an
+ * attempt to act AS/FOR another client (`ownership_mismatch`).
+ * `permission_denied` on a client-facing surface is an attempt to publish
+ * into a client channel without the authority to do so.
+ * `consent_required`/`invalid_record_state` are structurally unreachable in
+ * the current callers (no resource gates set) but map fail-safe rather than
+ * throwing on an unknown code. Shared with the invitation route services
+ * (MEDIUM-1 fold): engine-decided invitation denials use the SAME mapping.
  */
-function toSensitiveReason(
+export function toSensitiveReason(
   engineReason: DenialReason,
-  actorRole: Role,
-  target: MessagingDenialTarget,
+  actorRole: Role | null,
+  target: SensitiveDenialTarget,
 ): SensitiveDenialReason {
   switch (engineReason) {
     case "cross_tenant":
@@ -186,37 +210,42 @@ interface DerivedSender {
 
 export class AuthorizedMessagingService {
   private readonly repo: MessagingRepository;
-  private readonly auditSink: MessagingDenialAuditSink;
+  private readonly auditSink: SensitiveDenialAuditSink;
   private readonly onAuditFailure: (error: unknown) => void;
+  private readonly clock: () => Date;
 
   constructor(
     repo: MessagingRepository,
     /** REQUIRED (founder decision 4): every sensitive denial is audited. */
-    auditSink: MessagingDenialAuditSink,
+    auditSink: SensitiveDenialAuditSink,
     /** Secondary-error channel for a failed audit write (the denial still wins). */
     onAuditFailure: (error: unknown) => void = (error) => {
       console.error("[messaging] sensitive-denial audit write failed (denial still enforced)", error);
     },
+    /** Injected clock for audit `occurredAt` (composition root: the route's `now`). */
+    clock: () => Date = () => new Date(),
   ) {
     this.repo = repo;
     this.auditSink = auditSink;
     this.onAuditFailure = onAuditFailure;
+    this.clock = clock;
   }
 
   /**
    * Emit the audit event, then throw. ALWAYS throws. The emit is awaited so a
    * durable record precedes the response, but a failed write cannot suppress
-   * the denial — it is caught and surfaced via `onAuditFailure` only.
+   * the denial — it is caught and surfaced via `onAuditFailure` only; a
+   * THROWING failure handler is swallowed too (the denial must always win).
    */
   private async deny(
     ctx: SessionContext,
     organizationId: string | null,
     permission: Permission,
     engineReason: DenialReason,
-    target: MessagingDenialTarget,
+    target: SensitiveDenialTarget,
     reasonOverride?: SensitiveDenialReason,
   ): Promise<never> {
-    const event: MessagingDenialAuditEvent = {
+    const event: SensitiveDenialAuditEvent = {
       organizationId,
       afloUserId: ctx.afloUserId,
       actorRole: ctx.role,
@@ -226,12 +255,16 @@ export class AuthorizedMessagingService {
       engineReason,
       permission,
       target,
-      occurredAt: new Date(),
+      occurredAt: this.clock(),
     };
     try {
       await this.auditSink.recordSensitiveDenial(event);
     } catch (error) {
-      this.onAuditFailure(error);
+      try {
+        this.onAuditFailure(error);
+      } catch {
+        // The secondary channel itself failed — nothing may replace the denial.
+      }
     }
     throw new MessagingAccessDeniedError(engineReason, permission);
   }

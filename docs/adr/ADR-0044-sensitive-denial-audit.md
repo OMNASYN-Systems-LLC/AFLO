@@ -3,7 +3,8 @@
 ## Status
 
 **Accepted** — 2026-07-23 (founder continuation directive 2026-07-22,
-Workstream B item 9; founder decision 4 — resolved by this slice)
+Workstream B item 9; founder decision 4 — implemented for the messaging AND
+invitation route surfaces, with the accepted residuals stated below)
 
 ## Context
 
@@ -71,6 +72,23 @@ not-found emit nothing.
 | `consent_required` (unreachable here)    | `publication_without_authority`       |
 | `invalid_record_state` (unreachable)     | `invalid_organization_context` (fail-safe) |
 
+**Invitation-route denial mapping** (same sink, same emit-before-respond
+contract; external responses byte-identical to before — including the
+ADR-0042 rule that `invalid_token` and `email_mismatch` stay externally
+indistinguishable while their INTERNAL reasons now differ):
+
+| Invitation denial (external, unchanged)          | Internal audit category               |
+| ------------------------------------------------ | ------------------------------------- |
+| issue: `unauthenticated` (no session)            | `ambiguous_identity` (null-org path)  |
+| issue: `no_active_membership` (platform admin)   | `platform_admin_cross_tenant_access` (null-org path) |
+| issue: `no_active_membership` (other roles)      | `invalid_organization_context` (null-org path) |
+| issue: engine denials (`permission_denied`, `membership_revoked`, …) | shared engine mapping above, org-scoped |
+| accept: `unauthenticated` / `no_verified_email`  | `ambiguous_identity`                  |
+| accept: `email_mismatch` (live token, wrong verified identity) | `ownership_mismatch` — org-scoped under the INVITATION's org (threaded internally through the accept outcome, never surfaced) |
+| accept: `invalid_token` (resolves nothing)       | `ambiguous_identity` (null-org path — no org/identity context exists) |
+| accept: post-terminal 409/410 (`expired`, `already_accepted`, `already_bound`, `already_revoked`) | NOT sensitive — no emission (nobody can claim them; probing signals nothing) |
+| validation/kernel 400s + `duplicate_pending` 409 | NOT sensitive — no emission (request-shape/conflict, no probe value) |
+
 Two founder categories need stating rather than branching:
 
 - **`revoked_client_link`** is reserved vocabulary: a revoked link never
@@ -85,13 +103,25 @@ Two founder categories need stating rather than branching:
   denial. Where the engine CAN detect `cross_tenant` (other services), the
   mapping is ready.
 
-**Null-org boundary (documented residual):** `audit_events.organization_id`
-is NOT NULL + FORCE RLS, so a denial with NO org context (platform-admin
-probe, degenerate session) cannot be a tenant row. The sink still receives
-every such event (emission is unconditional and test-asserted); the Drizzle
-implementation routes null-org events to an injected structured logger
-(single-line JSON, ids/codes only) until the separate platform-plane audit
-surface (ADR-0025) lands. The denial itself remains fail-closed either way.
+## Accepted residuals
+
+1. **Null-org denials are not durable rows yet.**
+   `audit_events.organization_id` is NOT NULL + FORCE RLS, so a denial with
+   NO org context (platform-admin probe, unresolved caller, invalid token)
+   cannot be a tenant row. The sink still receives every such event (emission
+   is unconditional and test-asserted); the Drizzle implementation routes
+   null-org events to an injected structured logger (single-line JSON,
+   ids/codes only) until the separate platform-plane audit surface
+   (ADR-0025) lands. The denial itself remains fail-closed either way.
+2. **Denial-latency timing side-channel.** A sensitive denial performs a
+   durable audit INSERT before responding, so a denial and a genuine
+   not-found differ in response latency even though the bodies are
+   byte-identical. Accepted deliberately: durable-audit-before-response wins
+   over timing uniformity; thread/invitation ids are unguessable v4 UUIDs;
+   and the probe surface is limited to same-org authenticated principals
+   (anonymous callers 401/503 before any audit write). Revisit with an
+   outbox-buffered or latency-equalized emission path if timing uniformity
+   ever becomes a requirement.
 
 ### 3. Messaging routes (`apps/web/src/app/api/messages/…`)
 
@@ -121,35 +151,45 @@ requests get stable 400 codes; post-authorization kernel rejections keep
 their distinct `MSG_*` codes (400/409) — the caller has already proven
 access, so they reveal nothing (the ADR-0042 post-terminal precedent).
 
-### 4. ADR-0042 deferral closed early (invitation audit fold-in)
+### 4. Invitation-route audit: creations AND denials (ADR-0042 deferral closed early)
 
 ADR-0042 bound the matrix §7 row 1 audit emission (`invitation.issued` /
-`invitation.accepted`) to the Clerk-activation PR. The brief's small-clean
-test was met (~60 service lines), so this slice closes that deferral EARLY:
-`handleIssueInvitation`/`handleAcceptInvitation` take an
-`auditSink` — optional in the type (existing tests untouched), REQUIRED in
-composition (both routes inject `DrizzleAuditEventRepository`). Issuance
-audits the invitation id + intended role (never the email, never the token
-in any form); acceptance audits the CREATED membership/client-link row. A
-failed audit write never fails the already-committed request (secondary-error
-log); denials emit nothing through this sink (creation audit ≠ denial audit).
-The Clerk-activation PR no longer carries this obligation.
+`invitation.accepted`) to the Clerk-activation PR. This slice closes that
+deferral EARLY and — because founder decision 4 covers "the Clerk activation
+and route-enforcement work", which includes these routes — adds
+sensitive-DENIAL emission to them as well.
+`handleIssueInvitation`/`handleAcceptInvitation` take a structurally
+REQUIRED `auditSink` (`InvitationAuditSink`: the creation `record` method
+PLUS the shared `recordSensitiveDenial`; production implementation is
+`DrizzleAuditEventRepository`, which provides both; tests pass a no-op where
+audit content is not under test). Issuance audits the invitation id +
+intended role (never the email, never the token in any form); acceptance
+audits the CREATED membership/client-link row; every sensitive denial emits
+its distinct internal category per the invitation-route mapping table above,
+before the (unchanged) response is returned. A failed audit write — or a
+throwing failure handler — never changes any response: a committed creation
+stays committed, a denial stays the same denial. The Clerk-activation PR no
+longer carries any invitation-audit obligation.
 
 ## Consequences
 
-- **38 new tests → 312 database tests** (PGlite, non-superuser so RLS is
+- **47 new tests → 321 database tests** (PGlite, non-superuser so RLS is
   real): per-category denial→audit unit proofs (each writes exactly ONE event
-  with the distinct reason; external error unchanged; happy paths and plain
-  not-found emit nothing; audit failure still denies); repository RLS proofs
-  (org B reads none of org A's trail; no org context reads nothing;
-  cross-org forgery rejected by WITH CHECK; null-org events reach the
-  structured channel and land in NO org); route-service proofs (503
+  with the distinct reason and the INJECTED clock's `occurredAt`; external
+  error unchanged; happy paths and plain not-found emit nothing; audit
+  failure still denies; a THROWING failure handler still denies); repository
+  RLS proofs (org B reads none of org A's trail; no org context reads
+  nothing; cross-org forgery rejected by WITH CHECK; null-org events reach
+  the structured channel and land in NO org); route-service proofs (503
   predicate + cipher fail-closed, 401 on every handler, stable 400s, kernel
   400/409, happy paths, and the deep-equality anti-oracle across
   unknown/foreign/denied/malformed on every route); full-table dump proving
-  audit rows never contain message bodies or subjects; invitation fold-in
-  proofs (issued/accepted rows without email/token, commit-wins on audit
-  failure, no denial emission).
+  audit rows never contain message bodies or subjects; invitation proofs
+  (issued/accepted rows without email/token, commit-wins on audit failure
+  and on a throwing failure handler, per-category denial emission with
+  unchanged external bytes — including internally-distinct
+  `invalid_token`/`email_mismatch` behind the byte-identical 404 — and
+  no emission for validation 400s or post-terminal 409/410s).
 - The messaging surface is now route-complete and inert-safe: every request
   503s (unconfigured) or 401s (no Clerk closure) in production today;
   activation remains pure composition (ADR-0042).

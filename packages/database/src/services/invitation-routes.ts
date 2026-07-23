@@ -6,6 +6,7 @@ import {
   normalizeEmail,
   toPrincipal,
   type InvitationRepository,
+  type Permission,
   type SessionContext,
   type SessionContextProvider,
 } from "@aflo/auth";
@@ -14,6 +15,12 @@ import type {
   AcceptInvitationByTokenInput,
   AcceptInvitationByTokenOutcome,
 } from "./accept-invitation";
+import {
+  toSensitiveReason,
+  type SensitiveDenialAuditEvent,
+  type SensitiveDenialAuditSink,
+  type SensitiveDenialReason,
+} from "./authorized-messaging";
 
 /**
  * Invitation issuance + acceptance route services (Workstream B6/B7,
@@ -65,7 +72,7 @@ import type {
  */
 
 // ---------------------------------------------------------------------------
-// Audit emission (matrix §7 row 1 — the ADR-0042 deferral, closed by ADR-0044)
+// Audit emission (matrix §7 row 1 + founder decision 4 — ADR-0044)
 // ---------------------------------------------------------------------------
 
 /**
@@ -87,27 +94,80 @@ export interface InvitationAuditEvent {
   occurredAt: Date;
 }
 
-/** Optional in the type, REQUIRED in composition (both routes inject it). */
-export interface InvitationAuditSink {
+/**
+ * The invitation routes' REQUIRED audit port (founder decision 4 applies to
+ * "the Clerk activation and route-enforcement work" — that includes these
+ * routes): creation events via `record` AND sensitive denials via the shared
+ * `recordSensitiveDenial`. Structurally required in the deps so a refactor
+ * cannot silently drop §7 audit; production: `DrizzleAuditEventRepository`
+ * (which implements both methods); tests pass a no-op where audit content is
+ * not under test.
+ */
+export interface InvitationAuditSink extends SensitiveDenialAuditSink {
   record(event: InvitationAuditEvent): Promise<void>;
 }
 
 function defaultAuditFailureLog(error: unknown): void {
-  console.error("[invitations] audit write failed (state change already committed)", error);
+  console.error("[invitations] audit write failed (denial/response unchanged)", error);
 }
 
 /** Emit, never throw: audit failure must not fail an already-committed change. */
 async function emitInvitationAudit(
-  sink: InvitationAuditSink | undefined,
+  sink: InvitationAuditSink,
   onAuditFailure: ((error: unknown) => void) | undefined,
   event: InvitationAuditEvent,
 ): Promise<void> {
-  if (!sink) return;
   try {
     await sink.record(event);
   } catch (error) {
-    (onAuditFailure ?? defaultAuditFailureLog)(error);
+    try {
+      (onAuditFailure ?? defaultAuditFailureLog)(error);
+    } catch {
+      // The secondary channel itself failed — nothing may change the response.
+    }
   }
+}
+
+/**
+ * Emit a sensitive-denial audit event, never throw — the denial response must
+ * be returned unchanged whether the audit write succeeds, fails, or the
+ * failure handler itself throws (the messaging `deny` contract, ADR-0044).
+ */
+async function emitSensitiveDenial(
+  sink: InvitationAuditSink,
+  onAuditFailure: ((error: unknown) => void) | undefined,
+  event: SensitiveDenialAuditEvent,
+): Promise<void> {
+  try {
+    await sink.recordSensitiveDenial(event);
+  } catch (error) {
+    try {
+      (onAuditFailure ?? defaultAuditFailureLog)(error);
+    } catch {
+      // The secondary channel itself failed — nothing may change the response.
+    }
+  }
+}
+
+/** The denial-event shape for a caller with NO resolved session. */
+function unresolvedCallerDenial(
+  reason: SensitiveDenialReason,
+  engineReason: string,
+  permission: Permission | null,
+  occurredAt: Date,
+): SensitiveDenialAuditEvent {
+  return {
+    organizationId: null,
+    afloUserId: null,
+    actorRole: null,
+    actorMembershipId: null,
+    actorClientId: null,
+    reason,
+    engineReason,
+    permission,
+    target: { type: "invitation", id: null },
+    occurredAt,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -134,8 +194,8 @@ export interface IssueInvitationRouteDeps {
   generateToken: () => { token: string; tokenHash: string };
   /** Validity window in milliseconds; defaults to DEFAULT_INVITATION_TTL_MS. */
   ttlMs?: number;
-  /** Matrix §7 audit sink — optional in the type, REQUIRED in composition. */
-  auditSink?: InvitationAuditSink;
+  /** REQUIRED audit sink (matrix §7 creations + founder-decision-4 denials). */
+  auditSink: InvitationAuditSink;
   /** Secondary-error channel for a failed audit write (default: console.error). */
   onAuditFailure?: (error: unknown) => void;
 }
@@ -182,23 +242,64 @@ export async function handleIssueInvitation(
   deps: IssueInvitationRouteDeps,
   input: IssueInvitationRouteInput,
 ): Promise<IssueInvitationRouteResult> {
-  // 1. Resolved session or nothing (fail closed).
+  // 1. Resolved session or nothing (fail closed). An unresolved caller is a
+  //    sensitive denial (ambiguous identity) — audited, response unchanged.
   const ctx = await deps.sessionProvider.resolve();
-  if (!ctx) return issueDenied(401, "unauthenticated");
+  if (!ctx) {
+    await emitSensitiveDenial(
+      deps.auditSink,
+      deps.onAuditFailure,
+      unresolvedCallerDenial("ambiguous_identity", "unauthenticated", INVITATION_ISSUE_PERMISSION, deps.now()),
+    );
+    return issueDenied(401, "unauthenticated");
+  }
+
+  const denialTarget = { type: "invitation" as const, id: null };
+  const denialActor = {
+    afloUserId: ctx.afloUserId,
+    actorRole: ctx.role,
+    actorMembershipId: ctx.activeMembershipId,
+    actorClientId: ctx.linkedClientId,
+  };
 
   // 2. The issuing org is the SESSION's active org — never request input. No
-  //    active org (platform admin included — see module doc) fails closed here.
+  //    active org (platform admin included — see module doc) fails closed here;
+  //    with no tenant to scope under, the audit takes the null-org path.
   const organizationId = ctx.activeOrganizationId;
-  if (!organizationId) return issueDenied(403, "no_active_membership");
+  if (!organizationId) {
+    await emitSensitiveDenial(deps.auditSink, deps.onAuditFailure, {
+      organizationId: null,
+      ...denialActor,
+      reason:
+        ctx.role === "platform_admin"
+          ? "platform_admin_cross_tenant_access"
+          : "invalid_organization_context",
+      engineReason: "no_active_membership",
+      permission: INVITATION_ISSUE_PERMISSION,
+      target: denialTarget,
+      occurredAt: deps.now(),
+    });
+    return issueDenied(403, "no_active_membership");
+  }
 
   // 3. The deterministic engine decides — owner-only via
   //    `organization.manage_members` (client/staff/admin/partner all denied).
+  //    Engine denials audit with the shared founder-category mapping.
   const decision = authorize({
     principal: toPrincipal(ctx),
     permission: INVITATION_ISSUE_PERMISSION,
     resource: { organizationId },
   });
   if (!decision.allowed) {
+    await emitSensitiveDenial(deps.auditSink, deps.onAuditFailure, {
+      organizationId,
+      ...denialActor,
+      reason: toSensitiveReason(decision.reason, ctx.role, denialTarget),
+      engineReason: decision.reason,
+      permission: INVITATION_ISSUE_PERMISSION,
+      target: denialTarget,
+      occurredAt: deps.now(),
+    });
     return issueDenied(decision.reason === "unauthenticated" ? 401 : 403, decision.reason);
   }
 
@@ -299,8 +400,8 @@ export interface AcceptInvitationRouteDeps {
   now: () => Date;
   /** Server-issued id for a new staff membership (composition root: randomUUID). */
   newMembershipId: () => string;
-  /** Matrix §7 audit sink — optional in the type, REQUIRED in composition. */
-  auditSink?: InvitationAuditSink;
+  /** REQUIRED audit sink (matrix §7 creations + founder-decision-4 denials). */
+  auditSink: InvitationAuditSink;
   /** Secondary-error channel for a failed audit write (default: console.error). */
   onAuditFailure?: (error: unknown) => void;
 }
@@ -350,17 +451,44 @@ export async function handleAcceptInvitation(
   // 1. The accepter must hold a resolved, verified session (Clerk sign-in/up
   //    happens BEFORE accepting; the identity-claiming invariant then binds the
   //    invitation's reserved org/client to that identity — never the reverse).
+  //    An unresolved caller is a sensitive denial (ambiguous identity).
   const ctx = await deps.sessionProvider.resolve();
-  if (!ctx) return { status: 401, body: { ok: false, error: "unauthenticated" } };
+  if (!ctx) {
+    await emitSensitiveDenial(
+      deps.auditSink,
+      deps.onAuditFailure,
+      unresolvedCallerDenial("ambiguous_identity", "unauthenticated", null, deps.now()),
+    );
+    return { status: 401, body: { ok: false, error: "unauthenticated" } };
+  }
 
-  // 2. A malformed request (no token string) is a 400 — it reveals nothing.
+  const denialActor = {
+    afloUserId: ctx.afloUserId,
+    actorRole: ctx.role,
+    actorMembershipId: ctx.activeMembershipId,
+    actorClientId: ctx.linkedClientId,
+  };
+
+  // 2. A malformed request (no token string) is a 400 — it reveals nothing and
+  //    probes nothing (a request-shape error, NOT a sensitive denial).
   if (typeof input.token !== "string" || input.token.trim().length === 0) {
     return { status: 400, body: { ok: false, error: "missing_token" } };
   }
 
-  // 3. The verified session email, or fail closed. Never the request body.
+  // 3. The verified session email, or fail closed. Never the request body. A
+  //    session without a provable email is an ambiguous identity — audited
+  //    under the caller's own org context when one exists (null-org otherwise).
   const email = await deps.verifiedEmail(ctx);
   if (typeof email !== "string" || email.trim().length === 0) {
+    await emitSensitiveDenial(deps.auditSink, deps.onAuditFailure, {
+      organizationId: ctx.activeOrganizationId,
+      ...denialActor,
+      reason: "ambiguous_identity",
+      engineReason: "no_verified_email",
+      permission: null,
+      target: { type: "invitation", id: null },
+      occurredAt: deps.now(),
+    });
     return { status: 401, body: { ok: false, error: "no_verified_email" } };
   }
 
@@ -374,7 +502,36 @@ export async function handleAcceptInvitation(
     newMembershipId: deps.newMembershipId(),
   });
 
-  if (!outcome.ok) return acceptDenial(outcome.reason);
+  if (!outcome.ok) {
+    // Sensitive denials only (founder decision 4): a live token presented by
+    // the WRONG verified identity is an ownership mismatch, audited under the
+    // INVITATION's org (known internally, never revealed externally); a token
+    // that resolves nothing has no org/identity context — ambiguous identity
+    // via the null-org path. Post-terminal states (expired / already_*) are
+    // NOT sensitive — nobody can claim them, so probing them signals nothing.
+    if (outcome.reason === "email_mismatch") {
+      await emitSensitiveDenial(deps.auditSink, deps.onAuditFailure, {
+        organizationId: outcome.organizationId ?? null,
+        ...denialActor,
+        reason: "ownership_mismatch",
+        engineReason: "email_mismatch",
+        permission: null,
+        target: { type: "invitation", id: outcome.invitationId ?? null },
+        occurredAt: deps.now(),
+      });
+    } else if (outcome.reason === "invalid_token") {
+      await emitSensitiveDenial(deps.auditSink, deps.onAuditFailure, {
+        organizationId: null,
+        ...denialActor,
+        reason: "ambiguous_identity",
+        engineReason: "invalid_token",
+        permission: null,
+        target: { type: "invitation", id: null },
+        occurredAt: deps.now(),
+      });
+    }
+    return acceptDenial(outcome.reason);
+  }
 
   // 5. Matrix §7 row 1: the membership/link creation is audited — the target
   //    is the row the acceptance created; ids only, never the email/token.

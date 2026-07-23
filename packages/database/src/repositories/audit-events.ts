@@ -3,8 +3,8 @@ import { auditEvents } from "../schema";
 import { withOrgContext, type TenantScopedDb } from "../request-context";
 import {
   MESSAGING_DENIAL_AUDIT_ACTION,
-  type MessagingDenialAuditEvent,
-  type MessagingDenialAuditSink,
+  type SensitiveDenialAuditEvent,
+  type SensitiveDenialAuditSink,
 } from "../services/authorized-messaging";
 
 /**
@@ -64,7 +64,7 @@ export interface StoredAuditEvent {
   occurredAtIso: string;
 }
 
-export class DrizzleAuditEventRepository implements MessagingDenialAuditSink {
+export class DrizzleAuditEventRepository implements SensitiveDenialAuditSink {
   constructor(
     private readonly db: TenantScopedDb,
     /**
@@ -94,11 +94,13 @@ export class DrizzleAuditEventRepository implements MessagingDenialAuditSink {
   }
 
   /**
-   * `MessagingDenialAuditSink` — persist a sensitive messaging denial with its
-   * DISTINCT internal reason (founder decision 4). The external response stays
-   * anti-oracle uniform; only this internal record preserves the category.
+   * `SensitiveDenialAuditSink` — persist a sensitive denial (messaging OR
+   * invitation surface) with its DISTINCT internal reason (founder decision
+   * 4). The external response stays anti-oracle uniform; only this internal
+   * record preserves the category. A pre-resource denial has no target id —
+   * the NOT NULL column stores the stable sentinel `"none"`.
    */
-  async recordSensitiveDenial(event: MessagingDenialAuditEvent): Promise<void> {
+  async recordSensitiveDenial(event: SensitiveDenialAuditEvent): Promise<void> {
     if (!event.organizationId) {
       // No tenant exists to scope the row under — platform-plane surface
       // (module doc). Emit ids/codes only; never content, never PII.
@@ -111,7 +113,7 @@ export class DrizzleAuditEventRepository implements MessagingDenialAuditSink {
           afloUserId: event.afloUserId,
           actorRole: event.actorRole,
           targetType: event.target.type,
-          targetId: event.target.id,
+          targetId: event.target.id ?? "none",
           occurredAt: event.occurredAt.toISOString(),
         }),
       );
@@ -122,7 +124,7 @@ export class DrizzleAuditEventRepository implements MessagingDenialAuditSink {
       actorMemberId: event.actorMembershipId,
       action: MESSAGING_DENIAL_AUDIT_ACTION,
       targetType: event.target.type,
-      targetId: event.target.id,
+      targetId: event.target.id ?? "none",
       detail: JSON.stringify({
         engineReason: event.engineReason,
         permission: event.permission,

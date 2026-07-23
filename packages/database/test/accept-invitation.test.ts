@@ -165,7 +165,9 @@ describe("acceptInvitationByToken — rejections (no write)", () => {
       now: NOW,
       newMembershipId: randomUUID(),
     });
-    expect(outcome).toEqual({ ok: false, reason: "email_mismatch" });
+    // The resolved invitation's org/id travel as INTERNAL audit context
+    // (ADR-0044) — the route reply is still built from `reason` alone.
+    expect(outcome).toMatchObject({ ok: false, reason: "email_mismatch", organizationId: ORG_A });
     const inv = await pg.query<{ status: string }>(`SELECT status FROM invitations WHERE email = 'em@x.co'`);
     expect(inv.rows[0]!.status).toBe("pending"); // untouched
   });
@@ -178,7 +180,7 @@ describe("acceptInvitationByToken — rejections (no write)", () => {
       now: NOW,
       newMembershipId: randomUUID(),
     });
-    expect(outcome).toEqual({ ok: false, reason: "expired" });
+    expect(outcome).toMatchObject({ ok: false, reason: "expired" });
   });
 
   it("rejects re-accepting an already-accepted invitation", async () => {
@@ -189,7 +191,7 @@ describe("acceptInvitationByToken — rejections (no write)", () => {
       now: NOW,
       newMembershipId: randomUUID(),
     });
-    expect(outcome).toEqual({ ok: false, reason: "already_accepted" });
+    expect(outcome).toMatchObject({ ok: false, reason: "already_accepted" });
   });
 
   it("fails closed (already_bound) when the accepter is already a member; invitation stays pending", async () => {
